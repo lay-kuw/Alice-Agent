@@ -46,7 +46,7 @@ pub enum Cmd {
     Model { args: Vec<String> },
     /// Memory: list, search "keyword", status, clear
     Memory { args: Vec<String> },
-    /// Config: `alice config`, `get <key>`, `set <key> <value>`
+    /// Config: `alice config`, `get <key>`, `set <key> <value>`, `secret <name>`
     Config { args: Vec<String> },
     /// Tools: list, enable <tool> [ask|allow], disable <tool>
     Tool { args: Vec<String> },
@@ -708,7 +708,13 @@ async fn config_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             }
             Ok(())
         }
-        _ => Err("usage: alice config [get <key> | set <key> <value>]".into()),
+        ["secret", name] => {
+            let value = ask_secret(&format!("Value for {name} (input hidden, empty = remove)"));
+            set_secret(paths, name, &value).await?;
+            println!("{name} {}", if value.is_empty() { "removed" } else { "saved" });
+            Ok(())
+        }
+        _ => Err("usage: alice config [get <key> | set <key> <value> | secret <name>]\n  secrets: brave.api_key, telegram.bot_token, discord.bot_token, google.client_secret, provider.<id>.api_key".into()),
     }
 }
 

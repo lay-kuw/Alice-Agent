@@ -32,7 +32,7 @@
 ## Phase 4 — Tools
 - ☑ 権限ゲート（disabled / ask / allow）・承認 API
 - ☑ File System（ルート制限・シンボリックリンク対策）
-- ☐ Web Search（Brave / SearXNG）・URL Fetch・本文抽出
+- ☑ Web Search（Brave / SearXNG）・URL Fetch・本文抽出（SSRF 対策込み。Brave/SearXNG は実キーでの疎通未確認）
 - ☐ Google（OAuth 2.0 PKCE, Gmail / Calendar / Drive / Docs / Sheets）
 
 ## Phase 5 — Channels

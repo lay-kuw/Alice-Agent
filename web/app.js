@@ -581,6 +581,23 @@ function applyTheme(mode) {
   else delete document.documentElement.dataset.theme;
 }
 
+function webSearchForm(c) {
+  const prov = el('select', {}, el('option', { value: '' }, 'disabled'), el('option', { value: 'brave' }, 'Brave Search API'), el('option', { value: 'searxng' }, 'SearXNG (self-hosted)'));
+  prov.value = c.tools.web.search_provider;
+  const sx = el('input', { type: 'url', placeholder: 'https://searx.example.com', value: c.tools.web.searxng_url });
+  const key = el('input', { type: 'password', placeholder: c.secrets_set.includes('brave.api_key') ? 'Brave API key is set — enter to replace' : 'Brave API key' });
+  const save = async () => {
+    try {
+      await api('PATCH', '/config', { 'tools.web.search_provider': prov.value, 'tools.web.searxng_url': sx.value });
+      if (key.value) await api('PUT', '/secrets/brave.api_key', { value: key.value });
+      toast('Saved'); showTab('tools');
+    } catch (e) { toast(e.message); }
+  };
+  return el('div', {}, field('Search provider', prov), field('SearXNG URL', sx), field('Brave API key', key),
+    el('button', { class: 'primary', onclick: save }, 'Save web search'),
+    el('p', { class: 'small muted' }, 'Fetched pages are treated as untrusted data. web_fetch asks before running by default and refuses private/local network addresses.'));
+}
+
 const TABS = {
   async general() {
     const c = await api('GET', '/config');
@@ -717,7 +734,9 @@ const TABS = {
           toast('Saved'); showTab('tools');
         } catch (e) { toast(e.message); }
       } }, 'Save directories'),
-      el('h3', {}, 'Web search / Google account'),
+      el('h3', {}, 'Web search'),
+      webSearchForm(c),
+      el('h3', {}, 'Google account'),
       el('p', { class: 'muted' }, 'Not available yet (roadmap Phase 4).'),
     ];
   },

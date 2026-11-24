@@ -248,6 +248,8 @@ pub struct WebConfig {
     /// "brave" | "searxng" | "" (search disabled)
     pub search_provider: String,
     pub searxng_url: String,
+    /// Allow web_fetch to reach private / local network addresses.
+    pub allow_private: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

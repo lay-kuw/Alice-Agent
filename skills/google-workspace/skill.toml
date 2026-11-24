@@ -1,0 +1,193 @@
+id = "google-workspace"
+name = "Google Workspace"
+version = "1.0.0"
+description = "Gmail, Google Calendar, Drive, Docs and Sheets on the user's Google account"
+aliases = ["google"]
+builtin = "google"
+
+[requires]
+settings = ["client_id"]
+auth = true
+
+[permissions]
+network = ["accounts.google.com", "oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com", "docs.googleapis.com", "sheets.googleapis.com"]
+description = "Uses your own OAuth client. Only the scopes of the services you turn on are requested."
+
+[auth]
+type = "oauth2"
+label = "Google account"
+authorize_url = "{{settings.authorize_url}}"
+token_url = "{{settings.token_url}}"
+revoke_url = "{{settings.revoke_url}}"
+pkce = true
+params = { access_type = "offline", prompt = "consent" }
+
+[settings.client_id]
+label = "OAuth client ID (Desktop app)"
+
+[settings.client_secret]
+label = "OAuth client secret"
+secret = true
+
+# Endpoint overrides (advanced; used by tests and proxies).
+[settings.authorize_url]
+label = "OAuth authorize URL"
+default = "https://accounts.google.com/o/oauth2/v2/auth"
+advanced = true
+
+[settings.token_url]
+label = "OAuth token URL"
+default = "https://oauth2.googleapis.com/token"
+advanced = true
+
+[settings.revoke_url]
+label = "OAuth revoke URL"
+default = "https://oauth2.googleapis.com/revoke"
+advanced = true
+
+[settings.api_base]
+label = "API base URL override"
+advanced = true
+
+[[groups]]
+id = "gmail"
+label = "Gmail"
+scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
+
+[[groups]]
+id = "calendar"
+label = "Calendar"
+scopes = ["https://www.googleapis.com/auth/calendar.events"]
+
+[[groups]]
+id = "drive"
+label = "Drive"
+scopes = ["https://www.googleapis.com/auth/drive.readonly"]
+
+[[groups]]
+id = "docs"
+label = "Docs"
+scopes = ["https://www.googleapis.com/auth/documents"]
+
+[[groups]]
+id = "sheets"
+label = "Sheets"
+scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+
+[[tools]]
+name = "gmail_search"
+description = "Search Gmail with Gmail query syntax (e.g. 'from:alice newer_than:7d'). Returns id, from, subject, date, snippet."
+group = "gmail"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"query": {"type": "string"}, "max": {"type": "integer", "description": "1-25, default 10"}}, "required": ["query"]}'''
+
+[[tools]]
+name = "gmail_read"
+description = "Read one Gmail message as text."
+group = "gmail"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}'''
+
+[[tools]]
+name = "gmail_send"
+description = "Send a plain-text email from the user's Gmail account."
+group = "gmail"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}, "cc": {"type": "string"}}, "required": ["to", "subject", "body"]}'''
+
+[[tools]]
+name = "calendar_list"
+description = "List events on the primary calendar. Times are RFC3339 (default: now to 7 days ahead)."
+group = "calendar"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"time_min": {"type": "string"}, "time_max": {"type": "string"}, "query": {"type": "string"}}, "required": []}'''
+
+[[tools]]
+name = "calendar_create"
+description = "Create an event on the primary calendar. start/end: RFC3339 date-time with offset, or YYYY-MM-DD for all-day."
+group = "calendar"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"summary": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"}, "description": {"type": "string"}, "location": {"type": "string"}, "time_zone": {"type": "string", "description": "IANA name, e.g. Asia/Tokyo"}}, "required": ["summary", "start", "end"]}'''
+
+[[tools]]
+name = "calendar_delete"
+description = "Delete an event from the primary calendar."
+group = "calendar"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]}'''
+
+[[tools]]
+name = "drive_search"
+description = "Search Google Drive files by name or content."
+group = "drive"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}'''
+
+[[tools]]
+name = "drive_read"
+description = "Read a Drive file as text (Docs → text, Sheets → CSV, text files as-is)."
+group = "drive"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"]}'''
+
+[[tools]]
+name = "docs_create"
+description = "Create a Google Doc with optional initial text."
+group = "docs"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"title": {"type": "string"}, "content": {"type": "string"}}, "required": ["title"]}'''
+
+[[tools]]
+name = "docs_append"
+description = "Append text to the end of a Google Doc."
+group = "docs"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"document_id": {"type": "string"}, "text": {"type": "string"}}, "required": ["document_id", "text"]}'''
+
+[[tools]]
+name = "sheets_read"
+description = "Read a range from a Google Sheet (A1 notation, e.g. 'Sheet1!A1:D20')."
+group = "sheets"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}}, "required": ["spreadsheet_id", "range"]}'''
+
+[[tools]]
+name = "sheets_update"
+description = "Write values into a range of a Google Sheet."
+group = "sheets"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array", "items": {}}}}, "required": ["spreadsheet_id", "range", "values"]}'''
+
+[[tools]]
+name = "sheets_append"
+description = "Append rows after the last row of a table in a Google Sheet."
+group = "sheets"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array", "items": {}}}}, "required": ["spreadsheet_id", "range", "values"]}'''
+

@@ -10,7 +10,7 @@ pub mod service;
 pub mod tui;
 
 use crate::config::{Config, Paths, Permission, ProviderConfig, ProviderKind, Secrets};
-use chat::dim;
+use chat::{dim, green, red, yellow};
 use clap::{Parser, Subcommand};
 use client::{CliResult, Client};
 use serde_json::{Value, json};
@@ -63,7 +63,9 @@ pub enum Cmd {
     Usage,
     /// Personality (SOUL.md): edit, show, reset
     Soul { args: Vec<String> },
-    /// Google account: status, setup, login, logout
+    /// Skills: list, info <id>, enable/disable <id>, setup <id>, login/logout <id>, log
+    Skill { args: Vec<String> },
+    /// Shortcut for the google-workspace skill: status, setup, login, logout
     Google { args: Vec<String> },
     /// Auto-start service: install, uninstall, status
     Service { args: Vec<String> },
@@ -75,9 +77,13 @@ pub enum Cmd {
     /// Run the server in the foreground (used by the service manager)
     #[command(hide = true)]
     Serve,
+    /// Local stdio MCP server, started by Alice for Codex (one turn at a time)
+    #[command(hide = true)]
+    Mcp,
 }
 
 pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
+    crate::providers::cli::set_codex_home(paths.codex_home());
     match cmd {
         None => {
             if !paths.config().exists() && paths.is_default() {
@@ -109,6 +115,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Profile { args }) => profile::cmd(&paths, args).await,
         Some(Cmd::Service { args }) => service_cmd(&paths, args),
         Some(Cmd::Google { args }) => google_cmd(&paths, args).await,
+        Some(Cmd::Skill { args }) => skill_cmd(&paths, args).await,
         Some(Cmd::Soul { args }) => soul_cmd(&paths, args),
         Some(Cmd::Usage) => {
             let c = Client::from_env(&paths)?;
@@ -116,6 +123,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
             Ok(())
         }
         Some(Cmd::Serve) => unreachable!(),
+        Some(Cmd::Mcp) => crate::mcp::serve_stdio().await,
     }
 }
 
@@ -348,72 +356,225 @@ fn soul_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     }
 }
 
+/// `alice google …` is kept as a shortcut for the google-workspace skill.
 async fn google_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
+    let mut a = args;
+    if a.is_empty() {
+        a.push("info".into());
+    }
+    if a[0] == "status" {
+        a[0] = "info".into();
+    }
+    a.insert(1, "google-workspace".into());
+    skill_cmd(paths, a).await
+}
+
+fn find_skill<'a>(v: &'a Value, id: &str) -> CliResult<&'a Value> {
+    v["skills"].as_array().and_then(|a| a.iter().find(|s| s["id"] == id)).ok_or_else(|| format!("unknown skill: {id} (alice skill list)"))
+}
+
+fn status_mark(s: &Value) -> String {
+    match s["status"].as_str().unwrap_or("") {
+        "ready" => green("✓ ready"),
+        "disabled" => dim("○ off"),
+        st => yellow(&format!("! {}", if s["detail"].as_str().unwrap_or("").is_empty() { st } else { s["detail"].as_str().unwrap_or("") })),
+    }
+}
+
+async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    let c = remote(paths).await?;
     match a.as_slice() {
-        [] | ["status"] => {
-            let c = remote(paths).await?;
-            let v = c.get("/google").await?;
-            println!("connected: {}", v["connected"]);
-            println!("client: id {}, secret {}", if v["client_id_set"] == true { "set" } else { "missing" }, if v["client_secret_set"] == true { "set" } else { "missing" });
-            println!("services: {}", v["services"]);
-            Ok(())
-        }
-        ["setup"] => {
-            println!("Create an OAuth client of type \"Desktop app\" in Google Cloud Console (APIs & Services → Credentials),");
-            println!("and enable the Gmail, Calendar, Drive, Docs and Sheets APIs you want to use.");
-            println!("Note: while the consent screen is in \"Testing\", Google expires the login after 7 days.");
-            let c = remote(paths).await?;
-            let cur = serde_json::from_value::<Config>(c.get("/config").await?).map_err(|e| e.to_string())?;
-            let id = ask("Client ID", &cur.tools.google.client_id);
-            let secret = ask_secret("Client secret (input hidden; Enter to keep)");
-            let default_services = if cur.tools.google.services.is_empty() { "gmail,calendar,drive,docs,sheets".to_string() } else { cur.tools.google.services.join(",") };
-            let services: Vec<String> = ask("Services (gmail,calendar,drive,docs,sheets)", &default_services)
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| crate::tools::google::SERVICES.contains(&s.as_str()))
-                .collect();
-            c.patch("/config", &json!({ "tools.google.client_id": id, "tools.google.services": services })).await?;
-            if !secret.is_empty() {
-                c.put("/secrets/google.client_secret", &json!({ "value": secret })).await?;
+        [] | ["list" | "ls"] => {
+            let v = c.get("/skills").await?;
+            for s in v["skills"].as_array().into_iter().flatten() {
+                let tools = s["tools"].as_array().map(|t| t.len()).unwrap_or(0);
+                let src = if s["source"] == "builtin" { "built-in" } else { "user" };
+                println!("{:<18} {:<26} {}", s["id"].as_str().unwrap_or(""), status_mark(s), dim(&format!("{tools} tools · {src} · {}", s["description"].as_str().unwrap_or(""))));
             }
-            println!("Saved. Now run `alice google login`.");
+            for i in v["invalid"].as_array().into_iter().flatten() {
+                println!("{:<18} {}", i["folder"].as_str().unwrap_or(""), red(&format!("✗ {}", i["error"].as_str().unwrap_or(""))));
+            }
+            println!("{}", dim(&format!("skills folder: {}  ·  alice skill info <id>", v["dir"].as_str().unwrap_or(""))));
             Ok(())
         }
-        ["login"] => {
-            let c = remote(paths).await?;
-            let v = c.post("/google/login", &json!({})).await?;
-            let url = v["auth_url"].as_str().unwrap_or("");
-            println!("Open this URL in a browser on this machine and approve access:\n\n{url}\n");
-            let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-            let _ = std::process::Command::new(opener).arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-            println!("Waiting… If the browser is on another machine, its final page will fail to load;");
-            println!("copy that page's full URL from the address bar and paste it here (or just wait).");
-            let mut input = chat::Input::new();
-            for _ in 0..600 {
-                tokio::select! {
-                    line = input.line("") => {
-                        let line = line.unwrap_or_default();
-                        if line.contains("code=") {
-                            c.post("/google/finish", &json!({ "url": line })).await?;
-                        }
-                    }
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        ["info" | "show", id] => {
+            let v = c.get("/skills").await?;
+            let s = find_skill(&v, id)?;
+            println!("{} {}  {}", s["name"].as_str().unwrap_or(""), dim(s["version"].as_str().unwrap_or("")), status_mark(s));
+            println!("{}", s["description"].as_str().unwrap_or(""));
+            println!("{}", dim(&format!("source: {}", s["source"].as_str().unwrap_or(""))));
+            let p = &s["permissions"];
+            let net: Vec<&str> = p["network"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+            println!("\nDeclared permissions");
+            println!("  network: {}", if net.is_empty() { "none".to_string() } else { net.join(", ") });
+            println!("  files:   {}", if p["files"] == true { "yes" } else { "no" });
+            if let Some(d) = p["description"].as_str().filter(|d| !d.is_empty()) {
+                println!("  {}", dim(d));
+            }
+            if let Some(au) = s["auth"].as_object() {
+                println!("\nAuth: {} — {}", au["label"].as_str().unwrap_or(""), if au["connected"] == true { green("connected") } else { yellow("not connected (alice skill login …)") });
+            }
+            let settings: Vec<&Value> = s["settings"].as_array().into_iter().flatten().filter(|x| x["advanced"] != true).collect();
+            if !settings.is_empty() {
+                println!("\nSettings");
+                for x in settings {
+                    let val = if x["secret"] == true { if x["set"] == true { "••••".to_string() } else { "(not set)".into() } } else { x["value"].as_str().filter(|v| !v.is_empty()).unwrap_or("(not set)").to_string() };
+                    println!("  {:<16} {}  {}", x["key"].as_str().unwrap_or(""), val, dim(x["label"].as_str().unwrap_or("")));
                 }
-                if c.get("/google").await?["connected"] == true {
-                    println!("Google account connected.");
+            }
+            if let Some(g) = s["groups"].as_array().filter(|g| !g.is_empty()) {
+                let on: Vec<String> = g.iter().map(|x| format!("{}{}", if x["enabled"] == true { "✓" } else { "○" }, x["id"].as_str().unwrap_or(""))).collect();
+                println!("\nGroups: {}", on.join("  "));
+            }
+            println!("\nTools");
+            for t in s["tools"].as_array().into_iter().flatten() {
+                let avail = if t["available"] == true { String::new() } else { dim(&format!(" ({})", t["reason"].as_str().unwrap_or(""))) };
+                println!("  {:<20} {:<9} {}{avail}", t["name"].as_str().unwrap_or(""), t["permission"].as_str().unwrap_or(""), dim(t["description"].as_str().unwrap_or("")));
+            }
+            Ok(())
+        }
+        ["enable", id] => {
+            let v = c.get("/skills").await?;
+            let s = find_skill(&v, id)?;
+            if s["source"] != "builtin" {
+                let net: Vec<&str> = s["permissions"]["network"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
+                println!("{} declares:", s["name"].as_str().unwrap_or(id));
+                println!("  network: {}", if net.is_empty() { "none".to_string() } else { net.join(", ") });
+                println!("  files:   {}", if s["permissions"]["files"] == true { "yes" } else { "no" });
+                let cmd = s["tools"].as_array().into_iter().flatten().any(|t| t["handler"] == "command");
+                if cmd {
+                    println!("  {}", yellow("runs local programs from its folder"));
+                }
+                if !ask("Enable? [y/N]", "n").eq_ignore_ascii_case("y") {
                     return Ok(());
                 }
             }
-            Err("timed out waiting for Google login".into())
-        }
-        ["logout"] => {
-            let c = remote(paths).await?;
-            c.post("/google/logout", &json!({})).await?;
-            println!("Disconnected and revoked Google access.");
+            c.patch(&format!("/skills/{id}"), &json!({ "enabled": true })).await?;
+            println!("{id}: enabled");
             Ok(())
         }
-        _ => Err("usage: alice google [status | setup | login | logout]".into()),
+        ["disable", id] => {
+            c.patch(&format!("/skills/{id}"), &json!({ "enabled": false })).await?;
+            println!("{id}: disabled");
+            Ok(())
+        }
+        ["set", id, key, value @ ..] => {
+            c.patch(&format!("/skills/{id}"), &json!({ "settings": { *key: value.join(" ") } })).await?;
+            println!("{id}.{key} saved");
+            Ok(())
+        }
+        ["groups", id, list] => {
+            let groups: Vec<&str> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+            c.patch(&format!("/skills/{id}"), &json!({ "groups": groups })).await?;
+            println!("{id}: {}", groups.join(", "));
+            Ok(())
+        }
+        ["setup", id] => {
+            let v = c.get("/skills").await?;
+            let s = find_skill(&v, id)?;
+            if *id == "google-workspace" {
+                println!("Create an OAuth client of type \"Desktop app\" in Google Cloud Console (APIs & Services → Credentials),");
+                println!("and enable the Gmail, Calendar, Drive, Docs and Sheets APIs you want to use.");
+                println!("Note: while the consent screen is in \"Testing\", Google expires the login after 7 days.\n");
+            }
+            let mut settings = serde_json::Map::new();
+            for x in s["settings"].as_array().into_iter().flatten().filter(|x| x["advanced"] != true) {
+                let key = x["key"].as_str().unwrap_or("");
+                let label = x["label"].as_str().filter(|l| !l.is_empty()).unwrap_or(key);
+                let val = if x["secret"] == true {
+                    ask_secret(&format!("{label} (input hidden; Enter to keep)"))
+                } else {
+                    ask(label, x["value"].as_str().unwrap_or(""))
+                };
+                if !val.is_empty() {
+                    settings.insert(key.to_string(), json!(val));
+                }
+            }
+            let mut body = json!({ "settings": settings, "enabled": true });
+            if let Some(g) = s["groups"].as_array().filter(|g| !g.is_empty()) {
+                let all: Vec<&str> = g.iter().filter_map(|x| x["id"].as_str()).collect();
+                let cur: Vec<&str> = g.iter().filter(|x| x["enabled"] == true).filter_map(|x| x["id"].as_str()).collect();
+                let pick = ask(&format!("Groups ({})", all.join(",")), &cur.join(","));
+                body["groups"] = json!(pick.split(',').map(str::trim).filter(|x| all.contains(x)).collect::<Vec<_>>());
+            }
+            c.patch(&format!("/skills/{id}"), &body).await?;
+            println!("Saved.{}", if s["auth"].is_object() { format!(" Now run `alice skill login {id}`.") } else { String::new() });
+            Ok(())
+        }
+        ["login", id] => {
+            let v = c.get("/skills").await?;
+            let s = find_skill(&v, id)?;
+            match s["auth"]["type"].as_str() {
+                Some("token") => {
+                    let t = ask_secret(&format!("{} (input hidden)", s["auth"]["label"].as_str().unwrap_or("Token")));
+                    c.post(&format!("/skills/{id}/login"), &json!({ "token": t })).await?;
+                    println!("{id}: connected");
+                    Ok(())
+                }
+                Some("oauth2") => {
+                    let r = c.post(&format!("/skills/{id}/login"), &json!({})).await?;
+                    let url = r["auth_url"].as_str().unwrap_or("");
+                    println!("Open this URL in a browser on this machine and approve access:\n\n{url}\n");
+                    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                    let _ = std::process::Command::new(opener).arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+                    println!("Waiting… If the browser is on another machine, its final page will fail to load;");
+                    println!("copy that page's full URL from the address bar and paste it here (or just wait).");
+                    let mut input = chat::Input::new();
+                    for _ in 0..600 {
+                        tokio::select! {
+                            line = input.line("") => {
+                                let line = line.unwrap_or_default();
+                                if line.contains("code=") {
+                                    c.post("/skills/finish", &json!({ "url": line })).await?;
+                                }
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        }
+                        let v = c.get("/skills").await?;
+                        if find_skill(&v, id)?["auth"]["connected"] == true {
+                            println!("{id}: connected");
+                            return Ok(());
+                        }
+                    }
+                    Err("timed out waiting for the login".into())
+                }
+                _ => Err(format!("{id} has no login")),
+            }
+        }
+        ["logout", id] => {
+            c.post(&format!("/skills/{id}/logout"), &json!({})).await?;
+            println!("{id}: disconnected (credentials removed)");
+            Ok(())
+        }
+        ["rescan"] => {
+            c.post("/skills/rescan", &json!({})).await?;
+            Box::pin(skill_cmd(paths, vec![])).await
+        }
+        ["log"] | ["log", _] => {
+            let n = a.get(1).and_then(|n| n.parse::<usize>().ok()).unwrap_or(30);
+            let v = c.get(&format!("/tool-runs?limit={n}")).await?;
+            for r in v["runs"].as_array().into_iter().flatten().rev() {
+                let st = r["status"].as_str().unwrap_or("");
+                let st = match st {
+                    "ok" => green(st),
+                    "error" | "denied" | "unavailable" => red(st),
+                    _ => yellow(st),
+                };
+                println!(
+                    "{}  {:<20} {:<16} {:<6} {:<12} {:>6}ms {}",
+                    dim(&crate::util::fmt_utc(r["ts"].as_i64().unwrap_or(0))[5..16]),
+                    r["tool"].as_str().unwrap_or(""),
+                    r["skill"].as_str().unwrap_or(""),
+                    r["source"].as_str().unwrap_or(""),
+                    st,
+                    r["duration_ms"],
+                    dim(r["error"].as_str().unwrap_or(""))
+                );
+            }
+            Ok(())
+        }
+        _ => Err("usage: alice skill [list | info <id> | enable <id> | disable <id> | setup <id> | set <id> <key> <value> | groups <id> a,b | login <id> | logout <id> | log [n] | rescan]".into()),
     }
 }
 
@@ -510,7 +671,7 @@ async fn model_add(paths: &Paths) -> CliResult<()> {
     println!("Provider type:");
     let kind = ProviderKind::ALL[choose("Select", &kinds, 0)];
     match kind {
-        ProviderKind::CodexCli => println!("Uses your ChatGPT subscription through the official Codex CLI (`codex login`). Text only: Alice tools are not available with this provider."),
+        ProviderKind::CodexCli => println!("Uses your ChatGPT subscription through the official Codex CLI, with Alice's own login. Alice's skills are reached through its built-in MCP server."),
         ProviderKind::GeminiCli => println!("Experimental: uses the official Gemini CLI login. If it fails, use the Gemini API (API key) instead. Text only."),
         _ => {}
     }
@@ -547,8 +708,8 @@ async fn model_add(paths: &Paths) -> CliResult<()> {
         )?,
     };
     println!("Added provider '{id}'. Default model: {default}");
-    if kind == ProviderKind::CodexCli && confirm("Run `codex login` now?", false) {
-        let _ = std::process::Command::new("codex").arg("login").status();
+    if kind == ProviderKind::CodexCli && confirm("Log in to ChatGPT for Alice now?", true) {
+        codex_login(paths, &[])?;
     }
     Ok(())
 }
@@ -675,7 +836,8 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
         }
         ["use", id] => set_default(paths, &pick_model(paths, id).await?).await,
         ["test", id] => test_model(paths, &pick_model(paths, id).await?).await,
-        ["login", provider] => login(paths, provider).await,
+        ["login", provider] => login(paths, provider, &[]).await,
+        ["login", provider, extra @ ..] => login(paths, provider, extra).await,
         ["logout", provider] => logout(paths, provider).await,
         _ => Err("usage: alice model [list|add|remove <id>|use <id>|login <provider>|logout <provider>|test <id>]".into()),
     }
@@ -772,13 +934,23 @@ async fn set_secret(paths: &Paths, name: &str, value: &str) -> CliResult<()> {
     Ok(())
 }
 
-async fn login(paths: &Paths, provider: &str) -> CliResult<()> {
+/// `codex login` into Alice's own CODEX_HOME (separate from ~/.codex, so
+/// your usual Codex setup and login are untouched).
+fn codex_login(paths: &Paths, extra: &[&str]) -> CliResult<()> {
+    let home = crate::providers::cli::prepare_codex_home()?;
+    println!("Signing Alice in to ChatGPT with the official Codex CLI.");
+    println!("{}", dim(&format!("This login is Alice's own ({}); your ~/.codex is not used.", home.display())));
+    if extra.is_empty() && std::env::var_os("SSH_CONNECTION").is_some() {
+        println!("{}", dim("On a remote machine, `alice model login codex-cli --device-auth` avoids the browser redirect."));
+    }
+    let exe = Config::load(paths)?.providers.iter().find(|p| p.kind == ProviderKind::CodexCli).map(|p| p.base_url().to_string()).unwrap_or_else(|| "codex".into());
+    let st = std::process::Command::new(&exe).env("CODEX_HOME", &home).arg("login").args(extra).status().map_err(|e| format!("{exe}: {e}"))?;
+    if st.success() { Ok(()) } else { Err("codex login failed".into()) }
+}
+
+async fn login(paths: &Paths, provider: &str, extra: &[&str]) -> CliResult<()> {
     match provider_kind(paths, provider)? {
-        ProviderKind::CodexCli => {
-            println!("Opening the official Codex login (Sign in with ChatGPT)…");
-            let st = std::process::Command::new("codex").arg("login").status().map_err(|e| format!("codex: {e}"))?;
-            if st.success() { Ok(()) } else { Err("codex login failed".into()) }
-        }
+        ProviderKind::CodexCli => codex_login(paths, extra),
         ProviderKind::GeminiCli => {
             println!("Run `gemini` once in a terminal and choose \"Login with Google\". Alice reuses that login.");
             Ok(())
@@ -802,7 +974,8 @@ async fn login(paths: &Paths, provider: &str) -> CliResult<()> {
 async fn logout(paths: &Paths, provider: &str) -> CliResult<()> {
     match provider_kind(paths, provider)? {
         ProviderKind::CodexCli => {
-            let _ = std::process::Command::new("codex").arg("logout").status();
+            let home = crate::providers::cli::prepare_codex_home()?;
+            let _ = std::process::Command::new("codex").env("CODEX_HOME", home).arg("logout").status();
             Ok(())
         }
         ProviderKind::GeminiCli => {
@@ -953,8 +1126,9 @@ async fn tool_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                     c.patch("/tools", &json!({ &name: perm.map(|p| p.as_str()) })).await?;
                 }
                 Backend::Local => {
-                    if crate::tools::find(&name).is_none() && !["fs", "web", "google"].contains(&name.as_str()) {
-                        return Err(format!("unknown tool: {name}"));
+                    let cat = crate::skills::load_catalog(&paths.skills());
+                    if !cat.skills.iter().any(|s| s.id() == name || s.manifest.aliases.contains(&name) || s.tool(&name).is_some()) {
+                        return Err(format!("unknown tool or skill: {name}"));
                     }
                     let mut cfg = Config::load(paths)?;
                     match perm {
@@ -977,9 +1151,16 @@ async fn tool_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                 Backend::Remote(c) => serde_json::from_value::<Config>(c.get("/config").await?).map_err(|e| e.to_string())?,
                 Backend::Local => Config::load(paths)?,
             };
-            for d in crate::tools::all() {
-                let p = crate::tools::permission(&cfg, d);
-                println!("{:<18} {:<9} {}", d.name, p.as_str(), dim(d.description));
+            let cat = crate::skills::load_catalog(&paths.skills());
+            for s in &cat.skills {
+                if !crate::skills::enabled(&cfg, s) {
+                    continue;
+                }
+                println!("{}", s.manifest.name);
+                for t in &s.manifest.tools {
+                    let p = crate::skills::permission(&cfg, s, t);
+                    println!("  {:<20} {:<9} {}", t.name, p.as_str(), dim(&t.description));
+                }
             }
             println!("{}", dim(&format!("working folder: {}", crate::tools::fs::workspace_dir(&cfg, paths).display())));
             if !cfg.tools.fs.roots.is_empty() {

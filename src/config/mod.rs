@@ -84,9 +84,12 @@ impl Paths {
     pub fn pid_file(&self) -> PathBuf { self.home.join("alice.pid") }
     /// Personality, tone and working style (user-written; kept on reset).
     pub fn soul(&self) -> PathBuf { self.home.join("SOUL.md") }
+    pub fn skills(&self) -> PathBuf { self.home.join("skills") }
+    /// Alice's own Codex home (isolated from the user's ~/.codex).
+    pub fn codex_home(&self) -> PathBuf { self.home.join("codex") }
 
     pub fn ensure(&self) -> std::io::Result<()> {
-        for d in [self.home.clone(), self.attachments(), self.workspace(), self.logs()] {
+        for d in [self.home.clone(), self.attachments(), self.workspace(), self.logs(), self.skills()] {
             std::fs::create_dir_all(&d)?;
             set_mode(&d, 0o700);
         }
@@ -136,6 +139,22 @@ pub struct Config {
     pub providers: Vec<ProviderConfig>,
     pub tools: ToolsConfig,
     pub channels: ChannelsConfig,
+    /// Per-skill state: `[skills.<id>]`.
+    pub skills: BTreeMap<String, SkillConfig>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SkillConfig {
+    /// `None` = the skill's default (built-in: on, discovered: off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Enabled groups; `None` = all groups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    /// Non-secret settings (secret ones live in secrets.toml).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: BTreeMap<String, String>,
 }
 
 
@@ -302,6 +321,8 @@ impl Permission {
 pub struct ToolsConfig {
     pub fs: FsConfig,
     pub web: WebConfig,
+    /// Legacy (moved to `[skills.google-workspace]`); read once for migration.
+    #[serde(skip_serializing_if = "GoogleConfig::is_empty")]
     pub google: GoogleConfig,
     /// Per-tool overrides of the built-in default permission.
     pub permissions: BTreeMap<String, Permission>,
@@ -336,6 +357,12 @@ pub struct GoogleConfig {
     pub services: Vec<String>,
     /// Test override: all Google endpoints under one base URL.
     pub api_base: String,
+}
+
+impl GoogleConfig {
+    pub fn is_empty(&self) -> bool {
+        self.client_id.is_empty() && self.services.is_empty() && self.api_base.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

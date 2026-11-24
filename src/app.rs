@@ -20,6 +20,17 @@ pub struct ActiveGeneration {
     pub client: String,
 }
 
+/// A Codex (or other MCP client) turn that may call tools through `alice mcp`.
+/// Keyed by a random per-turn token; removed when the turn ends.
+pub struct Bridge {
+    pub thread_id: String,
+    pub message_id: String,
+    pub client: String,
+    pub cancel: CancellationToken,
+    /// Calls made so far (recorded on the assistant message).
+    pub calls: Mutex<Vec<crate::providers::ToolCall>>,
+}
+
 pub struct PendingApproval {
     pub thread_id: String,
     pub reply: oneshot::Sender<bool>,
@@ -37,6 +48,9 @@ pub struct App {
     /// Live gateway state for the settings UI: name -> {state, detail}.
     pub channel_status: Mutex<HashMap<&'static str, Value>>,
     pub started: Instant,
+    pub skill_cache: Mutex<Option<(Vec<(String, Option<std::time::SystemTime>, Option<std::time::SystemTime>)>, Arc<crate::skills::Catalog>)>>,
+    pub auth: crate::skills::auth::AuthState,
+    pub bridges: Mutex<HashMap<String, Arc<Bridge>>>,
 }
 
 pub type AppRef = Arc<App>;
@@ -60,6 +74,9 @@ impl App {
             approvals: Mutex::new(HashMap::new()),
             channel_status: Mutex::new(HashMap::new()),
             started: Instant::now(),
+            skill_cache: Mutex::new(None),
+            auth: Default::default(),
+            bridges: Mutex::new(HashMap::new()),
         })
     }
 
@@ -120,6 +137,24 @@ impl App {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(name, serde_json::json!({ "state": state, "detail": detail }));
+    }
+
+    /// Open a bridge for one turn; returns its token. Close with [`App::close_bridge`].
+    pub fn open_bridge(&self, b: Bridge) -> (String, Arc<Bridge>) {
+        let token = crate::util::new_token() + &crate::util::new_token();
+        let b = Arc::new(b);
+        self.bridges.lock().unwrap_or_else(|e| e.into_inner()).insert(token.clone(), b.clone());
+        (token, b)
+    }
+
+    pub fn close_bridge(&self, token: &str) {
+        self.bridges.lock().unwrap_or_else(|e| e.into_inner()).remove(token);
+    }
+
+    /// Constant-time lookup of a bridge token.
+    pub fn bridge(&self, token: &str) -> Option<Arc<Bridge>> {
+        let map = self.bridges.lock().unwrap_or_else(|e| e.into_inner());
+        map.iter().find(|(k, _)| crate::util::ct_eq(k.as_bytes(), token.as_bytes())).map(|(_, b)| b.clone()).filter(|b| !b.cancel.is_cancelled())
     }
 
     /// Reject all pending approvals belonging to a thread.

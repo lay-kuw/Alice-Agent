@@ -1,0 +1,75 @@
+id = "files"
+name = "Files"
+version = "1.0.0"
+description = "Read, search and edit files in the working folder and other allowed folders"
+aliases = ["fs"]
+builtin = "fs"
+
+[permissions]
+files = true
+description = "Only inside the working folder (tools.fs.workspace) and folders you add (tools.fs.roots). Alice's own data folder is always refused."
+
+[[tools]]
+name = "fs_list"
+description = "List a directory's entries (name, type, size)."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string", "description": "Path relative to the working folder, or absolute inside an allowed folder"}}, "required": ["path"]}'''
+
+[[tools]]
+name = "fs_read"
+description = "Read a text file. Optional line offset/limit."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "description": "first line (0-based)"}, "limit": {"type": "integer", "description": "max lines"}}, "required": ["path"]}'''
+
+[[tools]]
+name = "fs_search"
+description = "Recursively find files under a directory whose name contains `name` and/or whose text contains `text`."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string"}, "name": {"type": "string"}, "text": {"type": "string"}}, "required": ["path"]}'''
+
+[[tools]]
+name = "fs_write"
+description = "Create a file, or overwrite it when overwrite=true. Parent directories are created."
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean"}}, "required": ["path", "content"]}'''
+
+[[tools]]
+name = "fs_edit"
+description = "Replace exactly one occurrence of `old` with `new` in a text file."
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}, "required": ["path", "old", "new"]}'''
+
+[[tools]]
+name = "fs_mkdir"
+description = "Create a directory (and parents)."
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string", "description": "Path relative to the working folder, or absolute inside an allowed folder"}}, "required": ["path"]}'''
+
+[[tools]]
+name = "fs_move"
+description = "Move or rename a file or directory within the allowed folders."
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}}, "required": ["from", "to"]}'''
+
+[[tools]]
+name = "fs_delete"
+description = "Delete a file, or a directory when recursive=true."
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"path": {"type": "string"}, "recursive": {"type": "boolean"}}, "required": ["path"]}'''
+

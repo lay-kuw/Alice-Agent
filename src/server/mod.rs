@@ -4,7 +4,9 @@ use crate::agent::{self, TurnError, TurnInput};
 use crate::app::{App, AppRef};
 use crate::config::{Permission, ProviderConfig, ProviderKind};
 use crate::util::{ct_eq, new_id, now_ms};
-use crate::{memory, providers, storage, tools};
+use crate::{memory, providers, skills, storage, tools};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -85,11 +87,17 @@ pub fn router(app: AppRef) -> Router {
         .route("/tools", get(list_tools).patch(patch_tools))
         .route("/logs", get(logs))
         .route("/soul", get(get_soul).put(put_soul))
-        .route("/google", get(google_status))
-        .route("/google/login", post(google_login))
-        .route("/google/finish", post(google_finish))
-        .route("/google/logout", post(google_logout))
+        .route("/skills", get(list_skills))
+        .route("/skills/rescan", post(rescan_skills))
+        .route("/skills/finish", post(skill_finish))
+        .route("/skills/{id}", axum::routing::patch(patch_skill))
+        .route("/skills/{id}/login", post(skill_login))
+        .route("/skills/{id}/logout", post(skill_logout))
+        .route("/tool-runs", get(tool_runs))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
+        // Bridge routes authenticate with the per-turn token themselves.
+        .route("/mcp/tools", get(mcp_tools))
+        .route("/mcp/call", post(mcp_call))
         .route("/health", get(health))
         .route("/login", post(login))
         .layer(DefaultBodyLimit::max(MAX_ATTACHMENT + 1024));
@@ -99,7 +107,8 @@ pub fn router(app: AppRef) -> Router {
         .route("/", get(web_index))
         .route("/app.js", get(web_js))
         .route("/style.css", get(web_css))
-        .route("/oauth/google/callback", get(google_callback))
+        .route("/oauth/callback", get(oauth_callback))
+        .route("/oauth/google/callback", get(oauth_callback))
         .layer(middleware::from_fn(security_headers))
         .with_state(app)
 }
@@ -663,6 +672,7 @@ async fn test_model(State(app): State<AppRef>, Json(b): Json<ModelBody>) -> ApiR
         messages: vec![providers::ChatMessage::user("Reply with the single word: ok")],
         tools: vec![],
         max_tokens: 1000,
+        mcp: None,
     };
     let t0 = std::time::Instant::now();
     let mut first: Option<u128> = None;
@@ -751,7 +761,7 @@ async fn remove_provider(State(app): State<AppRef>, Path(id): Path<String>) -> A
 
 fn secret_allowed(name: &str) -> bool {
     // server.token is managed by `alice setup` only.
-    let fixed = ["telegram.bot_token", "discord.bot_token", "google.client_secret", "brave.api_key"];
+    let fixed = ["telegram.bot_token", "discord.bot_token", "brave.api_key"];
     fixed.contains(&name)
         || name
             .strip_prefix("provider.")
@@ -774,7 +784,7 @@ async fn set_secret(State(app): State<AppRef>, Path(name): Path<String>, Json(b)
 }
 
 async fn delete_secret(State(app): State<AppRef>, Path(name): Path<String>) -> ApiResult<Json<Value>> {
-    if !secret_allowed(&name) && name != "google.refresh_token" {
+    if !secret_allowed(&name) {
         return Err(bad("unknown secret name"));
     }
     app.update_secrets(|s| s.set(&name, "")).map_err(bad)?;
@@ -874,21 +884,39 @@ async fn patch_config(State(app): State<AppRef>, Json(b): Json<serde_json::Map<S
     Ok(Json(public_config(&app)))
 }
 
+fn flat_tools(app: &App) -> Value {
+    let reg = skills::registry(app);
+    Value::Array(
+        reg.tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name, "skill": t.skill.id(), "group": t.skill.id(), "description": t.description,
+                    "permission": t.permission.as_str(), "risk": t.risk, "available": t.available, "reason": t.reason,
+                })
+            })
+            .collect(),
+    )
+}
+
 async fn list_tools(State(app): State<AppRef>) -> Json<Value> {
     let cfg = app.config();
     let roots: Vec<String> = tools::fs::Sandbox::new(&cfg, &app.paths).roots().iter().map(|p| p.display().to_string()).collect();
     let ws = tools::fs::workspace_dir(&cfg, &app.paths).display().to_string();
-    Json(json!({ "tools": tools::list_json(&cfg, &app), "fs_roots": roots, "workspace": ws }))
+    Json(json!({ "tools": flat_tools(&app), "fs_roots": roots, "workspace": ws }))
 }
 
-/// Body: `{ "fs_delete": "ask", "web": "allow", ... }` (tool or group names).
+/// Body: `{ "fs_delete": "ask", "web": "allow", ... }` (tool names or skill ids).
 /// Only reachable with the user's API token; never exposed as a tool.
 async fn patch_tools(State(app): State<AppRef>, Json(b): Json<serde_json::Map<String, Value>>) -> ApiResult<Json<Value>> {
-    let groups = ["fs", "web", "google"];
+    let cat = skills::catalog(&app);
+    let known = |k: &str| {
+        cat.skills.iter().any(|s| s.id() == k || s.manifest.aliases.iter().any(|a| a == k) || s.tool(k).is_some())
+    };
     app.update_config(|c| {
         for (k, v) in &b {
-            if tools::find(k).is_none() && !groups.contains(&k.as_str()) {
-                return Err(format!("unknown tool: {k}"));
+            if !known(k) {
+                return Err(format!("unknown tool or skill: {k}"));
             }
             match v {
                 Value::Null => {
@@ -907,8 +935,238 @@ async fn patch_tools(State(app): State<AppRef>, Json(b): Json<serde_json::Map<St
         Ok(())
     })
     .map_err(bad)?;
-    let cfg = app.config();
-    Ok(Json(json!({ "tools": tools::list_json(&cfg, &app) })))
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(json!({ "tools": flat_tools(&app) })))
+}
+
+// ---------------------------------------------------------------- skills
+
+async fn list_skills(State(app): State<AppRef>) -> Json<Value> {
+    Json(skills::list_json(&app))
+}
+
+async fn rescan_skills(State(app): State<AppRef>) -> Json<Value> {
+    *app.skill_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    Json(skills::list_json(&app))
+}
+
+fn find_skill(app: &App, id: &str) -> ApiResult<Arc<skills::Skill>> {
+    skills::catalog(app).get(id).cloned().ok_or_else(not_found)
+}
+
+#[derive(Deserialize)]
+struct SkillPatch {
+    enabled: Option<bool>,
+    groups: Option<Vec<String>>,
+    /// key -> value; empty string clears. Secret settings go to secrets.toml.
+    settings: Option<BTreeMap<String, String>>,
+}
+
+async fn patch_skill(State(app): State<AppRef>, Path(id): Path<String>, Json(b): Json<SkillPatch>) -> ApiResult<Json<Value>> {
+    let s = find_skill(&app, &id)?;
+    let m = &s.manifest;
+    if let Some(groups) = &b.groups
+        && let Some(g) = groups.iter().find(|g| !m.groups.iter().any(|x| &x.id == *g)) {
+            return Err(bad(format!("unknown group: {g}")));
+        }
+    let mut secret_updates = Vec::new();
+    if let Some(settings) = &b.settings {
+        for (k, v) in settings {
+            let spec = m.settings.get(k).ok_or_else(|| bad(format!("unknown setting: {k}")))?;
+            if spec.secret {
+                secret_updates.push((skills::secret_key(&id, k), v.trim().to_string()));
+            }
+        }
+    }
+    app.update_config(|c| {
+        let st = c.skills.entry(id.clone()).or_default();
+        if let Some(e) = b.enabled {
+            st.enabled = Some(e);
+        }
+        if let Some(g) = &b.groups {
+            st.groups = Some(g.clone());
+        }
+        for (k, v) in b.settings.iter().flatten() {
+            if m.settings.get(k).is_some_and(|x| !x.secret) {
+                if v.trim().is_empty() {
+                    st.settings.remove(k);
+                } else {
+                    st.settings.insert(k.clone(), v.trim().to_string());
+                }
+            }
+        }
+        Ok(())
+    })
+    .map_err(bad)?;
+    if !secret_updates.is_empty() {
+        app.update_secrets(|x| {
+            for (k, v) in &secret_updates {
+                x.set(k, v);
+            }
+        })
+        .map_err(bad)?;
+    }
+    if let Some(e) = b.enabled {
+        crate::info!("skill {id} {}", if e { "enabled" } else { "disabled" });
+    }
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(skills::list_json(&app)))
+}
+
+#[derive(Deserialize, Default)]
+struct SkillLogin {
+    /// For `auth.type = "token"`.
+    token: Option<String>,
+    /// For OAuth: a loopback redirect URI (CLI) instead of this server's callback.
+    redirect_uri: Option<String>,
+}
+
+async fn skill_login(State(app): State<AppRef>, Path(id): Path<String>, body: Option<Json<SkillLogin>>) -> ApiResult<Json<Value>> {
+    let s = find_skill(&app, &id)?;
+    let b = body.map(|b| b.0).unwrap_or_default();
+    match s.manifest.auth.as_ref().map(|a| a.kind.as_str()) {
+        Some("token") => {
+            skills::auth::set_token(&app, &s, b.token.as_deref().unwrap_or("")).map_err(bad)?;
+            app.emit(json!({ "type": "config.updated" }));
+            Ok(Json(json!({ "connected": true })))
+        }
+        Some("oauth2") => {
+            let cfg = app.config();
+            let redirect = b
+                .redirect_uri
+                .filter(|r| r.starts_with("http://127.0.0.1:") || r.starts_with("http://localhost:"))
+                .unwrap_or_else(|| format!("http://127.0.0.1:{}/oauth/callback", cfg.server.port));
+            let u = skills::auth::login_url(&app, &s, &redirect).map_err(bad)?;
+            Ok(Json(json!({ "auth_url": u, "redirect_uri": redirect })))
+        }
+        _ => Err(bad(format!("{id} has no login"))),
+    }
+}
+
+#[derive(Deserialize)]
+struct SkillFinish {
+    url: String,
+}
+
+/// For headless servers: paste the URL the browser was redirected to.
+async fn skill_finish(State(app): State<AppRef>, Json(b): Json<SkillFinish>) -> ApiResult<Json<Value>> {
+    let (code, state) = skills::auth::parse_redirect(b.url.trim()).ok_or_else(|| bad("could not find code and state in that URL"))?;
+    let id = skills::auth::finish_login(&app, &code, &state).await.map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(json!({ "connected": true, "skill": id })))
+}
+
+async fn skill_logout(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let s = find_skill(&app, &id)?;
+    skills::auth::logout(&app, &s).await.map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(json!({ "connected": false })))
+}
+
+#[derive(Deserialize)]
+struct RunsQuery {
+    limit: Option<usize>,
+}
+
+async fn tool_runs(State(app): State<AppRef>, Query(q): Query<RunsQuery>) -> ApiResult<Json<Value>> {
+    let runs = storage::tool_runs(&app.db.lock(), q.limit.unwrap_or(100).min(1000))?;
+    Ok(Json(json!({ "runs": runs })))
+}
+
+// ---------------------------------------------------------------- mcp bridge
+
+/// `/api/mcp/*` is used only by `alice mcp` and authenticates with the
+/// per-turn bridge token (`X-Alice-Turn`). That token cannot reach any other
+/// route: not approvals, not settings, not secrets.
+async fn bridge_from(app: &App, headers: &HeaderMap) -> ApiResult<Arc<crate::app::Bridge>> {
+    let t = headers.get("x-alice-turn").and_then(|v| v.to_str().ok()).unwrap_or("");
+    match (t.is_empty(), app.bridge(t)) {
+        (false, Some(b)) => Ok(b),
+        _ => {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            Err(ApiError(StatusCode::UNAUTHORIZED, "invalid or expired turn token".into()))
+        }
+    }
+}
+
+async fn mcp_tools(State(app): State<AppRef>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    bridge_from(&app, &headers).await?;
+    let reg = skills::registry(&app);
+    let tools: Vec<Value> = reg
+        .specs()
+        .into_iter()
+        .map(|t| {
+            let read = reg.find(&t.name).map(|x| x.risk == "read").unwrap_or(true);
+            json!({
+                "name": t.name, "description": t.description, "inputSchema": t.parameters,
+                "annotations": { "readOnlyHint": read, "destructiveHint": !read, "openWorldHint": true },
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "tools": tools, "instructions": reg.index() })))
+}
+
+#[derive(Deserialize)]
+struct McpCall {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+async fn mcp_call(State(app): State<AppRef>, headers: HeaderMap, Json(b): Json<McpCall>) -> ApiResult<Json<Value>> {
+    let bridge = bridge_from(&app, &headers).await?;
+    let args = if b.arguments.is_null() { json!({}) } else { b.arguments };
+    let call = providers::ToolCall { id: format!("mcp_{}", new_id()), name: b.name.clone(), arguments: args.clone() };
+    // Show the call on the assistant message right away (live UI).
+    {
+        let mut calls = bridge.calls.lock().unwrap_or_else(|e| e.into_inner());
+        calls.push(call.clone());
+        let json = serde_json::to_value(&*calls).unwrap_or_default();
+        let c = app.db.lock();
+        let _ = c.execute("UPDATE messages SET tool_calls = ?2 WHERE id = ?1", rusqlite::params![bridge.message_id, json.to_string()]);
+    }
+    let gc = skills::gate::Call {
+        thread_id: &bridge.thread_id,
+        message_id: &bridge.message_id,
+        call_id: &call.id,
+        name: &call.name,
+        args: &args,
+        source: skills::gate::Source::Mcp,
+        client: &bridge.client,
+    };
+    let (content, ok) = match skills::gate::invoke(&app, &gc, &bridge.cancel).await {
+        skills::gate::Outcome::Done(c, ok) => (c, ok),
+        skills::gate::Outcome::Cancelled => ("error: the turn was stopped".to_string(), false),
+    };
+    // Same record as a native tool call: a tool message answering the call.
+    let msg = {
+        let c = app.db.lock();
+        storage::insert_message(
+            &c,
+            &storage::NewMessage {
+                thread_id: &bridge.thread_id,
+                role: "tool",
+                content: &content,
+                tool_calls: None,
+                tool_call_id: Some(&call.id),
+                status: "complete",
+                client: &bridge.client,
+                model: None,
+            },
+        )
+        .ok()
+        .inspect(|m| {
+            let meta = json!({ "tool": call.name, "ok": ok, "via": "mcp" });
+            let _ = c.execute("UPDATE messages SET meta = ?2 WHERE id = ?1", rusqlite::params![m.id, meta.to_string()]);
+        })
+    };
+    if msg.is_some() {
+        app.emit(json!({
+            "type": "tool.completed", "thread_id": bridge.thread_id, "message_id": bridge.message_id,
+            "tool_call_id": call.id, "tool": call.name, "ok": ok, "summary": crate::util::truncate(&content, 300),
+        }));
+    }
+    Ok(Json(json!({ "ok": ok, "content": content })))
 }
 
 // ---------------------------------------------------------------- soul
@@ -934,56 +1192,6 @@ async fn put_soul(State(app): State<AppRef>, Json(b): Json<SoulBody>) -> ApiResu
     Ok(Json(json!({ "ok": true })))
 }
 
-// ---------------------------------------------------------------- google
-
-use crate::tools::google;
-
-async fn google_status(State(app): State<AppRef>) -> Json<Value> {
-    let cfg = app.config();
-    Json(json!({
-        "connected": google::connected(&app),
-        "client_id_set": !cfg.tools.google.client_id.is_empty(),
-        "client_secret_set": app.secrets().get("google.client_secret").is_some(),
-        "services": cfg.tools.google.services,
-        "available_services": google::SERVICES,
-        "scopes": google::scopes(&cfg.tools.google.services),
-    }))
-}
-
-#[derive(Deserialize, Default)]
-struct GoogleLogin {
-    redirect_uri: Option<String>,
-}
-
-async fn google_login(State(app): State<AppRef>, body: Option<Json<GoogleLogin>>) -> ApiResult<Json<Value>> {
-    let cfg = app.config();
-    let redirect = body
-        .and_then(|b| b.0.redirect_uri)
-        .filter(|r| r.starts_with("http://127.0.0.1:") || r.starts_with("http://localhost:"))
-        .unwrap_or_else(|| format!("http://127.0.0.1:{}/oauth/google/callback", cfg.server.port));
-    let u = google::login_url(&cfg, &redirect).map_err(bad)?;
-    Ok(Json(json!({ "auth_url": u, "redirect_uri": redirect })))
-}
-
-#[derive(Deserialize)]
-struct GoogleFinish {
-    url: String,
-}
-
-/// For headless servers: paste the URL the browser was redirected to.
-async fn google_finish(State(app): State<AppRef>, Json(b): Json<GoogleFinish>) -> ApiResult<Json<Value>> {
-    let (code, state) = google::parse_redirect(b.url.trim()).ok_or_else(|| bad("could not find code and state in that URL"))?;
-    google::finish_login(&app, &code, &state).await.map_err(bad)?;
-    app.emit(json!({ "type": "config.updated" }));
-    Ok(Json(json!({ "connected": true })))
-}
-
-async fn google_logout(State(app): State<AppRef>) -> ApiResult<Json<Value>> {
-    google::logout(&app).await.map_err(bad)?;
-    app.emit(json!({ "type": "config.updated" }));
-    Ok(Json(json!({ "connected": false })))
-}
-
 #[derive(Deserialize)]
 struct CallbackQuery {
     code: Option<String>,
@@ -991,14 +1199,14 @@ struct CallbackQuery {
     error: Option<String>,
 }
 
-/// OAuth loopback redirect target. Unauthenticated, protected by `state`.
-async fn google_callback(State(app): State<AppRef>, Query(q): Query<CallbackQuery>) -> Response {
+/// OAuth loopback redirect target. Unauthenticated, protected by the one-time `state`.
+async fn oauth_callback(State(app): State<AppRef>, Query(q): Query<CallbackQuery>) -> Response {
     let msg = match (q.code, q.state, q.error) {
-        (_, _, Some(e)) => format!("Google returned an error: {e}"),
-        (Some(code), Some(state), None) => match google::finish_login(&app, &code, &state).await {
-            Ok(()) => {
+        (_, _, Some(e)) => format!("The provider returned an error: {e}"),
+        (Some(code), Some(state), None) => match skills::auth::finish_login(&app, &code, &state).await {
+            Ok(id) => {
                 app.emit(json!({ "type": "config.updated" }));
-                "Google account connected. You can close this tab.".to_string()
+                format!("Connected ({id}). You can close this tab.")
             }
             Err(e) => format!("Could not connect: {e}"),
         },

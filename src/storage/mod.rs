@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_init.sql"), include_str!("../../migrations/0002_tool_runs.sql")];
 
 #[derive(Clone)]
 pub struct Db {
@@ -328,6 +328,22 @@ pub fn token_usage(c: &Connection, since_ms: i64) -> rusqlite::Result<Vec<(Strin
          GROUP BY 1 ORDER BY 3 DESC",
     )?;
     st.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect()
+}
+
+/// Recent tool runs, newest first.
+pub fn tool_runs(c: &Connection, limit: usize) -> rusqlite::Result<Vec<Value>> {
+    let mut st = c.prepare_cached(
+        "SELECT r.created_at, r.thread_id, t.title, r.skill, r.tool, r.source, r.status, r.duration_ms, r.error
+         FROM tool_runs r LEFT JOIN threads t ON t.id = r.thread_id ORDER BY r.id DESC LIMIT ?1",
+    )?;
+    st.query_map([limit as i64], |r| {
+        Ok(serde_json::json!({
+            "ts": r.get::<_, i64>(0)?, "thread_id": r.get::<_, Option<String>>(1)?, "thread_title": r.get::<_, Option<String>>(2)?,
+            "skill": r.get::<_, String>(3)?, "tool": r.get::<_, String>(4)?, "source": r.get::<_, String>(5)?,
+            "status": r.get::<_, String>(6)?, "duration_ms": r.get::<_, i64>(7)?, "error": r.get::<_, Option<String>>(8)?,
+        }))
+    })?
+    .collect()
 }
 
 #[cfg(test)]

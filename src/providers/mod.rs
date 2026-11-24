@@ -75,6 +75,19 @@ pub struct ChatRequest<'a> {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolSpec>,
     pub max_tokens: u32,
+    /// Tools reachable through `alice mcp` for this turn (MCP-capable CLIs).
+    pub mcp: Option<McpBridge>,
+}
+
+/// How an MCP-capable CLI reaches Alice's tools for one turn.
+#[derive(Clone, Debug)]
+pub struct McpBridge {
+    /// Per-turn token, valid only for `/api/mcp/*` while the turn runs.
+    pub token: String,
+    /// Base URL of this Alice server.
+    pub url: String,
+    /// Profile, so `alice mcp` talks to the right server.
+    pub profile: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -241,13 +254,13 @@ pub async fn health(http: &reqwest::Client, p: &ProviderConfig, api_key: Option<
             .header("anthropic-version", "2023-06-01"),
         ProviderKind::Gemini => http.get(format!("{base}/v1beta/models?pageSize=1")).header("x-goog-api-key", api_key.unwrap_or("")),
         ProviderKind::CodexCli => {
-            let out = tokio::process::Command::new(p.base_url()).args(["login", "status"]).output();
+            let out = cli::codex_cmd(p.base_url()).args(["login", "status"]).output();
             return match tokio::time::timeout(Duration::from_secs(8), out).await {
                 Ok(Ok(o)) if o.status.success() => {
                     let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
                     ("ok", text.lines().find(|l| !l.trim().is_empty()).unwrap_or("logged in").trim().to_string())
                 }
-                Ok(Ok(_)) => ("ng", "not logged in (run `alice model login <id>`)".into()),
+                Ok(Ok(_)) => ("ng", format!("not logged in (run `alice model login {}`)", p.id)),
                 Ok(Err(_)) => ("ng", format!("'{}' is not installed", p.base_url())),
                 Err(_) => ("unknown", "codex did not answer".into()),
             };

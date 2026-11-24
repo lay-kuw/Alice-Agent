@@ -4,9 +4,9 @@
 //! SSRF guard: only http(s), and every hop (redirects followed manually)
 //! must resolve to public addresses unless `tools.web.allow_private` is set.
 
-use super::{ToolDef, arg_str, untrusted};
+use super::{arg_str, untrusted};
 use crate::app::App;
-use crate::config::{Config, Permission};
+use crate::config::Config;
 use serde_json::{Value, json};
 use std::net::IpAddr;
 use std::time::Duration;
@@ -14,22 +14,6 @@ use std::time::Duration;
 const MAX_BODY: usize = 3 * 1024 * 1024;
 const DEFAULT_CHARS: usize = 20_000;
 
-pub static DEFS: [ToolDef; 2] = [
-    ToolDef {
-        name: "web_search",
-        group: "web",
-        default: Permission::Allow,
-        description: "Search the web. Returns titles, URLs and snippets.",
-        params: || json!({"type":"object","properties":{"query":{"type":"string"},"count":{"type":"integer","description":"1-10, default 5"}},"required":["query"]}),
-    },
-    ToolDef {
-        name: "web_fetch",
-        group: "web",
-        default: Permission::Ask,
-        description: "Fetch a public web page and return its readable text.",
-        params: || json!({"type":"object","properties":{"url":{"type":"string"},"max_chars":{"type":"integer","description":"default 20000"}},"required":["url"]}),
-    },
-];
 
 pub fn available(cfg: &Config, app: &App, name: &str) -> bool {
     match name {

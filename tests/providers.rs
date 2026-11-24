@@ -66,6 +66,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
         messages: vec![ChatMessage::user("hi"), prev, tool_msg, ChatMessage::user("again")],
         tools: vec![tool()],
         max_tokens: 1000,
+        mcp: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
@@ -92,7 +93,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
     // Replay within a turn sends the exact blocks (thinking included).
     let mut replay = ChatMessage::assistant("Let me look.");
     replay.provider_state = Some(json!({ "anthropic_blocks": blocks }));
-    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10 });
+    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10, mcp: None });
     assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
 }
 
@@ -108,7 +109,7 @@ async fn gemini_stream_text_and_function_call_with_signature() {
     let seen = Arc::new(Mutex::new(vec![]));
     let url = serve("/v1beta/models/{model}", body, seen.clone()).await;
     let p = ProviderConfig { id: "g".into(), kind: ProviderKind::Gemini, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100 };
+    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100, mcp: None };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
     let c = providers::stream(&reqwest::Client::new(), &p, Some("gk"), &req, &mut on).await.unwrap();
@@ -134,7 +135,7 @@ async fn http_errors_are_reported_without_secrets() {
     let url = format!("http://{}/v1", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
     let p = ProviderConfig { id: "o".into(), kind: ProviderKind::Openai, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10 };
+    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10, mcp: None };
     let mut on = |_: &str| {};
     let e = providers::stream(&reqwest::Client::new(), &p, Some("sk-SECRET"), &req, &mut on).await.unwrap_err();
     assert_eq!(e.0, "HTTP 401: Incorrect API key");
@@ -167,6 +168,7 @@ echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_inp
         messages: vec![ChatMessage::user("first"), ChatMessage::assistant("answer"), ChatMessage::user("second")],
         tools: vec![],
         max_tokens: 100,
+        mcp: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);

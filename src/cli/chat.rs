@@ -55,6 +55,19 @@ pub fn dim(s: &str) -> String {
     if color() { format!("{DIM}{s}{RESET}") } else { s.to_string() }
 }
 
+fn paint(code: &str, s: &str) -> String {
+    if color() { format!("{code}{s}{RESET}") } else { s.to_string() }
+}
+pub fn red(s: &str) -> String {
+    paint(RED, s)
+}
+pub fn yellow(s: &str) -> String {
+    paint(YELLOW, s)
+}
+pub fn green(s: &str) -> String {
+    paint("\x1b[32m", s)
+}
+
 /// Lines from stdin, read on a background thread so prompts can be
 /// answered while events stream in.
 pub struct Input {

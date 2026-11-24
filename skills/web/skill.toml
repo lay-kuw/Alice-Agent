@@ -1,0 +1,26 @@
+id = "web"
+name = "Web"
+version = "1.0.0"
+description = "Search the web and read web pages"
+builtin = "web"
+
+[permissions]
+network = ["*"]
+description = "Searches through the configured provider (Brave or SearXNG). web_fetch never reaches private or local network addresses."
+
+[[tools]]
+name = "web_search"
+description = "Search the web. Returns title, URL and snippet for each result."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"query": {"type": "string"}, "count": {"type": "integer", "description": "1-10, default 5"}}, "required": ["query"]}'''
+
+[[tools]]
+name = "web_fetch"
+description = "Fetch a web page and return its readable text."
+permission = "ask"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}'''
+

@@ -252,6 +252,7 @@ pub fn delete_all(c: &mut Connection) -> rusqlite::Result<()> {
     let tx = c.transaction()?;
     tx.execute_batch(
         "DELETE FROM threads;
+         DELETE FROM tool_runs;
          DELETE FROM memories;
          DELETE FROM channel_messages;
          UPDATE channel_state SET thread_id = NULL;
@@ -345,6 +346,7 @@ pub fn extraction_request<'a>(model: &'a str, user_text: &str, earlier: &[String
         messages: vec![ChatMessage::user(input)],
         tools: vec![],
         max_tokens: 2000,
+        mcp: None,
     }
 }
 

@@ -90,7 +90,7 @@ async fn google_oauth_pkce_and_tools() {
     assert_eq!(avail(&tools, "gmail_search"), false);
 
     // Start login; only scopes of enabled services are requested.
-    let r = h.post("/google/login", json!({})).await;
+    let r = h.post("/skills/google-workspace/login", json!({})).await;
     let auth_url = r["auth_url"].as_str().unwrap().to_string();
     assert!(auth_url.contains("gmail.readonly") && auth_url.contains("calendar.events"));
     assert!(!auth_url.contains("drive") && !auth_url.contains("spreadsheets"));
@@ -99,20 +99,27 @@ async fn google_oauth_pkce_and_tools() {
     let (state, challenge) = (param("state"), param("code_challenge"));
 
     // Wrong state is rejected; the browser redirect completes the login.
-    let page = reqwest::get(format!("{}/oauth/google/callback?code=c1&state=wrong", h.base)).await.unwrap().text().await.unwrap();
-    assert!(page.contains("state mismatch"));
-    let r = h.post("/google/login", json!({})).await;
+    let page = reqwest::get(format!("{}/oauth/callback?code=c1&state=wrong", h.base)).await.unwrap().text().await.unwrap();
+    assert!(page.contains("Could not connect"), "{page}");
+    let r = h.post("/skills/google-workspace/login", json!({})).await;
     let auth_url = r["auth_url"].as_str().unwrap().to_string();
     let param = |k: &str| auth_url.split(&format!("{k}=")).nth(1).unwrap().split('&').next().unwrap().to_string();
     let (state, challenge) = { let _ = (state, challenge); (param("state"), param("code_challenge")) };
-    let page = reqwest::get(format!("{}/oauth/google/callback?code=c1&state={state}", h.base)).await.unwrap().text().await.unwrap();
-    assert!(page.contains("connected"), "{page}");
+    let page = reqwest::get(format!("{}/oauth/callback?code=c1&state={state}", h.base)).await.unwrap().text().await.unwrap();
+    assert!(page.contains("Connected (google-workspace)"), "{page}");
+    // The state is single-use.
+    let again = reqwest::get(format!("{}/oauth/callback?code=c1&state={state}", h.base)).await.unwrap().text().await.unwrap();
+    assert!(again.contains("Could not connect"), "{again}");
     let tr = fake.token_requests.lock().unwrap()[0].clone();
     assert_eq!(tr["code"], "c1");
     assert_eq!(tr["client_secret"], "csecret");
     let digest = alice::util::b64url_encode(&Sha256::digest(tr["code_verifier"].as_bytes()));
     assert_eq!(digest, challenge, "PKCE verifier must match the challenge");
-    assert_eq!(h.get("/google").await["connected"], true);
+    let connected = |v: Value| v["skills"].as_array().unwrap().iter().find(|s| s["id"] == "google-workspace").unwrap()["auth"]["connected"].clone();
+    assert_eq!(connected(h.get("/skills").await), true);
+    // Legacy settings were migrated; secrets never appear in API responses.
+    let skills = h.get("/skills").await.to_string();
+    assert!(skills.contains("cid.apps.googleusercontent.com") && !skills.contains("csecret") && !skills.contains("rt-1"));
     assert!(std::fs::read_to_string(h.paths.secrets()).unwrap().contains("rt-1"));
     assert!(!h.get("/config").await.to_string().contains("rt-1"));
 
@@ -143,8 +150,12 @@ async fn google_oauth_pkce_and_tools() {
     assert_eq!(avail(&h.get("/tools").await, "drive_search"), false);
 
     // Disconnect revokes and forgets the refresh token.
-    h.post("/google/logout", json!({})).await;
+    // The run log has the tool calls (without arguments or results).
+    let runs = h.get("/tool-runs").await.to_string();
+    assert!(runs.contains("gmail_send") && runs.contains("calendar_create") && !runs.contains("Re: Lunch"), "{runs}");
+
+    h.post("/skills/google-workspace/logout", json!({})).await;
     assert!(*fake.revoked.lock().unwrap());
     assert!(!std::fs::read_to_string(h.paths.secrets()).unwrap().contains("rt-1"));
-    assert_eq!(h.get("/google").await["connected"], false);
+    assert_eq!(connected(h.get("/skills").await), false);
 }

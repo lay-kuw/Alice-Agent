@@ -4,8 +4,8 @@
 //! and must lie inside a canonical root. `..` components are rejected
 //! outright, and a final symlink component is never written through.
 
-use super::{ToolDef, arg_str, untrusted};
-use crate::config::{Config, Paths, Permission};
+use super::{arg_str, untrusted};
+use crate::config::{Config, Paths};
 use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
 
@@ -13,34 +13,7 @@ const MAX_READ: usize = 256 * 1024;
 const MAX_LIST: usize = 500;
 const MAX_WALK: usize = 20_000;
 
-fn p_path() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string","description":"Path relative to the working folder, or absolute inside an allowed folder"}},"required":["path"]})
-}
 
-pub static DEFS: [ToolDef; 8] = [
-    ToolDef { name: "fs_list", group: "fs", default: Permission::Allow,
-        description: "List a directory's entries (name, type, size).", params: p_path },
-    ToolDef { name: "fs_read", group: "fs", default: Permission::Allow,
-        description: "Read a text file. Optional line offset/limit.",
-        params: || json!({"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","description":"first line (0-based)"},"limit":{"type":"integer","description":"max lines"}},"required":["path"]}) },
-    ToolDef { name: "fs_search", group: "fs", default: Permission::Allow,
-        description: "Recursively find files under a directory whose name contains `name` and/or whose text contains `text`.",
-        params: || json!({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},"text":{"type":"string"}},"required":["path"]}) },
-    ToolDef { name: "fs_write", group: "fs", default: Permission::Ask,
-        description: "Create a file, or overwrite it when overwrite=true. Parent directories are created.",
-        params: || json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"overwrite":{"type":"boolean"}},"required":["path","content"]}) },
-    ToolDef { name: "fs_edit", group: "fs", default: Permission::Ask,
-        description: "Replace exactly one occurrence of `old` with `new` in a text file.",
-        params: || json!({"type":"object","properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}},"required":["path","old","new"]}) },
-    ToolDef { name: "fs_mkdir", group: "fs", default: Permission::Ask,
-        description: "Create a directory (and parents).", params: p_path },
-    ToolDef { name: "fs_move", group: "fs", default: Permission::Ask,
-        description: "Move or rename a file or directory within the allowed roots.",
-        params: || json!({"type":"object","properties":{"from":{"type":"string"},"to":{"type":"string"}},"required":["from","to"]}) },
-    ToolDef { name: "fs_delete", group: "fs", default: Permission::Ask,
-        description: "Delete a file, or a directory when recursive=true.",
-        params: || json!({"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"}},"required":["path"]}) },
-];
 
 pub struct Sandbox {
     roots: Vec<PathBuf>,

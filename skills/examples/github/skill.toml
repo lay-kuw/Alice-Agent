@@ -1,0 +1,56 @@
+# Example external skill: copy this folder to ~/.alice/skills/github,
+# then `alice skill enable github` and `alice skill login github`.
+id = "github"
+name = "GitHub"
+version = "0.1.0"
+description = "List, read and create issues in your GitHub repositories"
+
+[requires]
+auth = true
+
+[permissions]
+network = ["api.github.com"]
+description = "Calls the GitHub REST API with your personal access token."
+
+[auth]
+type = "token"
+label = "Personal access token (fine-grained, Issues: read/write)"
+
+[settings.owner]
+label = "Default owner (user or organization)"
+
+[settings.api_base]
+label = "API base URL"
+default = "https://api.github.com"
+
+[[tools]]
+name = "github_issues"
+description = "List open issues of a repository."
+permission = "allow"
+risk = "read"
+handler = "http"
+method = "GET"
+url = "{{settings.api_base}}/repos/{{owner}}/{{repo}}/issues"
+query = ["state", "labels"]
+input_schema = '''{"type":"object","properties":{"owner":{"type":"string","description":"defaults to the configured owner"},"repo":{"type":"string"},"state":{"type":"string","enum":["open","closed","all"]},"labels":{"type":"string"}},"required":["repo"]}'''
+
+[[tools]]
+name = "github_issue_read"
+description = "Read one issue."
+permission = "allow"
+risk = "read"
+handler = "http"
+method = "GET"
+url = "{{settings.api_base}}/repos/{{owner}}/{{repo}}/issues/{{number}}"
+input_schema = '''{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"},"number":{"type":"integer"}},"required":["repo","number"]}'''
+
+[[tools]]
+name = "github_issue_create"
+description = "Create an issue."
+permission = "ask"
+risk = "write"
+handler = "http"
+method = "POST"
+url = "{{settings.api_base}}/repos/{{owner}}/{{repo}}/issues"
+body = ["title", "body", "labels"]
+input_schema = '''{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"},"labels":{"type":"array","items":{"type":"string"}}},"required":["repo","title"]}'''

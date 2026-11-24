@@ -4,6 +4,17 @@ use crate::config::{Config, Paths, Secrets};
 use crate::providers::SseLines;
 use serde_json::Value;
 
+/// URL of the local server from its bind address and port.
+pub fn local_url(cfg: &Config) -> String {
+    let host = match cfg.server.bind.as_str() {
+        "0.0.0.0" | "" => "127.0.0.1".to_string(),
+        "::" => "[::1]".to_string(),
+        h if h.contains(':') => format!("[{h}]"),
+        h => h.to_string(),
+    };
+    format!("http://{host}:{}", cfg.server.port)
+}
+
 #[derive(Clone)]
 pub struct Client {
     pub base: String,
@@ -17,15 +28,7 @@ impl Client {
     /// `ALICE_URL` / `ALICE_TOKEN` override the local config (remote CLI use).
     pub fn from_env(paths: &Paths) -> CliResult<Client> {
         let cfg = Config::load(paths)?;
-        let base = std::env::var("ALICE_URL").unwrap_or_else(|_| {
-            let host = match cfg.server.bind.as_str() {
-                "0.0.0.0" | "" => "127.0.0.1".to_string(),
-                "::" => "[::1]".to_string(),
-                h if h.contains(':') => format!("[{h}]"),
-                h => h.to_string(),
-            };
-            format!("http://{host}:{}", cfg.server.port)
-        });
+        let base = std::env::var("ALICE_URL").unwrap_or_else(|_| local_url(&cfg));
         let token = match std::env::var("ALICE_TOKEN") {
             Ok(t) => t,
             Err(_) => Secrets::load(paths)?

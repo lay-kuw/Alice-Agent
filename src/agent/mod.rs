@@ -3,20 +3,18 @@
 //! existing (foreign keys), so a concurrent delete cannot be undone by a
 //! generation that is still running.
 
-use crate::app::{ActiveGeneration, AppRef, PendingApproval};
-use crate::config::{Config, Permission};
+use crate::app::{ActiveGeneration, AppRef, Bridge};
+use crate::config::{Config, ProviderKind};
 use crate::memory;
 use crate::providers::{self, ChatMessage, ChatRequest, Image, Role, ToolCall};
 use crate::storage::{self, Message, MessageUpdate, NewMessage};
+use crate::skills::{self, gate};
 use crate::tools;
-use crate::util::{new_id, now_ms};
+use crate::util::now_ms;
 use crate::{error, warn};
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
+use std::time::Instant;
 use tokio_util::sync::CancellationToken;
-
-const APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug)]
 pub enum TurnError {
@@ -191,11 +189,15 @@ enum Outcome {
 
 /// The system prompt is SOUL.md (with `{{name}}` filled in) plus the facts
 /// only Alice knows: the current time and memories relevant to this message.
-fn system_prompt(cfg: &Config, soul: &str, memories: &str, workspace: Option<&std::path::Path>) -> String {
+fn system_prompt(cfg: &Config, soul: &str, memories: &str, workspace: Option<&std::path::Path>, skills: &str) -> String {
     let mut s = soul.trim().replace("{{name}}", &cfg.agent.name);
     s.push_str(&format!("\n\nCurrent time (UTC): {}\n", &crate::util::fmt_utc(now_ms())[..16]));
     if let Some(w) = workspace {
         s.push_str(&format!("Working folder for file tools: {}\n", w.display()));
+    }
+    if !skills.is_empty() {
+        s.push('\n');
+        s.push_str(skills);
     }
     if !memories.is_empty() {
         s.push('\n');
@@ -328,8 +330,12 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         };
         let provider = provider.clone();
         let api_key = secrets.provider_key(&provider.id).map(str::to_string);
-        let tool_specs = if providers::supports_tools(provider.kind) { tools::specs(&cfg, app) } else { vec![] };
+        // Every provider gets the same registry: native tool calling, MCP
+        // (Codex) or the text protocol (other CLIs) — all through the gate.
+        let reg = skills::registry(app);
+        let tool_specs = reg.specs();
         let ws = tool_specs.iter().any(|t| t.name.starts_with("fs_")).then(|| tools::fs::workspace_dir(&cfg, &app.paths));
+        let skill_index = reg.index();
 
         // Context: memories relevant to this user message + thread history.
         let (history, mem_ids, mem_block) = {
@@ -353,11 +359,26 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         };
         let req = ChatRequest {
             model: model_name,
-            system: system_prompt(&cfg, &crate::config::read_soul(&app.paths), &mem_block, ws.as_deref()),
+            system: system_prompt(&cfg, &crate::config::read_soul(&app.paths), &mem_block, ws.as_deref(), &skill_index),
             messages: history,
             tools: tool_specs,
             max_tokens: cfg.agent.max_tokens,
+            mcp: None,
         };
+        let mut req = req;
+        // Codex reaches tools through `alice mcp` with a token for this turn only.
+        let bridge = (provider.kind == ProviderKind::CodexCli && !req.tools.is_empty()).then(|| {
+            app.open_bridge(Bridge {
+                thread_id: user.thread_id.clone(),
+                message_id: assistant.id.clone(),
+                client: user.client.clone(),
+                cancel: cancel.child_token(),
+                calls: Default::default(),
+            })
+        });
+        if let Some((token, _)) = &bridge {
+            req.mcp = Some(providers::McpBridge { token: token.clone(), url: crate::cli::client::local_url(&cfg), profile: app.paths.profile.clone() });
+        }
         let alice_us = t_step.elapsed().as_micros();
         let alice_ms = alice_us / 1000;
 
@@ -382,6 +403,15 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         };
         let provider_ms = t_provider.elapsed().as_millis();
         provider_ms_total += provider_ms;
+        // Calls Codex already made through the bridge (executed, not to be re-run).
+        let bridged: Vec<ToolCall> = match &bridge {
+            Some((token, b)) => {
+                b.cancel.cancel();
+                app.close_bridge(token);
+                b.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            }
+            None => vec![],
+        };
 
         let completion = match result {
             None => {
@@ -396,7 +426,8 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         };
 
         let t_post = Instant::now();
-        let tool_calls_json = if completion.tool_calls.is_empty() { None } else { serde_json::to_value(&completion.tool_calls).ok() };
+        let all_calls: Vec<&ToolCall> = bridged.iter().chain(completion.tool_calls.iter()).collect();
+        let tool_calls_json = if all_calls.is_empty() { None } else { serde_json::to_value(&all_calls).ok() };
         let meta = json!({
             "alice_ms": alice_ms,
             "alice_us": alice_us,
@@ -443,11 +474,20 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         }
 
         // Run tools.
+        let source = if providers::supports_tools(provider.kind) { gate::Source::Native } else { gate::Source::Text };
         for call in &completion.tool_calls {
-            let result = run_tool(app, &user.thread_id, &assistant.id, call, &cancel).await;
-            let (content, ok) = match result {
-                ToolResult::Cancelled => return Outcome::Cancelled,
-                ToolResult::Done(content, ok) => (content, ok),
+            let gc = gate::Call {
+                thread_id: &user.thread_id,
+                message_id: &assistant.id,
+                call_id: &call.id,
+                name: &call.name,
+                args: &call.arguments,
+                source,
+                client: &user.client,
+            };
+            let (content, ok) = match gate::invoke(app, &gc, &cancel).await {
+                gate::Outcome::Cancelled => return Outcome::Cancelled,
+                gate::Outcome::Done(content, ok) => (content, ok),
             };
             let tool_msg = {
                 let c = app.db.lock();
@@ -536,65 +576,6 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             }
             Err(_) => return Outcome::Deleted,
         }
-    }
-}
-
-enum ToolResult {
-    Done(String, bool),
-    Cancelled,
-}
-
-async fn run_tool(app: &AppRef, thread_id: &str, message_id: &str, call: &ToolCall, cancel: &CancellationToken) -> ToolResult {
-    let cfg = app.config();
-    let Some(def) = tools::find(&call.name) else {
-        return ToolResult::Done(format!("error: unknown tool '{}'", call.name), false);
-    };
-    let perm = tools::permission(&cfg, def);
-    if perm == Permission::Disabled || !tools::available(&cfg, app, def) {
-        return ToolResult::Done(format!("error: tool '{}' is disabled by the user", call.name), false);
-    }
-    if perm == Permission::Ask {
-        let approval_id = new_id();
-        let (tx, rx) = oneshot::channel();
-        app.approvals
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(approval_id.clone(), PendingApproval { thread_id: thread_id.to_string(), reply: tx });
-        let client = app
-            .active
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(thread_id)
-            .map(|g| g.client.clone())
-            .unwrap_or_default();
-        app.emit(json!({
-            "type": "tool.approval_required", "thread_id": thread_id, "message_id": message_id,
-            "approval_id": approval_id, "tool": call.name, "arguments": call.arguments,
-            "tool_call_id": call.id, "client": client,
-        }));
-        let decision = tokio::select! {
-            r = tokio::time::timeout(APPROVAL_TIMEOUT, rx) => match r { Ok(Ok(b)) => Some(b), _ => Some(false) },
-            _ = cancel.cancelled() => None,
-        };
-        app.approvals.lock().unwrap_or_else(|e| e.into_inner()).remove(&approval_id);
-        app.emit(json!({ "type": "tool.approval_resolved", "thread_id": thread_id, "approval_id": approval_id, "approved": decision == Some(true) }));
-        match decision {
-            None => return ToolResult::Cancelled,
-            Some(false) => return ToolResult::Done("The user declined to run this tool.".into(), false),
-            Some(true) => {}
-        }
-    }
-    app.emit(json!({
-        "type": "tool.started", "thread_id": thread_id, "message_id": message_id,
-        "tool_call_id": call.id, "tool": call.name, "arguments": call.arguments,
-    }));
-    let r = tokio::select! {
-        r = tools::execute(app, &call.name, &call.arguments) => r,
-        _ = cancel.cancelled() => return ToolResult::Cancelled,
-    };
-    match r {
-        Ok(s) => ToolResult::Done(s, true),
-        Err(e) => ToolResult::Done(format!("error: {e}"), false),
     }
 }
 
@@ -689,11 +670,11 @@ mod tests {
     fn system_prompt_is_the_soul_plus_context() {
         let mut cfg = Config::default();
         cfg.agent.name = "Eve".into();
-        let p = system_prompt(&cfg, "You are {{name}}.\nBe brief.", "<memories>\n- likes tea\n</memories>", Some(std::path::Path::new("/w")));
+        let p = system_prompt(&cfg, "You are {{name}}.\nBe brief.", "<memories>\n- likes tea\n</memories>", Some(std::path::Path::new("/w")), "Skills:\n- files: x\n");
         assert!(p.starts_with("You are Eve.\nBe brief."), "{p}");
         assert!(p.contains("Current time (UTC):") && p.contains("Working folder for file tools: /w") && p.ends_with("</memories>\n"), "{p}");
         // Nothing else is added: an empty SOUL means no instructions at all.
-        let bare = system_prompt(&cfg, "", "", None);
+        let bare = system_prompt(&cfg, "", "", None, "");
         assert!(bare.trim_start().starts_with("Current time") && bare.lines().count() <= 3, "{bare}");
     }
 }

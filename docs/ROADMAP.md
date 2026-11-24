@@ -5,7 +5,7 @@
 ## 計測値（macOS Apple Silicon, release build）
 - CLI 起動: `alice --version` 中央値 3.5ms、`alice chat list`（API 往復込み）3.8ms
 - サーバー待機時メモリ (RSS): 約 11–13MB
-- リリースバイナリ: 8.4MB（Web GUI 埋め込み前）
+- リリースバイナリ: 8.5MB（Web GUI 埋め込み済み）
 
 ## Phase 1 — Core
 - ☑ Rust プロジェクト・設定・秘密情報・パス
@@ -24,10 +24,10 @@
 - ☑ テスト: 横断参照・削除・非復活・競合・全削除後に空
 
 ## Phase 3 — Web
-- ☐ 埋め込み Web Chat（ストリーミング・Markdown・停止・モデル選択）
-- ☐ Settings（General / Models / Channels / Tools / Memory / System）
-- ☐ Cookie 認証・CSRF・CSP
-- ☐ SSE によるリアルタイム同期
+- ☑ 埋め込み Web Chat（ストリーミング・Markdown・停止・モデル選択）
+- ☑ Settings（General / Models / Channels / Tools / Memory / System）
+- ☑ Cookie 認証・CSRF・CSP
+- ☑ SSE によるリアルタイム同期
 
 ## Phase 4 — Tools
 - ☑ 権限ゲート（disabled / ask / allow）・承認 API

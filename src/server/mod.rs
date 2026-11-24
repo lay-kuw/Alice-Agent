@@ -80,6 +80,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/memories/{id}", get(get_memory))
         .route("/config", get(get_config).patch(patch_config))
         .route("/tools", get(list_tools).patch(patch_tools))
+        .route("/logs", get(logs))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         .route("/health", get(health))
         .route("/login", post(login))
@@ -232,6 +233,20 @@ async fn status(State(app): State<AppRef>) -> ApiResult<Json<Value>> {
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
     })))
+}
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    lines: Option<usize>,
+}
+
+/// Tail of the server log (contains no message content or credentials).
+async fn logs(State(app): State<AppRef>, Query(q): Query<LogsQuery>) -> Json<Value> {
+    let n = q.lines.unwrap_or(200).min(2000);
+    let text = std::fs::read_to_string(app.paths.log_file()).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines[lines.len().saturating_sub(n)..].join("\n");
+    Json(json!({ "lines": tail }))
 }
 
 #[derive(Deserialize)]

@@ -31,7 +31,7 @@ const I18N = {
     'soul.reset': 'テンプレートに戻す', 'soul.resetq': 'SOUL.md をテンプレートに戻しますか？',
     'm.providers': 'プロバイダー', 'm.ok': '利用OK', 'm.ng': '要設定', 'm.unknown': '未確認', 'm.checking': '確認中…',
     'm.refresh': 'モデル一覧を更新', 'm.refreshing': '更新中…', 'm.refreshed': 'モデル一覧を更新しました',
-    'effort.label': '推論の深さ', 'effort.auto': '推論: 自動（{e}）', 'effort.low': '推論: 軽め', 'effort.medium': '推論: 標準', 'effort.high': '推論: 深め', 'effort.xhigh': '推論: とても深め', 'effort.max': '推論: 最大', 'effort.ultra': '推論: ウルトラ',
+    'effort.next': '推論の深さへ →', 'effort.label': '推論の深さ', 'effort.auto': '推論: 自動（{e}）', 'effort.low': '推論: 軽め', 'effort.medium': '推論: 標準', 'effort.high': '推論: 深め', 'effort.xhigh': '推論: とても深め', 'effort.max': '推論: 最大', 'effort.ultra': '推論: ウルトラ',
     'm.default': '既定', 'm.makeDefault': '既定にする', 'm.test': 'テスト', 'm.testing': 'テスト中…', 'm.remove': '削除',
     'm.removeq': 'プロバイダー {p} と API キーを削除しますか？', 'm.key': 'API キー', 'm.keySet': '設定済み — 変更する場合のみ入力', 'm.saveKey': 'キーを保存',
     'm.none': 'まだプロバイダーがありません。', 'm.add': 'プロバイダーを追加', 'm.kind': '種類', 'm.id': 'ID（例: openai）', 'm.base': 'ベース URL（任意。openai-compatible は必須）',
@@ -101,7 +101,7 @@ const I18N = {
     'soul.reset': 'Reset to template', 'soul.resetq': 'Replace SOUL.md with the template?',
     'm.providers': 'Providers', 'm.ok': 'Ready', 'm.ng': 'Needs setup', 'm.unknown': 'Unchecked', 'm.checking': 'Checking…',
     'm.refresh': 'Refresh model list', 'm.refreshing': 'Refreshing…', 'm.refreshed': 'Model list updated',
-    'effort.label': 'Reasoning', 'effort.auto': 'Reasoning: auto ({e})', 'effort.low': 'Reasoning: low', 'effort.medium': 'Reasoning: medium', 'effort.high': 'Reasoning: high', 'effort.xhigh': 'Reasoning: extra high', 'effort.max': 'Reasoning: max', 'effort.ultra': 'Reasoning: ultra',
+    'effort.next': 'reasoning →', 'effort.label': 'Reasoning', 'effort.auto': 'Reasoning: auto ({e})', 'effort.low': 'Reasoning: low', 'effort.medium': 'Reasoning: medium', 'effort.high': 'Reasoning: high', 'effort.xhigh': 'Reasoning: extra high', 'effort.max': 'Reasoning: max', 'effort.ultra': 'Reasoning: ultra',
     'm.default': 'default', 'm.makeDefault': 'Make default', 'm.test': 'Test', 'm.testing': 'Testing…', 'm.remove': 'Remove',
     'm.removeq': 'Remove provider {p} and its API key?', 'm.key': 'API key', 'm.keySet': 'Set — enter only to replace', 'm.saveKey': 'Save key',
     'm.none': 'No providers yet.', 'm.add': 'Add provider', 'm.kind': 'Type', 'm.id': 'ID (e.g. openai)', 'm.base': 'Base URL (optional; required for openai-compatible)',
@@ -506,7 +506,7 @@ function msgEl(m) {
   if (m.status === 'error') box.append(el('div', { class: 'meta' }, t('error') + ': ' + (m.meta?.error || '')));
   if (m.status === 'cancelled') box.append(el('div', { class: 'meta' }, t('stopped')));
   if (m.status === 'complete' && m.meta && (m.meta.final || !(m.tool_calls || []).length)) {
-    box.append(el('div', { class: 'meta' }, `${m.model || ''} · ${((m.meta.provider_ms || 0) / 1000).toFixed(1)}s`));
+    box.append(el('div', { class: 'meta' }, `${m.meta.model_name || m.model || ''} · ${((m.meta.provider_ms || 0) / 1000).toFixed(1)}s`));
   }
   return box;
 }
@@ -595,7 +595,7 @@ input.addEventListener('focus', renderSlash);
 
 const COMMANDS = [
   { c: '/new', d: 'cmd.new', run: () => newChat() },
-  { c: '/model', a: '<name>', d: 'cmd.model', run: (arg) => setModel(arg) },
+  { c: '/model', a: '<name> [effort]', d: 'cmd.model', run: (arg) => { const [m, e] = arg.split(/\s+/); setModel(e ? `${m}#${e}` : m); } },
   { c: '/rename', a: '<title>', d: 'cmd.rename', run: (arg) => renameThread(S.current, arg || undefined) },
   { c: '/delete', d: 'cmd.delete', run: () => deleteThread(S.current) },
   { c: '/attach', d: 'cmd.attach', run: () => $('file-input').click() },
@@ -611,8 +611,24 @@ let slashSel = 0;
 function slashItems() {
   const v = input.value;
   if (!v.startsWith('/') || v.includes('\n')) return [];
+  // Step 2: `/model <id> ` -> reasoning levels for that model.
+  const e = v.match(/^\/model\s+(\S+)\s+(\S*)$/);
+  if (e) {
+    const info = modelInfo(e[1]);
+    if (!info?.efforts?.length) return [];
+    const cur = splitEffort(currentModel());
+    return [{ c: '/model', a: e[1], effortOf: e[1], effort: '', label: t('effort.auto', { e: info.default_effort || '-' }), on: cur[0] === e[1] && !cur[1] },
+      ...info.efforts.map((x) => ({ c: '/model', a: e[1], effortOf: e[1], effort: x, label: t('effort.' + x), on: cur[0] === e[1] && cur[1] === x }))]
+      .filter((x) => !e[2] || x.effort.startsWith(e[2]));
+  }
+  // Step 1: `/model <filter>` -> models (by id or display name).
   const m = v.match(/^\/model\s+(\S*)$/);
-  if (m) return S.models.models.filter((x) => x.includes(m[1])).map((x) => ({ c: '/model', a: x, model: x }));
+  if (m) {
+    const q = m[1].toLowerCase();
+    return S.models.models
+      .filter((x) => x.toLowerCase().includes(q) || (modelInfo(x)?.name || '').toLowerCase().includes(q))
+      .map((x) => ({ c: '/model', a: modelInfo(x)?.name || x, model: x, on: splitEffort(currentModel())[0] === x }));
+  }
   if (/\s/.test(v)) return [];
   return COMMANDS.filter((x) => x.c.startsWith(v));
 }
@@ -626,12 +642,18 @@ function renderSlash() {
   box.replaceChildren(...items.map((it, i) => el('button', {
     type: 'button', class: i === slashSel ? 'on' : '', role: 'option',
     onmousedown: (e) => { e.preventDefault(); pickSlash(it, false); },
-  }, el('span', { class: 'cmd' }, it.c), el('span', { class: 'arg' }, it.a || ''), el('span', { class: 'desc' }, it.model ? (it.model === currentModel() ? '✓' : '') : t(it.d)))));
+  }, el('span', { class: 'cmd' }, it.c), el('span', { class: 'arg' }, it.effortOf ? it.label : it.a || ''),
+    el('span', { class: 'desc' }, it.model || it.effortOf ? (it.on ? '✓' : it.model && modelInfo(it.model)?.efforts?.length ? t('effort.next') : '') : t(it.d)))));
 }
 
 function pickSlash(it, completeOnly) {
   slashSel = 0;
-  if (it.model) { input.value = ''; renderSlash(); return setModel(it.model); }
+  if (it.effortOf) { input.value = ''; renderSlash(); return setModel(it.effort ? `${it.effortOf}#${it.effort}` : it.effortOf); }
+  if (it.model) {
+    // Models with reasoning levels continue to the level choice.
+    if (modelInfo(it.model)?.efforts?.length) { input.value = `/model ${it.model} `; renderSlash(); return; }
+    input.value = ''; renderSlash(); return setModel(it.model);
+  }
   if (completeOnly || (it.a && !input.value.includes(' '))) {
     input.value = it.c + (it.a ? ' ' : '');
     renderSlash();

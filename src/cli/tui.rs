@@ -828,7 +828,7 @@ fn conversation(app: &App, width: usize) -> Vec<Line<'static>> {
                     "cancelled" => out.push(Line::from(Span::styled(" (stopped)", s(MUTED)))),
                     "complete" if calls.is_empty() || m["meta"]["final"] == true => {
                         let secs = m.pointer("/meta/provider_ms").and_then(|n| n.as_u64()).unwrap_or(0) as f64 / 1000.0;
-                        out.push(Line::from(Span::styled(format!("{} · {secs:.1}s", m["model"].as_str().unwrap_or("")), s(FAINT))));
+                        out.push(Line::from(Span::styled(format!("{} · {secs:.1}s", m.pointer("/meta/model_name").and_then(|n| n.as_str()).or(m["model"].as_str()).unwrap_or("")), s(FAINT))));
                     }
                     _ => {}
                 }

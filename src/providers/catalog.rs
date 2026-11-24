@@ -18,6 +18,9 @@ pub struct ModelInfo {
     /// Reasoning efforts the model accepts (`provider/model#effort`).
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    /// What the provider uses when no model is given (Codex "default").
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 /// Discovered models per provider id, with when they were fetched.
@@ -26,7 +29,7 @@ pub type Discovered = std::collections::HashMap<String, (Instant, Vec<ModelInfo>
 const STALE: Duration = Duration::from_secs(6 * 3600);
 
 fn info(model: &str, name: &str, description: &str) -> ModelInfo {
-    ModelInfo { model: model.into(), name: name.into(), description: description.into(), efforts: vec![], default_effort: None }
+    ModelInfo { model: model.into(), name: name.into(), description: description.into(), efforts: vec![], default_effort: None, is_default: false }
 }
 
 /// Ask one provider for its models. `Ok(None)`: the provider cannot list them.
@@ -49,6 +52,7 @@ pub async fn discover(http: &reqwest::Client, p: &ProviderConfig, key: Option<&s
                 description: m["description"].as_str().unwrap_or("").into(),
                 efforts: m["supportedReasoningEfforts"].as_array().into_iter().flatten().filter_map(|e| e["reasoningEffort"].as_str().map(str::to_string)).collect(),
                 default_effort: m["defaultReasoningEffort"].as_str().map(str::to_string),
+                is_default: m["isDefault"] == true,
             })
             .collect(),
         ProviderKind::Gemini => {
@@ -172,10 +176,12 @@ pub fn catalog(app: &App) -> Vec<Value> {
     for p in &cfg.providers {
         let known = d.get(&p.id).map(|(_, l)| l.as_slice()).unwrap_or(&[]);
         for m in &p.models {
-            let i = known.iter().find(|k| &k.model == m);
+            // "default" behaves like the provider's default model.
+            let i = if m == "default" { known.iter().find(|k| k.is_default) } else { known.iter().find(|k| &k.model == m) };
             let name = match (i, m.as_str()) {
-                (Some(i), _) if !i.name.is_empty() => i.name.clone(),
+                (Some(i), "default") => format!("Default ({})", if i.name.is_empty() { &i.model } else { &i.name }),
                 (_, "default") => "Default".into(),
+                (Some(i), _) if !i.name.is_empty() => i.name.clone(),
                 _ => m.clone(),
             };
             out.push(json!({
@@ -183,6 +189,8 @@ pub fn catalog(app: &App) -> Vec<Value> {
                 "description": i.map(|i| i.description.as_str()).unwrap_or(""),
                 "efforts": i.map(|i| i.efforts.clone()).unwrap_or_default(),
                 "default_effort": i.and_then(|i| i.default_effort.clone()),
+                // The concrete model behind "default", when known.
+                "resolved": i.filter(|_| m == "default").map(|i| i.model.clone()),
             }));
         }
     }
@@ -196,10 +204,28 @@ pub fn validate(app: &App, model_id: &str) -> Result<(), String> {
     let Some((p, name)) = cfg.resolve_model(model_id) else { return Err(format!("unknown model: {model_id}")) };
     if let Some(e) = crate::config::split_effort(model_id).1 {
         let d = app.models.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(m) = d.get(&p.id).and_then(|(_, l)| l.iter().find(|m| m.model == name))
+        if let Some(m) = d.get(&p.id).and_then(|(_, l)| l.iter().find(|m| if name == "default" { m.is_default } else { m.model == name }))
             && !m.efforts.is_empty() && !m.efforts.iter().any(|x| x == e) {
                 return Err(format!("{name} does not support reasoning effort '{e}' (choose: {})", m.efforts.join(", ")));
             }
     }
     Ok(())
+}
+
+/// "GPT-6.2-Sol · high" for a model id (resolving "default" and the effort),
+/// or the id itself when nothing is known.
+pub fn display_name(app: &App, model_id: &str) -> String {
+    let (base, effort) = crate::config::split_effort(model_id);
+    let cat = catalog(app);
+    let Some(i) = cat.iter().find(|c| c["id"] == base) else { return model_id.to_string() };
+    let resolved = i["resolved"].as_str();
+    let name = match resolved {
+        // "Default (GPT-6.2-Sol)" -> "GPT-6.2-Sol"
+        Some(r) => cat.iter().find(|c| c["provider"] == i["provider"] && c["model"] == r).and_then(|c| c["name"].as_str()).unwrap_or(r).to_string(),
+        None => i["name"].as_str().unwrap_or(base).to_string(),
+    };
+    match effort.or(i["default_effort"].as_str()) {
+        Some(e) => format!("{name} · {e}"),
+        None => name,
+    }
 }

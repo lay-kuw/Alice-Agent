@@ -196,7 +196,7 @@ pub async fn send_and_stream(
                     _ if has_tools => {}
                     _ => {
                         let meta = &m["meta"];
-                        let model = m["model"].as_str().unwrap_or("");
+                        let model = m.pointer("/meta/model_name").and_then(|n| n.as_str()).or(m["model"].as_str()).unwrap_or("");
                         let pms = meta["provider_ms"].as_u64().unwrap_or(0);
                         let ams = meta["alice_ms"].as_u64().unwrap_or(0);
                         println!("{}", dim(&format!("— {model} · {:.1}s (alice {ams}ms)", pms as f64 / 1000.0)));

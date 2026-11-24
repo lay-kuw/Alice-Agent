@@ -221,12 +221,15 @@ pub async fn gmail_list(g: &G<'_>, query: &str, max: u32, page: Option<&str>) ->
     }
     let list = call(g, M::GET, url(g, "gmail", &q), None).await?;
     let ids: Vec<String> = list["messages"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str().map(str::to_string)).collect();
-    let fetch = ids.iter().map(|id| {
-        call(g, M::GET, url(g, "gmail", &format!("/users/me/messages/{}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date", urlencode(id))), None)
-    });
+    // At most 8 requests at a time.
     let mut out = Vec::new();
-    for d in futures_util::future::join_all(fetch).await {
-        out.push(mail_summary(&d?));
+    for chunk in ids.chunks(8) {
+        let fetch = chunk.iter().map(|id| {
+            call(g, M::GET, url(g, "gmail", &format!("/users/me/messages/{}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date", urlencode(id))), None)
+        });
+        for d in futures_util::future::join_all(fetch).await {
+            out.push(mail_summary(&d?));
+        }
     }
     Ok((out, list["nextPageToken"].as_str().map(str::to_string)))
 }

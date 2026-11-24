@@ -127,6 +127,14 @@ public struct ModelsResponse: Codable, Sendable {
     public let catalog: [ModelInfo]?
 
     public func info(_ id: String) -> ModelInfo? { catalog?.first { $0.id == ModelID.base(id) } }
+
+    /// Short name for chips: "GPT-6.2-Sol" (also for "default"), else the model part of the id.
+    public func shortName(_ id: String) -> String {
+        let base = ModelID.base(id)
+        guard let i = info(base) else { return String(base.split(separator: "/").last ?? "") }
+        if let r = i.resolved, let ri = info("\(i.provider)/\(r)") { return ri.name }
+        return i.name
+    }
 }
 
 public struct ModelInfo: Codable, Hashable, Sendable, Identifiable {
@@ -137,6 +145,8 @@ public struct ModelInfo: Codable, Hashable, Sendable, Identifiable {
     public let description: String
     public let efforts: [String]
     public let defaultEffort: String?
+    /// The concrete model behind "default", when known.
+    public let resolved: String?
 }
 
 /// `provider/model#effort` helpers.

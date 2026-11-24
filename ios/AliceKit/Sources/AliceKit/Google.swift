@@ -230,31 +230,33 @@ public final class GoogleStore {
     public private(set) var lists: [TaskList] = []
     public private(set) var tasksLoaded = false
     public private(set) var loading: Set<String> = []
+    /// Failed actions (save, send, delete): shown as an alert.
     public var lastError: String?
-    /// Background loads (prefetch) never raise alerts; the tab retries when opened.
-    private var background = false
+    /// Failed loads: shown as a small banner; what is on screen stays.
+    public var loadError: String?
 
     public init(client: AliceClient) {
         self.client = client
     }
 
-    private func run(_ key: String, quiet: Bool = false, _ body: () async throws -> Void) async {
+    private func run(_ key: String, load: Bool = false, _ body: () async throws -> Void) async {
         loading.insert(key)
         defer { loading.remove(key) }
-        do { try await body() } catch is CancellationError {} catch {
-            if (error as? URLError)?.code == .cancelled || quiet || background { return }
-            lastError = error.localizedDescription
+        do {
+            try await body()
+            if load { loadError = nil }
+        } catch is CancellationError {} catch {
+            if (error as? URLError)?.code == .cancelled { return }
+            if load { loadError = error.localizedDescription } else { lastError = error.localizedDescription }
         }
     }
 
     public func loadStatus() async {
-        await run("status") { status = try await client.googleStatus() }
+        await run("status", load: true) { status = try await client.googleStatus() }
     }
 
     /// Load everything the tabs show first, in parallel (call on connect).
     public func prefetch() async {
-        background = true
-        defer { background = false }
         await loadStatus()
         guard let s = status, s.ready else { return }
         let week = Self.startOfWeek(.now)
@@ -275,7 +277,19 @@ public final class GoogleStore {
     public func loadWeek(_ weekStart: Date) async {
         let cal = Calendar.current
         guard let from = cal.date(byAdding: .day, value: -7, to: weekStart), let to = cal.date(byAdding: .day, value: 14, to: weekStart) else { return }
-        await run("events", quiet: loadedWeeks.contains(weekStart)) {
+        await loadRange(from: from, to: to)
+    }
+
+    /// Load the 6-week grid shown for a month.
+    public func loadMonth(_ monthStart: Date) async {
+        let from = Self.startOfWeek(monthStart)
+        guard let to = Calendar.current.date(byAdding: .day, value: 42, to: from) else { return }
+        await loadRange(from: from, to: to)
+    }
+
+    private func loadRange(from: Date, to: Date) async {
+        let cal = Calendar.current
+        await run("events", load: true) {
             let list = try await client.events(from: from, to: to)
             // Replace what was known for this range.
             eventsById = eventsById.filter { _, e in
@@ -283,7 +297,11 @@ public final class GoogleStore {
                 return s < from || s >= to
             }
             for e in list { eventsById[e.id] = e }
-            for w in [-7, 0, 7] { if let d = cal.date(byAdding: .day, value: w, to: weekStart) { loadedWeeks.insert(d) } }
+            var w = Self.startOfWeek(from)
+            while w < to {
+                loadedWeeks.insert(w)
+                w = cal.date(byAdding: .day, value: 7, to: w) ?? to
+            }
         }
     }
 
@@ -325,7 +343,7 @@ public final class GoogleStore {
     // Mail
 
     public func loadInbox(query: String = "") async {
-        await run("mail", quiet: inboxLoaded) {
+        await run("mail", load: true) {
             let r = try await client.mail(query: query)
             inbox = r.messages
             nextPage = r.nextPage
@@ -341,7 +359,7 @@ public final class GoogleStore {
 
     public func loadMore(query: String = "") async {
         guard let page = nextPage, !loading.contains("more") else { return }
-        await run("more") {
+        await run("more", load: true) {
             let r = try await client.mail(query: query, page: page)
             inbox += r.messages.filter { m in !inbox.contains { $0.id == m.id } }
             nextPage = r.nextPage
@@ -350,7 +368,7 @@ public final class GoogleStore {
 
     public func open(_ id: String) async -> MailMessage? {
         if let m = bodies[id] { return m }
-        await run("open") { bodies[id] = try await client.mailMessage(id) }
+        await run("open", load: true) { bodies[id] = try await client.mailMessage(id) }
         return bodies[id]
     }
 
@@ -366,7 +384,7 @@ public final class GoogleStore {
     // Tasks
 
     public func loadTasks() async {
-        await run("tasks", quiet: tasksLoaded) {
+        await run("tasks", load: true) {
             lists = try await client.taskLists()
             tasksLoaded = true
         }

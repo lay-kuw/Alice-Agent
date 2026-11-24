@@ -5,6 +5,8 @@ struct CalendarView: View {
     @Bindable var google: GoogleStore
     @State private var selected = Calendar.current.startOfDay(for: .now)
     @State private var weekStart = CalendarView.startOfWeek(.now)
+    @State private var month = CalendarView.startOfMonth(.now)
+    @AppStorage("calendar.mode") private var mode = "week"
     @State private var adding = false
     @State private var detail: CalendarEvent?
     @State private var confirmDelete: CalendarEvent?
@@ -14,24 +16,31 @@ struct CalendarView: View {
             GoogleGate(google: google, group: "calendar", title: "Calendar") {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        weekStrip
+                        Picker("View", selection: $mode.animation(.snappy)) {
+                            Text("Week").tag("week")
+                            Text("Month").tag("month")
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.top, 4)
+                        if mode == "month" { monthGrid } else { weekStrip }
                         dayHeader
                         dayEvents
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 30)
                 }
-                .refreshable { await google.loadWeek(weekStart) }
+                .refreshable { await load() }
                 .background(PastelBackground())
-                .task(id: weekStart) { await google.loadWeek(weekStart) }
+                .task(id: "\(mode)|\(weekStart)|\(month)") { await load() }
             }
-            .navigationTitle(weekStart.formatted(.dateTime.year().month(.wide)))
+            .navigationTitle((mode == "month" ? month : weekStart).formatted(.dateTime.year().month(.wide)))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Today") {
                         withAnimation(.snappy) {
                             selected = Calendar.current.startOfDay(for: .now)
                             weekStart = Self.startOfWeek(.now)
+                            month = Self.startOfMonth(.now)
                         }
                     }
                 }
@@ -45,6 +54,88 @@ struct CalendarView: View {
                 Button("Delete", role: .destructive) { if let e = confirmDelete { Task { await google.deleteEvent(e) } } }
             }
             .googleErrors(google)
+        }
+    }
+
+    // MARK: month grid
+
+    private var monthGrid: some View {
+        let cal = Calendar.current
+        let start = Self.startOfWeek(month)
+        let days = (0..<42).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+        let symbols = (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+        return VStack(spacing: 8) {
+            HStack {
+                Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
+                Spacer()
+                Text(month.formatted(.dateTime.month(.wide))).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
+            }
+            .tint(Palette.lavender)
+            HStack(spacing: 0) {
+                ForEach(symbols, id: \.self) { d in
+                    Text(d.formatted(.dateTime.weekday(.narrow))).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                }
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
+                ForEach(days, id: \.self) { d in monthCell(d) }
+            }
+        }
+        .card(padding: 12)
+        .padding(.top, 4)
+        .gesture(DragGesture(minimumDistance: 30).onEnded { v in
+            if v.translation.width < -40 { shiftMonth(1) } else if v.translation.width > 40 { shiftMonth(-1) }
+        })
+    }
+
+    private func monthCell(_ d: Date) -> some View {
+        let cal = Calendar.current
+        let inMonth = cal.isDate(d, equalTo: month, toGranularity: .month)
+        let isSel = cal.isDate(d, inSameDayAs: selected)
+        let isToday = cal.isDateInToday(d)
+        let events = google.events(on: d)
+        return Button {
+            withAnimation(.snappy) {
+                selected = d
+                weekStart = Self.startOfWeek(d)
+                if !inMonth { month = Self.startOfMonth(d) }
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Text(d.formatted(.dateTime.day()))
+                    .font(.system(.subheadline, design: .rounded).weight(isToday || isSel ? .bold : .medium))
+                HStack(spacing: 2) {
+                    ForEach(events.prefix(3)) { e in
+                        Circle().fill(isSel ? Color.white : Palette.event((e.id, e.colorId))).frame(width: 4, height: 4)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .foregroundStyle(isSel ? .white : (isToday ? Palette.lavender : (inMonth ? .primary : .secondary)))
+            .opacity(inMonth || isSel ? 1 : 0.45)
+            .background {
+                if isSel {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent).shadow(color: Palette.pink.opacity(0.35), radius: 5, y: 2)
+                } else if isToday {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.lavender.opacity(0.6), lineWidth: 1.5)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .sensoryFeedback(.selection, trigger: isSel)
+    }
+
+    private func shiftMonth(_ n: Int) {
+        let cal = Calendar.current
+        guard let m = cal.date(byAdding: .month, value: n, to: month) else { return }
+        withAnimation(.snappy) {
+            month = m
+            // Keep the same day of month where possible.
+            let day = min(cal.component(.day, from: selected), cal.range(of: .day, in: .month, for: m)?.count ?? 28)
+            selected = cal.date(bySetting: .day, value: day, of: m) ?? m
+            weekStart = Self.startOfWeek(selected)
         }
     }
 
@@ -77,7 +168,10 @@ struct CalendarView: View {
         let isToday = cal.isDateInToday(d)
         let count = google.events(on: d).count
         return Button {
-            withAnimation(.snappy) { selected = d }
+            withAnimation(.snappy) {
+                selected = d
+                month = Self.startOfMonth(d)
+            }
         } label: {
             VStack(spacing: 4) {
                 Text(d.formatted(.dateTime.weekday(.narrow))).font(.caption2.weight(.semibold)).opacity(0.7)
@@ -111,13 +205,13 @@ struct CalendarView: View {
                 .font(.system(.title2, design: .rounded).weight(.bold))
             Text(selected.formatted(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
             Spacer()
-            if google.loading.contains("events") { ProgressView().controlSize(.small).opacity(google.loadedWeeks.contains(weekStart) ? 0.4 : 1) }
+            if google.loading.contains("events") { ProgressView().controlSize(.small).opacity(google.loadedWeeks.contains(Self.startOfWeek(selected)) ? 0.4 : 1) }
         }
     }
 
     @ViewBuilder private var dayEvents: some View {
         let list = google.events(on: selected)
-        if list.isEmpty && google.loadedWeeks.contains(weekStart) {
+        if list.isEmpty && google.loadedWeeks.contains(Self.startOfWeek(selected)) {
             SoftEmpty(title: "Nothing planned", systemImage: "sun.haze", message: "A free day ☕️")
                 .card()
         } else {
@@ -150,10 +244,20 @@ struct CalendarView: View {
         withAnimation(.snappy) {
             weekStart = w
             selected = cal.date(byAdding: .day, value: 7 * n, to: selected) ?? w
+            month = Self.startOfMonth(selected)
         }
     }
 
+    private func load() async {
+        if mode == "month" { await google.loadMonth(month) } else { await google.loadWeek(weekStart) }
+    }
+
     static func startOfWeek(_ d: Date) -> Date { GoogleStore.startOfWeek(d) }
+
+    static func startOfMonth(_ d: Date) -> Date {
+        let cal = Calendar.current
+        return cal.dateInterval(of: .month, for: d)?.start ?? cal.startOfDay(for: d)
+    }
 }
 
 struct EventRow: View {

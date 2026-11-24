@@ -22,11 +22,26 @@ struct GoogleGate<Content: View>: View {
                           note: "Turn on “\(title)”, then reconnect so Google grants access. You can also do this in the Web UI under Settings → Skills.")
                 } else {
                     content()
+                        .safeAreaInset(edge: .top) {
+                            if let e = google.loadError {
+                                // Keep what is on screen; say the refresh failed.
+                                Label("Couldn't refresh · pull to retry", systemImage: "exclamationmark.arrow.circlepath")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Palette.pink)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                    .help(e)
+                                    .onTapGesture { google.loadError = nil }
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                            }
+                        }
+                        .animation(.snappy, value: google.loadError)
                 }
             } else if google.loading.contains("status") {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(PastelBackground())
             } else {
-                setup(icon: "wifi.exclamationmark", heading: "Can't reach Alice", steps: [], note: google.lastError ?? "")
+                setup(icon: "wifi.exclamationmark", heading: "Can't reach Alice", steps: [], note: google.loadError ?? "")
             }
         }
         .task { if google.status == nil { await google.loadStatus() } }

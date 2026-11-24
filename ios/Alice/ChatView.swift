@@ -114,7 +114,7 @@ struct ChatView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text(info?.name ?? (base.isEmpty ? "Model" : String(base.split(separator: "/").last ?? ""))).lineLimit(1)
+                Text(base.isEmpty ? "Model" : (store.models?.shortName(base) ?? String(base.split(separator: "/").last ?? ""))).lineLimit(1)
                 if let effort { Text(effort).foregroundStyle(Palette.pink) }
                 Image(systemName: "chevron.down").font(.caption2.bold())
             }
@@ -124,6 +124,8 @@ struct ChatView: View {
             .background(.ultraThinMaterial, in: Capsule())
         }
     }
+
+    private static let control: CGFloat = 38
 
     private var composer: some View {
         VStack(spacing: 6) {
@@ -148,17 +150,28 @@ struct ChatView: View {
                     PhotosPicker(selection: $photo, matching: .images) { Label("Photo", systemImage: "photo") }
                     Button { importing = true } label: { Label("File", systemImage: "doc") }
                 } label: {
-                    Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(.secondary)
+                    // Same height as a one-line field, so the row lines up.
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Palette.lavender)
+                        .frame(width: Self.control, height: Self.control)
+                        .background(.regularMaterial, in: Circle())
                 }
+                .accessibilityLabel("Attach")
                 TextField("Message Alice…", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .frame(minHeight: Self.control)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Self.control / 2, style: .continuous))
                 if store.generating {
                     Button { Task { await store.stopGeneration() } } label: {
-                        Image(systemName: "stop.circle.fill").font(.title)
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: Self.control, height: Self.control)
+                            .background(Palette.pink, in: Circle())
                     }
                     .accessibilityLabel("Stop")
                 } else {
@@ -169,7 +182,12 @@ struct ChatView: View {
                         pending = []
                         Task { await store.send(t, attachmentIds: ids) }
                     } label: {
-                        Image(systemName: "arrow.up.circle.fill").font(.title)
+                        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: Self.control, height: Self.control)
+                            .background(empty ? AnyShapeStyle(Color.secondary.opacity(0.35)) : AnyShapeStyle(Palette.accent), in: Circle())
                     }
                     .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty)
                     .accessibilityLabel("Send")
@@ -221,7 +239,7 @@ struct MessageRow: View {
                     Text(message.meta?["error"]?.string ?? "Generation failed").font(.caption).foregroundStyle(.red)
                 } else if message.status == "cancelled" {
                     Text("Stopped").font(.caption).foregroundStyle(.secondary)
-                } else if message.endsTurn, let model = message.model {
+                } else if message.endsTurn, let model = message.meta?["model_name"]?.string ?? message.model {
                     Text(model).font(.caption2).foregroundStyle(.tertiary)
                 }
             }

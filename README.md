@@ -79,6 +79,8 @@ alice profile default    # default に戻す
 
 `ios/Alice.xcodeproj` を Xcode で開き、Signing の Team を設定して実機にインストールします。サーバー URL と `alice token` のトークンで接続します（Tailscale の `tailscale serve` などの HTTPS 推奨）。
 
+チャットのほか、カレンダー・メール・ToDo のタブがあります。どれも Alice サーバー経由で Google Workspace スキルの接続を使うので、iPhone に Google のトークンは置きません。ToDo（Google Tasks）を使うには `alice skill groups google-workspace` で Tasks をオンにし、`alice skill login google-workspace` で再接続します。
+
 ## 人格（SOUL.md）
 
 `~/.alice/SOUL.md`（プロファイルごと）が Alice に渡すシステムプロンプトのすべてです。既定の内容（役割・言語・性格・話し方・仕事の進め方・安全のための約束）もこのファイルに書かれていて、書き換えればすべて上書きできます。Alice が自動で足すのは現在時刻、作業フォルダ、使えるスキルの一覧（1 行ずつ）、話題に関係する記憶（最大 8 件）だけです。`{{name}}` はエージェント名に置き換わります。

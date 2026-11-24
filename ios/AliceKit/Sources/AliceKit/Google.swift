@@ -1,0 +1,352 @@
+import Foundation
+import Observation
+
+// MARK: - Models
+
+public struct GoogleStatus: Codable, Sendable {
+    public let status: String
+    public let detail: String
+    public let groups: [String: Bool]
+    public let email: String?
+
+    public var ready: Bool { status == "ready" }
+    public func enabled(_ group: String) -> Bool { groups[group] ?? false }
+}
+
+public struct CalendarEvent: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public var summary: String
+    public var start: String
+    public var end: String
+    public var allDay: Bool
+    public var location: String?
+    public var description: String?
+    public var colorId: String?
+    public var link: String?
+
+    public var startDate: Date? { GoogleDate.parse(start) }
+    public var endDate: Date? { GoogleDate.parse(end) }
+    public var displayTitle: String { summary.isEmpty ? "(No title)" : summary }
+}
+
+public struct MailSummary: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let threadId: String?
+    public var from: String
+    public var to: String?
+    public var subject: String
+    public var date: String
+    public var dateMs: Int64?
+    public var snippet: String
+    public var unread: Bool
+
+    public var sentAt: Date? { dateMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
+    /// "Bob <bob@example.com>" -> "Bob"
+    public var senderName: String { MailAddress.name(from) }
+    public var displaySubject: String { subject.isEmpty ? "(No subject)" : subject }
+}
+
+public struct MailMessage: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public let threadId: String?
+    public var from: String
+    public var to: String?
+    public var cc: String?
+    public var replyTo: String?
+    public var subject: String
+    public var date: String
+    public var dateMs: Int64?
+    public var body: String
+
+    public var sentAt: Date? { dateMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
+}
+
+public struct TaskItem: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public var title: String
+    public var notes: String?
+    /// YYYY-MM-DD
+    public var due: String?
+    public var completed: Bool
+    public var parent: String?
+
+    public var dueDate: Date? { due.flatMap { GoogleDate.parse($0) } }
+}
+
+public struct TaskList: Codable, Identifiable, Hashable, Sendable {
+    public let id: String
+    public var title: String
+    public var tasks: [TaskItem]
+}
+
+public enum MailAddress {
+    public static func name(_ s: String) -> String {
+        if let i = s.firstIndex(of: "<") {
+            let n = s[..<i].trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if !n.isEmpty { return n }
+        }
+        return address(s)
+    }
+
+    public static func address(_ s: String) -> String {
+        if let a = s.firstIndex(of: "<"), let b = s.firstIndex(of: ">"), a < b {
+            return String(s[s.index(after: a)..<b])
+        }
+        return s.trimmingCharacters(in: .whitespaces)
+    }
+}
+
+public enum GoogleDate {
+    /// RFC3339 date-time (with or without fractional seconds) or YYYY-MM-DD (local midnight).
+    public static func parse(_ s: String) -> Date? {
+        if s.count == 10 {
+            let f = DateFormatter()
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = .current
+            f.dateFormat = "yyyy-MM-dd"
+            return f.date(from: s)
+        }
+        let f = ISO8601DateFormatter()
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: s)
+    }
+
+    public static func rfc3339(_ d: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.timeZone = .current
+        return f.string(from: d)
+    }
+
+    public static func day(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: d)
+    }
+}
+
+// MARK: - Client
+
+extension AliceClient {
+    public func googleStatus() async throws -> GoogleStatus {
+        try await get("/google", GoogleStatus.self)
+    }
+
+    public func events(from: Date, to: Date) async throws -> [CalendarEvent] {
+        struct R: Decodable { let events: [CalendarEvent] }
+        return try await get("/google/calendar/events?" + query(["from": GoogleDate.rfc3339(from), "to": GoogleDate.rfc3339(to)]), R.self).events
+    }
+
+    @discardableResult
+    public func createEvent(summary: String, start: String, end: String, location: String?, notes: String?) async throws -> CalendarEvent {
+        struct R: Decodable { let event: CalendarEvent }
+        var body: [String: Any] = ["summary": summary, "start": start, "end": end, "time_zone": TimeZone.current.identifier]
+        if let location, !location.isEmpty { body["location"] = location }
+        if let notes, !notes.isEmpty { body["description"] = notes }
+        return try Self.decoder.decode(R.self, from: try await send("POST", "/google/calendar/events", json: body)).event
+    }
+
+    public func deleteEvent(_ id: String) async throws {
+        try await send("DELETE", "/google/calendar/events/\(escape(id))")
+    }
+
+    public func mail(query q: String = "", page: String? = nil) async throws -> (messages: [MailSummary], nextPage: String?) {
+        struct R: Decodable { let messages: [MailSummary]; let nextPage: String? }
+        var params = ["q": q]
+        if let page { params["page"] = page }
+        let r = try await get("/google/mail?" + query(params), R.self)
+        return (r.messages, r.nextPage)
+    }
+
+    public func mailMessage(_ id: String) async throws -> MailMessage {
+        struct R: Decodable { let message: MailMessage }
+        return try await get("/google/mail/\(escape(id))", R.self).message
+    }
+
+    public func sendMail(to: String, cc: String?, subject: String, body: String, replyTo: String?) async throws {
+        var b: [String: Any] = ["to": to, "subject": subject, "body": body]
+        if let cc, !cc.isEmpty { b["cc"] = cc }
+        if let replyTo { b["reply_to_id"] = replyTo }
+        try await send("POST", "/google/mail/send", json: b)
+    }
+
+    public func taskLists() async throws -> [TaskList] {
+        struct R: Decodable { let lists: [TaskList] }
+        return try await get("/google/tasks?completed=true", R.self).lists
+    }
+
+    @discardableResult
+    public func createTask(list: String, title: String, due: String?) async throws -> TaskItem {
+        struct R: Decodable { let task: TaskItem }
+        var b: [String: Any] = ["title": title]
+        if let due { b["due"] = due }
+        return try Self.decoder.decode(R.self, from: try await send("POST", "/google/tasks/\(escape(list))", json: b)).task
+    }
+
+    @discardableResult
+    public func updateTask(list: String, id: String, fields: [String: Any]) async throws -> TaskItem {
+        struct R: Decodable { let task: TaskItem }
+        return try Self.decoder.decode(R.self, from: try await send("PATCH", "/google/tasks/\(escape(list))/\(escape(id))", json: fields)).task
+    }
+
+    public func deleteTask(list: String, id: String) async throws {
+        try await send("DELETE", "/google/tasks/\(escape(list))/\(escape(id))")
+    }
+
+    private func query(_ p: [String: String]) -> String {
+        var c = URLComponents()
+        c.queryItems = p.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // `+` in offsets must not turn into a space.
+        return (c.percentEncodedQuery ?? "").replacingOccurrences(of: "+", with: "%2B")
+    }
+
+    private func escape(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? s
+    }
+}
+
+// MARK: - Store
+
+/// Google data for the Calendar, Mail and Tasks tabs. Nothing is cached on
+/// disk; everything is fetched from the Alice server, which holds the tokens.
+@MainActor
+@Observable
+public final class GoogleStore {
+    public let client: AliceClient
+    public private(set) var status: GoogleStatus?
+    public private(set) var events: [CalendarEvent] = []
+    public private(set) var eventsRange: (Date, Date)?
+    public private(set) var inbox: [MailSummary] = []
+    public private(set) var nextPage: String?
+    public private(set) var lists: [TaskList] = []
+    public private(set) var loading: Set<String> = []
+    public var lastError: String?
+
+    public init(client: AliceClient) {
+        self.client = client
+    }
+
+    private func run(_ key: String, _ body: () async throws -> Void) async {
+        loading.insert(key)
+        defer { loading.remove(key) }
+        do { try await body() } catch is CancellationError {} catch {
+            if (error as? URLError)?.code == .cancelled { return }
+            lastError = error.localizedDescription
+        }
+    }
+
+    public func loadStatus() async {
+        await run("status") { status = try await client.googleStatus() }
+    }
+
+    // Calendar
+
+    public func loadEvents(from: Date, to: Date) async {
+        await run("events") {
+            events = try await client.events(from: from, to: to)
+            eventsRange = (from, to)
+        }
+    }
+
+    public func events(on day: Date) -> [CalendarEvent] {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: day)
+        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
+        return events.filter { e in
+            guard let s = e.startDate else { return false }
+            let eEnd = e.endDate ?? s
+            // All-day end dates are exclusive.
+            return s < end && (eEnd > start || (s >= start && s < end))
+        }
+        .sorted { ($0.allDay ? 0 : 1, $0.startDate ?? .distantPast) < ($1.allDay ? 0 : 1, $1.startDate ?? .distantPast) }
+    }
+
+    public func addEvent(summary: String, start: Date, end: Date, allDay: Bool, location: String, notes: String) async -> Bool {
+        var ok = false
+        await run("save") {
+            if allDay {
+                let next = Calendar.current.date(byAdding: .day, value: 1, to: end) ?? end
+                try await client.createEvent(summary: summary, start: GoogleDate.day(start), end: GoogleDate.day(next), location: location, notes: notes)
+            } else {
+                try await client.createEvent(summary: summary, start: GoogleDate.rfc3339(start), end: GoogleDate.rfc3339(end), location: location, notes: notes)
+            }
+            ok = true
+            if let (a, b) = eventsRange { events = try await client.events(from: a, to: b) }
+        }
+        return ok
+    }
+
+    public func deleteEvent(_ e: CalendarEvent) async {
+        let before = events
+        events.removeAll { $0.id == e.id }
+        await run("save") { try await client.deleteEvent(e.id) }
+        if lastError != nil { events = before }
+    }
+
+    // Mail
+
+    public func loadInbox(query: String = "") async {
+        await run("mail") {
+            let r = try await client.mail(query: query)
+            inbox = r.messages
+            nextPage = r.nextPage
+        }
+    }
+
+    public func loadMore(query: String = "") async {
+        guard let page = nextPage, !loading.contains("more") else { return }
+        await run("more") {
+            let r = try await client.mail(query: query, page: page)
+            inbox += r.messages.filter { m in !inbox.contains { $0.id == m.id } }
+            nextPage = r.nextPage
+        }
+    }
+
+    public func open(_ id: String) async -> MailMessage? {
+        var m: MailMessage?
+        await run("open") { m = try await client.mailMessage(id) }
+        return m
+    }
+
+    public func send(to: String, cc: String, subject: String, body: String, replyTo: String?) async -> Bool {
+        var ok = false
+        await run("send") {
+            try await client.sendMail(to: to, cc: cc, subject: subject, body: body, replyTo: replyTo)
+            ok = true
+        }
+        return ok
+    }
+
+    // Tasks
+
+    public func loadTasks() async {
+        await run("tasks") { lists = try await client.taskLists() }
+    }
+
+    public func addTask(list: String, title: String, due: Date?) async {
+        await run("save") {
+            let t = try await client.createTask(list: list, title: title, due: due.map(GoogleDate.day))
+            if let i = lists.firstIndex(where: { $0.id == list }) { lists[i].tasks.insert(t, at: 0) }
+        }
+    }
+
+    public func toggle(_ task: TaskItem, in list: String) async {
+        guard let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let done = !task.completed
+        lists[li].tasks[ti].completed = done // optimistic
+        await run("save") { try await client.updateTask(list: list, id: task.id, fields: ["completed": done]) }
+        if lastError != nil, let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti].completed = !done }
+    }
+
+    public func deleteTask(_ task: TaskItem, in list: String) async {
+        guard let li = lists.firstIndex(where: { $0.id == list }) else { return }
+        let before = lists[li].tasks
+        lists[li].tasks.removeAll { $0.id == task.id }
+        await run("save") { try await client.deleteTask(list: list, id: task.id) }
+        if lastError != nil, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks = before }
+    }
+}

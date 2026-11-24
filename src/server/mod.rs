@@ -1,5 +1,7 @@
 //! HTTP API (REST + SSE) and the embedded Web GUI.
 
+mod google;
+
 use crate::agent::{self, TurnError, TurnInput};
 use crate::app::{App, AppRef};
 use crate::config::{Permission, ProviderConfig, ProviderKind};
@@ -94,6 +96,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/skills/{id}/login", post(skill_login))
         .route("/skills/{id}/logout", post(skill_logout))
         .route("/tool-runs", get(tool_runs))
+        .merge(google::routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         // Bridge routes authenticate with the per-turn token themselves.
         .route("/mcp/tools", get(mcp_tools))

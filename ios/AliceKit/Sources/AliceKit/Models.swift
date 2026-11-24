@@ -93,7 +93,8 @@ public struct Message: Codable, Identifiable, Hashable, Sendable {
     public var isStreaming: Bool { status == "streaming" }
     public var hasToolCalls: Bool { !(toolCalls ?? []).isEmpty }
     /// True when this assistant message ends a turn.
-    public var endsTurn: Bool { role == "assistant" && (status != "complete" || !hasToolCalls) && status != "streaming" }
+    /// Calls made through MCP are already answered, so the server marks the last message (`meta.final`).
+    public var endsTurn: Bool { role == "assistant" && (status != "complete" || meta?["final"]?.bool == true || !hasToolCalls) && status != "streaming" }
 }
 
 public struct Attachment: Codable, Identifiable, Hashable, Sendable {

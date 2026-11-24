@@ -603,7 +603,7 @@ mod tests {
         let ids: Vec<&str> = cat.skills.iter().map(|s| s.id()).collect();
         assert_eq!(ids, ["files", "web", "google-workspace"]);
         let g = cat.get("google-workspace").unwrap();
-        assert_eq!(g.manifest.tools.len(), 13);
+        assert_eq!(g.manifest.tools.len(), 16);
         assert!(g.tool("calendar_create").unwrap().schema().unwrap()["required"].as_array().unwrap().len() == 3);
         assert!(!g.guide.is_empty());
     }

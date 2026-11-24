@@ -151,6 +151,7 @@ start_turn(thread, user_text, client)
 
 - `ios/AliceKit`（Swift Package）: API クライアント、SSE、`ChatStore`（@Observable、メモリのみ）、Markdown ブロック分割、Keychain。macOS でもテスト可能。
 - `ios/Alice`（SwiftUI）: 画面のみ。永続キャッシュなし。スレッド削除は SSE で即時に反映。
+- カレンダー・メール・ToDo タブ: `/api/google/*`（`src/server/google.rs`）を呼ぶ。データ取得は Google Workspace スキルのハンドラ（`src/tools/google.rs`）と共通で、トークンはサーバーから出ない。ユーザー自身の操作なので承認は求めないが、スキルの有効化・接続・グループ（calendar / gmail / tasks）に従う。
 
 ## 12. デプロイ
 

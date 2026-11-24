@@ -1,7 +1,7 @@
 id = "google-workspace"
 name = "Google Workspace"
 version = "1.0.0"
-description = "Gmail, Google Calendar, Drive, Docs and Sheets on the user's Google account"
+description = "Gmail, Google Calendar, Tasks, Drive, Docs and Sheets on the user's Google account"
 aliases = ["google"]
 builtin = "google"
 
@@ -10,7 +10,7 @@ settings = ["client_id"]
 auth = true
 
 [permissions]
-network = ["accounts.google.com", "oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com", "docs.googleapis.com", "sheets.googleapis.com"]
+network = ["accounts.google.com", "oauth2.googleapis.com", "gmail.googleapis.com", "www.googleapis.com", "docs.googleapis.com", "sheets.googleapis.com", "tasks.googleapis.com"]
 description = "Uses your own OAuth client. Only the scopes of the services you turn on are requested."
 
 [auth]
@@ -58,6 +58,11 @@ scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googlea
 id = "calendar"
 label = "Calendar"
 scopes = ["https://www.googleapis.com/auth/calendar.events"]
+
+[[groups]]
+id = "tasks"
+label = "Tasks"
+scopes = ["https://www.googleapis.com/auth/tasks"]
 
 [[groups]]
 id = "drive"
@@ -127,6 +132,33 @@ permission = "ask"
 risk = "write"
 handler = "builtin"
 input_schema = '''{"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]}'''
+
+[[tools]]
+name = "tasks_list"
+description = "List Google Tasks: every task list with its open tasks (and recently completed ones when include_completed is true)."
+group = "tasks"
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"include_completed": {"type": "boolean"}}, "required": []}'''
+
+[[tools]]
+name = "tasks_create"
+description = "Add a task. list_id defaults to the first task list. due: YYYY-MM-DD."
+group = "tasks"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"title": {"type": "string"}, "notes": {"type": "string"}, "due": {"type": "string"}, "list_id": {"type": "string"}}, "required": ["title"]}'''
+
+[[tools]]
+name = "tasks_complete"
+description = "Mark a task as completed (or open again with completed=false)."
+group = "tasks"
+permission = "ask"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"list_id": {"type": "string"}, "task_id": {"type": "string"}, "completed": {"type": "boolean"}}, "required": ["list_id", "task_id"]}'''
 
 [[tools]]
 name = "drive_search"

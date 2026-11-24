@@ -159,3 +159,139 @@ async fn google_oauth_pkce_and_tools() {
     assert!(!std::fs::read_to_string(h.paths.secrets()).unwrap().contains("rt-1"));
     assert_eq!(connected(h.get("/skills").await), false);
 }
+
+// ------------------------------------------------------------------ app API
+
+#[derive(Default)]
+struct FakeApp {
+    sent: Mutex<Vec<Value>>,
+    tasks: Mutex<Vec<Value>>,
+}
+
+async fn app_events(h: axum::http::HeaderMap, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    authed(&h);
+    assert_eq!(q["timeMin"], "2026-11-23T00:00:00+09:00");
+    Json(json!({ "items": [
+        { "id": "e1", "summary": "歯医者", "start": { "dateTime": "2026-11-25T10:00:00+09:00" }, "end": { "dateTime": "2026-11-25T11:00:00+09:00" } },
+        { "id": "e2", "summary": "Trip", "start": { "date": "2026-11-28" }, "end": { "date": "2026-11-29" } } ] }))
+}
+
+async fn app_mail_list(h: axum::http::HeaderMap, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    authed(&h);
+    assert_eq!(q["q"], "in:inbox");
+    Json(json!({ "messages": [{ "id": "m1" }, { "id": "m2" }], "nextPageToken": "p2" }))
+}
+
+async fn app_mail_get(h: axum::http::HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Json<Value> {
+    authed(&h);
+    let body = alice::util::b64url_encode("Lunch at noon?".as_bytes());
+    Json(json!({ "id": id, "threadId": "th1", "snippet": "it&#39;s lunch", "internalDate": "1795000000000", "labelIds": if id == "m1" { json!(["INBOX", "UNREAD"]) } else { json!(["INBOX"]) },
+        "payload": { "mimeType": "text/plain", "body": { "data": body }, "headers": [
+            { "name": "From", "value": "Bob <bob@example.com>" }, { "name": "Subject", "value": "Lunch" }, { "name": "Message-ID", "value": "<abc@mail>" } ] } }))
+}
+
+async fn app_send(State(st): State<Arc<FakeApp>>, Json(v): Json<Value>) -> Json<Value> {
+    st.sent.lock().unwrap().push(v);
+    Json(json!({ "id": "s1" }))
+}
+
+async fn app_token() -> Json<Value> {
+    Json(json!({ "access_token": "at-1", "expires_in": 3600, "refresh_token": "rt-1" }))
+}
+
+async fn app_profile() -> Json<Value> {
+    Json(json!({ "emailAddress": "me@example.com" }))
+}
+
+async fn app_lists() -> Json<Value> {
+    Json(json!({ "items": [{ "id": "L1", "title": "My Tasks" }] }))
+}
+
+async fn app_tasks(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    assert_eq!(q["showCompleted"], "true");
+    Json(json!({ "items": [
+        { "id": "t2", "title": "牛乳", "status": "needsAction", "position": "2" },
+        { "id": "t1", "title": "Buy flowers", "status": "completed", "due": "2026-11-25T00:00:00.000Z", "position": "1" } ] }))
+}
+
+async fn app_task_write(State(st): State<Arc<FakeApp>>, Json(v): Json<Value>) -> Json<Value> {
+    st.tasks.lock().unwrap().push(v.clone());
+    let mut t = v;
+    t["id"] = json!("t9");
+    Json(t)
+}
+
+#[tokio::test]
+async fn app_api_for_calendar_mail_and_tasks() {
+    let fake = Arc::new(FakeApp::default());
+    let router = Router::new()
+        .route("/oauth/token", post(app_token))
+        .route("/calendar/calendars/primary/events", get(app_events))
+        .route("/gmail/users/me/messages", get(app_mail_list))
+        .route("/gmail/users/me/messages/send", post(app_send))
+        .route("/gmail/users/me/messages/{id}", get(app_mail_get))
+        .route("/gmail/users/me/profile", get(app_profile))
+        .route("/tasks/users/@me/lists", get(app_lists))
+        .route("/tasks/lists/L1/tasks", get(app_tasks).post(app_task_write))
+        .route("/tasks/lists/L1/tasks/t2", axum::routing::patch(app_task_write))
+        .with_state(fake.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
+    let h = Harness::with(|c, s| {
+        c.tools.google.client_id = "cid".into();
+        c.tools.google.services = vec!["gmail".into(), "calendar".into()];
+        c.tools.google.api_base = base.clone();
+        s.set("google.client_secret", "csecret");
+    })
+    .await;
+
+    // Not connected yet.
+    let (code, v) = h.req(reqwest::Method::GET, "/google/tasks", None).await;
+    assert_eq!(code, 409, "{v}");
+    let r = h.post("/skills/google-workspace/login", json!({})).await;
+    let state = r["auth_url"].as_str().unwrap().split("state=").nth(1).unwrap().split('&').next().unwrap().to_string();
+    reqwest::get(format!("{}/oauth/callback?code=c1&state={state}", h.base)).await.unwrap();
+
+    let st = h.get("/google").await;
+    assert_eq!(st["status"], "ready");
+    assert_eq!(st["email"], "me@example.com");
+    assert_eq!(st["groups"], json!({ "calendar": true, "gmail": true, "tasks": false }));
+
+    // Calendar.
+    let v = h.get("/google/calendar/events?from=2026-11-23T00:00:00%2B09:00&to=2026-11-30T00:00:00%2B09:00").await;
+    let ev = v["events"].as_array().unwrap();
+    assert_eq!(ev[0]["summary"], "歯医者");
+    assert_eq!(ev[0]["all_day"], false);
+    assert_eq!(ev[1]["all_day"], true);
+    assert_eq!(ev[1]["start"], "2026-11-28");
+
+    // Mail: list with unread flags, read, reply in thread.
+    let v = h.get("/google/mail").await;
+    assert_eq!(v["next_page"], "p2");
+    let m = v["messages"].as_array().unwrap();
+    assert_eq!((m[0]["unread"].clone(), m[1]["unread"].clone()), (json!(true), json!(false)));
+    assert_eq!(m[0]["snippet"], "it's lunch");
+    assert_eq!(h.get("/google/mail/m1").await["message"]["body"], "Lunch at noon?");
+    h.post("/google/mail/send", json!({ "to": "bob@example.com", "subject": "Re: Lunch", "body": "Yes!", "reply_to_id": "m1" })).await;
+    let sent = fake.sent.lock().unwrap()[0].clone();
+    assert_eq!(sent["threadId"], "th1");
+    let raw = String::from_utf8(alice::util::b64_decode(sent["raw"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(raw.contains("In-Reply-To: <abc@mail>\r\nReferences: <abc@mail>\r\n"), "{raw}");
+
+    // Tasks are off until the group is turned on.
+    let (code, _) = h.req(reqwest::Method::GET, "/google/tasks", None).await;
+    assert_eq!(code, 403);
+    let (code, _) = h.req(reqwest::Method::PATCH, "/skills/google-workspace", Some(json!({ "groups": ["gmail", "calendar", "tasks"] }))).await;
+    assert_eq!(code, 200);
+    let v = h.get("/google/tasks").await;
+    let tasks = v["lists"][0]["tasks"].as_array().unwrap();
+    assert_eq!(tasks[0]["title"], "Buy flowers", "sorted by position");
+    assert_eq!(tasks[0]["due"], "2026-11-25");
+    assert_eq!(tasks[0]["completed"], true);
+    h.post("/google/tasks/L1", json!({ "title": "Call mom", "due": "2026-11-30" })).await;
+    h.req(reqwest::Method::PATCH, "/google/tasks/L1/t2", Some(json!({ "completed": true }))).await;
+    let w = fake.tasks.lock().unwrap().clone();
+    assert_eq!(w[0], json!({ "title": "Call mom", "due": "2026-11-30T00:00:00.000Z" }));
+    assert_eq!(w[1], json!({ "status": "completed" }));
+}

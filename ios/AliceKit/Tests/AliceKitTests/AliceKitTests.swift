@@ -72,3 +72,28 @@ func liveServer() async throws {
     #expect(store.currentThreadId == nil && store.messages.isEmpty && !store.threads.contains { $0.id == tid })
     store.stopEvents()
 }
+
+@Test func decodesGoogleData() throws {
+    let ev = #"{"events":[{"id":"e1","summary":"歯医者","start":"2026-11-25T10:00:00+09:00","end":"2026-11-25T11:00:00+09:00","all_day":false,"location":null,"description":null,"color_id":null,"link":null},{"id":"e2","summary":"","start":"2026-11-28","end":"2026-11-29","all_day":true}]}"#
+    struct R: Decodable { let events: [CalendarEvent] }
+    let e = try AliceClient.decoder.decode(R.self, from: Data(ev.utf8)).events
+    #expect(e[0].startDate == ISO8601DateFormatter().date(from: "2026-11-25T01:00:00Z"))
+    #expect(e[1].allDay && e[1].displayTitle == "(No title)" && e[1].startDate != nil)
+
+    let mail = #"{"id":"m1","thread_id":"t","from":"\"Bob B\" <bob@example.com>","to":"me","subject":"","date":"Mon","date_ms":1795000000000,"snippet":"hi","unread":true}"#
+    let m = try AliceClient.decoder.decode(MailSummary.self, from: Data(mail.utf8))
+    #expect(m.senderName == "Bob B" && m.unread && m.displaySubject == "(No subject)" && m.sentAt != nil)
+    #expect(MailAddress.address(m.from) == "bob@example.com")
+    #expect(MailAddress.name("bob@example.com") == "bob@example.com")
+
+    let tasks = #"{"lists":[{"id":"L1","title":"My Tasks","tasks":[{"id":"t1","title":"Buy","notes":null,"due":"2026-11-25","completed":false,"completed_at":null,"parent":null,"position":"1"}]}]}"#
+    struct T: Decodable { let lists: [TaskList] }
+    let l = try AliceClient.decoder.decode(T.self, from: Data(tasks.utf8)).lists
+    #expect(l[0].tasks[0].dueDate != nil && !l[0].tasks[0].completed)
+}
+
+@Test func finalMessageEndsTurn() throws {
+    let j = #"{"id":"m","thread_id":"t","seq":1,"role":"assistant","content":"2件","status":"complete","client":"cli","created_at":1,"tool_calls":[{"id":"mcp_1","name":"calendar_list","arguments":{}}],"meta":{"final":true}}"#
+    let m = try AliceClient.decoder.decode(Message.self, from: Data(j.utf8))
+    #expect(m.endsTurn)
+}

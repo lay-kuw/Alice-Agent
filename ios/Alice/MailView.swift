@@ -1,0 +1,222 @@
+import AliceKit
+import SwiftUI
+
+struct MailView: View {
+    @Bindable var google: GoogleStore
+    @State private var search = ""
+    @State private var submitted = ""
+    @State private var composing: Draft?
+
+    var body: some View {
+        NavigationStack {
+            GoogleGate(google: google, group: "gmail", title: "Gmail") {
+                List {
+                    if let email = google.status?.email {
+                        Text(email).font(.caption).foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    }
+                    ForEach(google.inbox) { m in
+                        NavigationLink(value: m) { MailRow(mail: m) }
+                            .listRowBackground(Color.clear)
+                            .listRowSeparatorTint(Palette.lavender.opacity(0.25))
+                            .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore(query: submitted) } } }
+                    }
+                    if google.loading.contains("more") {
+                        ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
+                    }
+                }
+                .listStyle(.plain)
+                .pastel()
+                .overlay {
+                    if google.inbox.isEmpty {
+                        if google.loading.contains("mail") {
+                            ProgressView()
+                        } else {
+                            SoftEmpty(title: submitted.isEmpty ? "Inbox zero" : "No results", systemImage: submitted.isEmpty ? "envelope.open" : "magnifyingglass", message: submitted.isEmpty ? "All caught up ✨" : nil)
+                        }
+                    }
+                }
+                .refreshable { await google.loadInbox(query: submitted) }
+                .searchable(text: $search, prompt: "Search mail (e.g. from:bob is:unread)")
+                .onSubmit(of: .search) {
+                    submitted = search
+                    Task { await google.loadInbox(query: submitted) }
+                }
+                .onChange(of: search) { _, s in
+                    if s.isEmpty, !submitted.isEmpty {
+                        submitted = ""
+                        Task { await google.loadInbox() }
+                    }
+                }
+                .task { if google.inbox.isEmpty { await google.loadInbox() } }
+                .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
+            }
+            .navigationTitle(submitted.isEmpty ? "Inbox" : "Search")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { composing = Draft() } label: { Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent) }
+                }
+            }
+            .sheet(item: $composing) { ComposeView(google: google, draft: $0) }
+            .googleErrors(google)
+        }
+    }
+}
+
+struct MailRow: View {
+    let mail: MailSummary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Avatar(name: mail.senderName, key: MailAddress.address(mail.from))
+                .overlay(alignment: .topLeading) {
+                    if mail.unread {
+                        Circle().fill(Palette.pink).frame(width: 11, height: 11).overlay(Circle().stroke(.background, lineWidth: 2)).offset(x: -2, y: -2)
+                    }
+                }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(mail.senderName).font(.subheadline.weight(mail.unread ? .bold : .medium)).lineLimit(1)
+                    Spacer()
+                    Text(mail.sentAt.map(Fmt.short) ?? "").font(.caption).foregroundStyle(mail.unread ? Palette.pink : .secondary)
+                }
+                Text(mail.displaySubject).font(.subheadline.weight(mail.unread ? .semibold : .regular)).lineLimit(1)
+                Text(mail.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct MailDetailView: View {
+    @Bindable var google: GoogleStore
+    let summary: MailSummary
+    @State private var message: MailMessage?
+    @State private var composing: Draft?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(summary.displaySubject).font(.system(.title2, design: .rounded).weight(.bold)).textSelection(.enabled)
+                HStack(spacing: 12) {
+                    Avatar(name: summary.senderName, key: MailAddress.address(summary.from), size: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(summary.senderName).font(.headline)
+                        Text(MailAddress.address(summary.from)).font(.caption).foregroundStyle(.secondary)
+                        if let to = message?.to, !to.isEmpty { Text("to \(to)").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                    }
+                    Spacer()
+                    if let d = summary.sentAt { Text(d.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
+                }
+                .card()
+                Group {
+                    if let m = message {
+                        Text(m.body.isEmpty ? summary.snippet : m.body)
+                            .font(.body)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        ProgressView().frame(maxWidth: .infinity)
+                    }
+                }
+                .card(padding: 16)
+            }
+            .padding()
+        }
+        .background(PastelBackground())
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .bottomBar) {
+                Button { composing = Draft(replyTo: summary, message: message) } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Palette.lavender)
+            }
+        }
+        .sheet(item: $composing) { ComposeView(google: google, draft: $0) }
+        .task { if message == nil { message = await google.open(summary.id) } }
+    }
+}
+
+struct Draft: Identifiable {
+    let id = UUID()
+    var to = ""
+    var cc = ""
+    var subject = ""
+    var body = ""
+    var replyToId: String?
+
+    init() {}
+
+    init(replyTo s: MailSummary, message: MailMessage?) {
+        let replyAddress = message?.replyTo.flatMap { $0.isEmpty ? nil : $0 } ?? s.from
+        to = MailAddress.address(replyAddress)
+        subject = s.subject.lowercased().hasPrefix("re:") ? s.subject : "Re: \(s.subject)"
+        replyToId = s.id
+        if let m = message {
+            let when = m.sentAt?.formatted(date: .abbreviated, time: .shortened) ?? m.date
+            let quoted = m.body.split(separator: "\n", omittingEmptySubsequences: false).prefix(40).map { "> \($0)" }.joined(separator: "\n")
+            body = "\n\n\(when), \(s.senderName):\n\(quoted)"
+        }
+    }
+}
+
+struct ComposeView: View {
+    @Bindable var google: GoogleStore
+    @State var draft: Draft
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var bodyFocused: Bool
+    @State private var showCc = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                field("To", text: $draft.to).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                if showCc || !draft.cc.isEmpty {
+                    field("Cc", text: $draft.cc).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                }
+                field("Subject", text: $draft.subject)
+                TextEditor(text: $draft.body)
+                    .focused($bodyFocused)
+                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 12)
+                    .frame(maxHeight: .infinity)
+            }
+            .background(PastelBackground())
+            .navigationTitle(draft.replyToId == nil ? "New message" : "Reply")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if !showCc && draft.cc.isEmpty { Button("Cc") { showCc = true } }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if google.loading.contains("send") {
+                        ProgressView()
+                    } else {
+                        Button {
+                            Task {
+                                if await google.send(to: draft.to, cc: draft.cc, subject: draft.subject, body: draft.body, replyTo: draft.replyToId) { dismiss() }
+                            }
+                        } label: { Image(systemName: "paperplane.fill").foregroundStyle(Palette.accent) }
+                        .disabled(draft.to.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }
+            .onAppear { if draft.replyToId != nil { bodyFocused = true } }
+            .googleErrors(google)
+        }
+    }
+
+    private func field(_ label: String, text: Binding<String>) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(label).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                TextField("", text: text)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+            Divider().overlay(Palette.lavender.opacity(0.3))
+        }
+    }
+}

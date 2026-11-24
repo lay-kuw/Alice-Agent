@@ -138,6 +138,10 @@ properties.body = { type = "string" }
 
 Alice は Codex を **Alice 専用の CODEX_HOME（`~/.alice/codex/`）** で起動する。
 
+- **通常の経路（速い）**：`codex app-server` を 1 つ常駐させ（サーバー起動時に立ち上げる）、Alice のターンごとに使い捨て（ephemeral）の Codex スレッドを作って、Alice が組み立てたプロンプト全体を渡す。返答は生成されたそばからストリーミングされる。`codex exec` のように毎回プロセスを起動しないので、最初の文字が出るまでが数秒短くなる。
+- ツールは **dynamic tools**（app-server の実験的 API）として渡す。Codex はツールを使うとき同じ接続で `item/tool/call` を送り、Alice はプロセス内で Tool Gate を通してから結果を返す。MCP 子プロセスもトークンもないので、迂回できる経路がない。
+- **フォールバック**：app-server が起動できない Codex では、従来どおり `codex exec` ＋ `alice mcp`（下記）で動く。環境変数 `ALICE_CODEX_EXEC=1` でも強制できる。
+
 - ユーザー普段の `~/.codex`（プラグイン・MCP サーバー・フック・履歴・記憶）は読み込まない。ログインも Alice 専用（`alice model login codex-cli`）。
 - `config.toml` は Alice が毎回書き出す：シェル・統合 exec・ブラウザ・コンピューター操作・画像生成・アプリ・プラグイン・フック・Web 検索を無効化、サンドボックスは読み取り専用、承認ポリシーは never、作業フォルダは空の一時ディレクトリ、MCP サーバーは `alice mcp` だけ。
 - Codex は MCP ツールを code mode の `exec`（ファイル・ネットワーク・Node のない V8 isolate）の中からしか呼べないため、`code_mode_host` だけは有効にする。isolate から呼べるのは `exec` の説明に列挙されたツールだけで、それも安全確認の対象。`codex-code-mode-host` が無ければ MCP は使えないので、テキスト方式に切り替える。
@@ -148,7 +152,7 @@ Alice は Codex を **Alice 専用の CODEX_HOME（`~/.alice/codex/`）** で起
 
 | 迂回の手段 | 対策 |
 |---|---|
-| Alice の承認 API を直接呼ぶ | MCP 中継が持つのはターントークンだけで、承認 API には使えない。Alice の API トークンは中継にも Codex にも渡さない |
+| Alice の承認 API を直接呼ぶ | app-server 経路ではツール呼び出しは Alice のプロセス内で処理され、トークン自体が存在しない。MCP 経路でも中継が持つのはターントークンだけで、承認 API には使えない。Alice の API トークンは Codex に渡さない |
 | secrets.toml などを読んでトークンを盗む | Codex のシェル・コード実行・プラグイン・他の MCP を無効化し、安全確認で検証。ファイルツールは `~/.alice` を常に拒否 |
 | MCP 経由で別のツールを装う | ツール名は Registry で解決し、権限は Alice の設定で判定する。MCP の引数に承認フラグは存在しない |
 | スキルを書き換えて権限を変える | スキルと設定は `~/.alice` 配下で、モデルからは書けない。権限変更はユーザーの API トークンが必要 |

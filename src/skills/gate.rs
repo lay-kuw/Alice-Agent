@@ -21,6 +21,8 @@ pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
 pub enum Source {
     Native,
     Mcp,
+    /// Codex app-server dynamic tools.
+    Codex,
     Text,
 }
 
@@ -29,6 +31,7 @@ impl Source {
         match self {
             Source::Native => "native",
             Source::Mcp => "mcp",
+            Source::Codex => "codex",
             Source::Text => "text",
         }
     }

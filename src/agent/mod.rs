@@ -13,6 +13,7 @@ use crate::tools;
 use crate::util::now_ms;
 use crate::{error, warn};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -365,6 +366,7 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             max_tokens: cfg.agent.max_tokens,
             mcp: None,
             effort: crate::config::split_effort(model_id).1.map(str::to_string),
+            tool_runner: None,
         };
         let mut req = req;
         // Codex reaches tools through `alice mcp` with a token for this turn only.
@@ -377,8 +379,14 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
                 calls: Default::default(),
             })
         });
-        if let Some((token, _)) = &bridge {
+        if let Some((token, b)) = &bridge {
             req.mcp = Some(providers::McpBridge { token: token.clone(), url: crate::cli::client::local_url(&cfg), profile: app.paths.profile.clone() });
+            // Codex app-server calls tools back in-process (dynamic tools).
+            let (app2, b2) = (app.clone(), b.clone());
+            req.tool_runner = Some(providers::ToolRunner(Arc::new(move |name, args| {
+                let (app, b) = (app2.clone(), b2.clone());
+                Box::pin(async move { bridged_call(&app, &b, &name, args, skills::gate::Source::Codex).await })
+            })));
         }
         let alice_us = t_step.elapsed().as_micros();
         let alice_ms = alice_us / 1000;
@@ -582,6 +590,63 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             Err(_) => return Outcome::Deleted,
         }
     }
+}
+
+/// Run a tool that a CLI provider (Codex) calls mid-turn — through `alice mcp`
+/// or as a dynamic tool — via the Tool Gate, recorded like a native call.
+pub async fn bridged_call(app: &AppRef, bridge: &Arc<Bridge>, name: &str, args: Value, source: skills::gate::Source) -> (String, bool) {
+    let args = if args.is_null() { json!({}) } else { args };
+    let call = ToolCall { id: format!("{}_{}", source.as_str(), crate::util::new_id()), name: name.to_string(), arguments: args.clone() };
+    // Show the call on the assistant message right away (live UI).
+    {
+        let mut calls = bridge.calls.lock().unwrap_or_else(|e| e.into_inner());
+        calls.push(call.clone());
+        let json = serde_json::to_value(&*calls).unwrap_or_default();
+        let c = app.db.lock();
+        let _ = c.execute("UPDATE messages SET tool_calls = ?2 WHERE id = ?1", rusqlite::params![bridge.message_id, json.to_string()]);
+    }
+    let gc = skills::gate::Call {
+        thread_id: &bridge.thread_id,
+        message_id: &bridge.message_id,
+        call_id: &call.id,
+        name: &call.name,
+        args: &args,
+        source,
+        client: &bridge.client,
+    };
+    let (content, ok) = match skills::gate::invoke(app, &gc, &bridge.cancel).await {
+        skills::gate::Outcome::Done(c, ok) => (c, ok),
+        skills::gate::Outcome::Cancelled => ("error: the turn was stopped".to_string(), false),
+    };
+    // Same record as a native tool call: a tool message answering the call.
+    let msg = {
+        let c = app.db.lock();
+        storage::insert_message(
+            &c,
+            &storage::NewMessage {
+                thread_id: &bridge.thread_id,
+                role: "tool",
+                content: &content,
+                tool_calls: None,
+                tool_call_id: Some(&call.id),
+                status: "complete",
+                client: &bridge.client,
+                model: None,
+            },
+        )
+        .ok()
+        .inspect(|m| {
+            let meta = json!({ "tool": call.name, "ok": ok, "via": source.as_str() });
+            let _ = c.execute("UPDATE messages SET meta = ?2 WHERE id = ?1", rusqlite::params![m.id, meta.to_string()]);
+        })
+    };
+    if msg.is_some() {
+        app.emit(json!({
+            "type": "tool.completed", "thread_id": bridge.thread_id, "message_id": bridge.message_id,
+            "tool_call_id": call.id, "tool": call.name, "ok": ok, "summary": crate::util::truncate(&content, 300),
+        }));
+    }
+    (content, ok)
 }
 
 fn finish_cancelled(app: &AppRef, m: &Message, partial: &str) {

@@ -4,6 +4,7 @@
 pub mod anthropic;
 pub mod catalog;
 pub mod cli;
+pub mod codex_server;
 pub mod gemini;
 pub mod openai;
 
@@ -78,9 +79,19 @@ pub struct ChatRequest<'a> {
     pub max_tokens: u32,
     /// Reasoning effort (providers that support it).
     pub effort: Option<String>,
+    /// Runs a tool through Alice's gate for providers that call back
+    /// mid-turn (Codex dynamic tools).
+    pub tool_runner: Option<ToolRunner>,
     /// Tools reachable through `alice mcp` for this turn (MCP-capable CLIs).
     pub mcp: Option<McpBridge>,
 }
+
+/// Future returned by a [`ToolRunner`]: (result text, ok).
+pub type ToolFuture = std::pin::Pin<Box<dyn std::future::Future<Output = (String, bool)> + Send>>;
+
+/// Runs one tool call (name, arguments) through the Tool Gate.
+#[derive(Clone)]
+pub struct ToolRunner(pub std::sync::Arc<dyn Fn(String, Value) -> ToolFuture + Send + Sync>);
 
 /// How an MCP-capable CLI reaches Alice's tools for one turn.
 #[derive(Clone, Debug)]

@@ -85,5 +85,11 @@ pub async fn serve(paths: Paths) -> Result<(), String> {
     let app = build_app(paths)?;
     channels::start(&app);
     providers::catalog::refresh_if_stale(&app);
+    // Start Codex's app-server now so the first reply does not wait for it.
+    if std::env::var_os("ALICE_CODEX_EXEC").is_none() {
+        for p in app.config().providers.iter().filter(|p| p.kind == config::ProviderKind::CodexCli) {
+            providers::codex_server::warm_up(p.base_url().to_string());
+        }
+    }
     server::serve(app).await.map_err(|e| e.to_string())
 }

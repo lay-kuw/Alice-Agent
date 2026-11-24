@@ -68,6 +68,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
         max_tokens: 1000,
         mcp: None,
         effort: None,
+        tool_runner: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
@@ -94,7 +95,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
     // Replay within a turn sends the exact blocks (thinking included).
     let mut replay = ChatMessage::assistant("Let me look.");
     replay.provider_state = Some(json!({ "anthropic_blocks": blocks }));
-    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10, mcp: None, effort: None });
+    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10, mcp: None, effort: None, tool_runner: None });
     assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
 }
 
@@ -110,7 +111,7 @@ async fn gemini_stream_text_and_function_call_with_signature() {
     let seen = Arc::new(Mutex::new(vec![]));
     let url = serve("/v1beta/models/{model}", body, seen.clone()).await;
     let p = ProviderConfig { id: "g".into(), kind: ProviderKind::Gemini, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100, mcp: None, effort: None };
+    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100, mcp: None, effort: None, tool_runner: None };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
     let c = providers::stream(&reqwest::Client::new(), &p, Some("gk"), &req, &mut on).await.unwrap();
@@ -136,7 +137,7 @@ async fn http_errors_are_reported_without_secrets() {
     let url = format!("http://{}/v1", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
     let p = ProviderConfig { id: "o".into(), kind: ProviderKind::Openai, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10, mcp: None, effort: None };
+    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10, mcp: None, effort: None, tool_runner: None };
     let mut on = |_: &str| {};
     let e = providers::stream(&reqwest::Client::new(), &p, Some("sk-SECRET"), &req, &mut on).await.unwrap_err();
     assert_eq!(e.0, "HTTP 401: Incorrect API key");
@@ -153,7 +154,7 @@ async fn codex_cli_provider_uses_official_cli_output() {
     let exe = dir.path().join("codex");
     // Fake `codex`: records its arguments and stdin, prints documented JSONL events.
     let script = format!(
-        "#!/bin/sh\necho \"$@\" > {d}/args\ncat > {d}/stdin\n\
+        "#!/bin/sh\n[ \"$1\" = app-server ] && exit 1\necho \"$@\" > {d}/args\ncat > {d}/stdin\n\
 echo '{{\"type\":\"thread.started\",\"thread_id\":\"t\"}}'\n\
 echo '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"i1\",\"type\":\"reasoning\",\"text\":\"thinking\"}}}}'\n\
 echo '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"i2\",\"type\":\"agent_message\",\"text\":\"Hello from Codex\"}}}}'\n\
@@ -171,6 +172,7 @@ echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_inp
         max_tokens: 100,
         mcp: None,
         effort: None,
+        tool_runner: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
@@ -193,7 +195,7 @@ echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_inp
     let req = req2;
 
     // A failing CLI reports its error.
-    std::fs::write(&exe, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"not logged in\"}}'\nexit 1\n").unwrap();
+    std::fs::write(&exe, "#!/bin/sh\n[ \"$1\" = app-server ] && exit 1\ncat >/dev/null\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"not logged in\"}}'\nexit 1\n").unwrap();
     let e = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap_err();
     assert_eq!(e.0, "not logged in");
 }
@@ -219,4 +221,75 @@ async fn gemini_models_are_discovered() {
     assert_eq!(list.len(), 1);
     assert_eq!((list[0].model.as_str(), list[0].name.as_str()), ("gemini-9-pro", "Gemini 9 Pro"));
     assert!(providers::catalog::discover(&reqwest::Client::new(), &p, None).await.is_err());
+}
+
+
+/// Fake `codex app-server`: answers initialize / thread/start / turn/start,
+/// asks for one tool call, then streams the reply.
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_app_server_streams_and_calls_tools() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("codex");
+    let script = format!(
+        r#"#!/bin/sh
+case "$1" in
+  debug) echo '{{"tools":[{{"type":"function","name":"wait","description":"x"}}]}}'; exit 0;;
+  app-server) ;;
+  *) exit 1;;
+esac
+while read -r l; do
+  printf '%s\n' "$l" >> {d}/in
+  id=$(printf '%s' "$l" | sed -nE 's/^\{{"id":([0-9]+),.*/\1/p')
+  case "$l" in
+    *'"method":"initialize"'*) echo "{{\"id\":$id,\"result\":{{}}}}";;
+    *'"method":"thread/start"'*) echo "{{\"id\":$id,\"result\":{{\"thread\":{{\"id\":\"t1\"}}}}}}";;
+    *'"method":"turn/start"'*)
+      echo "{{\"id\":$id,\"result\":{{\"turn\":{{\"id\":\"u1\"}}}}}}"
+      echo '{{"id":"r1","method":"item/tool/call","params":{{"threadId":"t1","turnId":"u1","callId":"c1","tool":"fs_list","arguments":{{"path":"."}}}}}}';;
+    *'"id":"r1"'*)
+      echo '{{"method":"item/agentMessage/delta","params":{{"threadId":"t1","itemId":"m1","delta":"Hello "}}}}'
+      echo '{{"method":"item/agentMessage/delta","params":{{"threadId":"t1","itemId":"m1","delta":"there"}}}}'
+      echo '{{"method":"thread/tokenUsage/updated","params":{{"threadId":"t1","tokenUsage":{{"last":{{"inputTokens":7,"outputTokens":2}}}}}}}}'
+      echo '{{"method":"turn/completed","params":{{"threadId":"t1","turn":{{"id":"u1","status":"completed"}}}}}}';;
+    *'"id":'*) echo "{{\"id\":$id,\"result\":{{}}}}";;
+  esac
+done
+"#,
+        d = dir.path().display()
+    );
+    std::fs::write(&exe, script).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    alice::providers::cli::set_codex_home(dir.path().join("home"));
+    let p = ProviderConfig { id: "c".into(), kind: ProviderKind::CodexCli, base_url: exe.display().to_string(), models: vec![], context_tokens: 0 };
+    let calls = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+    let seen = calls.clone();
+    let runner = providers::ToolRunner(Arc::new(move |name, args| {
+        seen.lock().unwrap().push((name, args));
+        Box::pin(async { ("a.txt\nb.txt".to_string(), true) })
+    }));
+    let req = ChatRequest {
+        model: "gpt-6-luna",
+        system: "be nice".into(),
+        messages: vec![ChatMessage::user("list files")],
+        tools: vec![ToolSpec { name: "fs_list".into(), description: "List files".into(), parameters: json!({"type": "object"}) }],
+        max_tokens: 100,
+        mcp: None,
+        effort: Some("low".into()),
+        tool_runner: Some(runner),
+    };
+    let mut deltas = Vec::new();
+    let mut on = |d: &str| deltas.push(d.to_string());
+    let c = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap();
+    assert_eq!(c.text, "Hello there");
+    assert_eq!(deltas, vec!["Hello ", "there"], "streamed, not buffered");
+    assert_eq!((c.usage.input_tokens, c.usage.output_tokens), (7, 2));
+    assert_eq!(calls.lock().unwrap().as_slice(), &[("fs_list".to_string(), json!({"path": "."}))]);
+    let sent = std::fs::read_to_string(dir.path().join("in")).unwrap();
+    // Tools are offered natively; the result goes back to Codex; model and effort are set.
+    assert!(sent.contains(r#""dynamicTools":[{"#) && sent.contains(r#""name":"fs_list""#), "{sent}");
+    assert!(sent.contains(r#""id":"r1","result":{"contentItems":[{"text":"a.txt\nb.txt","type":"inputText"}],"success":true}"#), "{sent}");
+    assert!(sent.contains(r#""effort":"low""#) && sent.contains(r#""model":"gpt-6-luna""#), "{sent}");
+    assert!(sent.contains(r#""experimentalApi":true"#), "{sent}");
 }

@@ -684,6 +684,7 @@ async fn test_model(State(app): State<AppRef>, Json(b): Json<ModelBody>) -> ApiR
         max_tokens: 1000,
         mcp: None,
         effort: crate::config::split_effort(&b.model).1.map(str::to_string),
+        tool_runner: None,
     };
     let t0 = std::time::Instant::now();
     let mut first: Option<u128> = None;
@@ -1127,56 +1128,7 @@ struct McpCall {
 async fn mcp_call(State(app): State<AppRef>, headers: HeaderMap, Json(b): Json<McpCall>) -> ApiResult<Json<Value>> {
     let bridge = bridge_from(&app, &headers).await?;
     let args = if b.arguments.is_null() { json!({}) } else { b.arguments };
-    let call = providers::ToolCall { id: format!("mcp_{}", new_id()), name: b.name.clone(), arguments: args.clone() };
-    // Show the call on the assistant message right away (live UI).
-    {
-        let mut calls = bridge.calls.lock().unwrap_or_else(|e| e.into_inner());
-        calls.push(call.clone());
-        let json = serde_json::to_value(&*calls).unwrap_or_default();
-        let c = app.db.lock();
-        let _ = c.execute("UPDATE messages SET tool_calls = ?2 WHERE id = ?1", rusqlite::params![bridge.message_id, json.to_string()]);
-    }
-    let gc = skills::gate::Call {
-        thread_id: &bridge.thread_id,
-        message_id: &bridge.message_id,
-        call_id: &call.id,
-        name: &call.name,
-        args: &args,
-        source: skills::gate::Source::Mcp,
-        client: &bridge.client,
-    };
-    let (content, ok) = match skills::gate::invoke(&app, &gc, &bridge.cancel).await {
-        skills::gate::Outcome::Done(c, ok) => (c, ok),
-        skills::gate::Outcome::Cancelled => ("error: the turn was stopped".to_string(), false),
-    };
-    // Same record as a native tool call: a tool message answering the call.
-    let msg = {
-        let c = app.db.lock();
-        storage::insert_message(
-            &c,
-            &storage::NewMessage {
-                thread_id: &bridge.thread_id,
-                role: "tool",
-                content: &content,
-                tool_calls: None,
-                tool_call_id: Some(&call.id),
-                status: "complete",
-                client: &bridge.client,
-                model: None,
-            },
-        )
-        .ok()
-        .inspect(|m| {
-            let meta = json!({ "tool": call.name, "ok": ok, "via": "mcp" });
-            let _ = c.execute("UPDATE messages SET meta = ?2 WHERE id = ?1", rusqlite::params![m.id, meta.to_string()]);
-        })
-    };
-    if msg.is_some() {
-        app.emit(json!({
-            "type": "tool.completed", "thread_id": bridge.thread_id, "message_id": bridge.message_id,
-            "tool_call_id": call.id, "tool": call.name, "ok": ok, "summary": crate::util::truncate(&content, 300),
-        }));
-    }
+    let (content, ok) = agent::bridged_call(&app, &bridge, &b.name, args, skills::gate::Source::Mcp).await;
     Ok(Json(json!({ "ok": ok, "content": content })))
 }
 

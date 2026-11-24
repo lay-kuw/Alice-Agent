@@ -215,6 +215,8 @@ fn which(exe: &str) -> Option<std::path::PathBuf> {
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum ToolMode {
     None,
+    /// Tools offered natively (Codex dynamic tools).
+    Native,
     Mcp,
     Text,
 }
@@ -251,6 +253,8 @@ fn render(req: &ChatRequest, mode: ToolMode) -> String {
     }
     s.push_str("</conversation>\n\nReply to the last User message as the Assistant.");
     s.push_str(match mode {
+        ToolMode::Native => " Use the provided tools when an action or lookup is needed; they are the only tools you may use. \
+Do not run commands, edit files, or read local files.",
         ToolMode::Mcp => " Use the `alice` MCP tools when an action or lookup is needed; they are the only tools you may use. \
 Do not run commands, edit files, or read local files.",
         ToolMode::Text => " To use a tool, follow the tool protocol above and stop; otherwise answer directly in text. \
@@ -302,6 +306,27 @@ pub fn parse_text_calls(text: &str) -> (String, Vec<ToolCall>) {
 
 pub async fn stream(p: &ProviderConfig, req: &ChatRequest<'_>, on_delta: OnDelta<'_>) -> Result<Completion> {
     let exe = p.base_url().to_string();
+    // Codex: a warm app-server with native tools; `codex exec` (+ MCP) is the fallback.
+    if p.kind == ProviderKind::CodexCli && std::env::var_os("ALICE_CODEX_EXEC").is_none() {
+        let tools = match (&req.tool_runner, req.tools.is_empty()) {
+            (_, true) => Some(None),
+            (Some(r), false) if codex_safe(&exe).await.is_ok() => Some(Some((req.tools.as_slice(), r))),
+            // Unsafe Codex or no runner: the text protocol below.
+            _ => None,
+        };
+        if let Some(tools) = tools {
+            let prompt = render(req, if tools.is_some() { ToolMode::Native } else { ToolMode::None });
+            let scratch = std::env::temp_dir().join(format!("alice-cli-{}", crate::util::new_id()));
+            std::fs::create_dir_all(&scratch).map_err(|e| ProviderError(e.to_string()))?;
+            let turn = super::codex_server::Turn { exe: &exe, prompt: &prompt, model: req.model, effort: req.effort.as_deref(), cwd: &scratch, tools };
+            let r = super::codex_server::run(turn, &mut *on_delta).await;
+            let _ = std::fs::remove_dir_all(&scratch);
+            match r {
+                Ok(done) => return done,
+                Err(e) => crate::warn!("codex app-server unavailable, using codex exec: {e}"),
+            }
+        }
+    }
     let mode = match (&req.mcp, req.tools.is_empty(), p.kind) {
         (_, true, _) => ToolMode::None,
         (Some(_), false, ProviderKind::CodexCli) if codex_safe(&exe).await.is_ok() => ToolMode::Mcp,

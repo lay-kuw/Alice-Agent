@@ -14,7 +14,7 @@ const MAX_LIST: usize = 500;
 const MAX_WALK: usize = 20_000;
 
 fn p_path() -> Value {
-    json!({"type":"object","properties":{"path":{"type":"string","description":"Path relative to the first allowed root, or absolute inside an allowed root"}},"required":["path"]})
+    json!({"type":"object","properties":{"path":{"type":"string","description":"Path relative to the working folder, or absolute inside an allowed folder"}},"required":["path"]})
 }
 
 pub static DEFS: [ToolDef; 8] = [
@@ -50,6 +50,14 @@ pub struct Sandbox {
     workspace: Option<PathBuf>,
 }
 
+/// The working folder (`tools.fs.workspace`, default `~/.alice/workspace`).
+pub fn workspace_dir(cfg: &Config, paths: &Paths) -> PathBuf {
+    match cfg.tools.fs.workspace.trim() {
+        "" => paths.workspace(),
+        w => expand_home(w),
+    }
+}
+
 fn expand_home(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/")
         && let Some(h) = std::env::var_os("HOME") {
@@ -60,12 +68,15 @@ fn expand_home(p: &str) -> PathBuf {
 
 impl Sandbox {
     pub fn new(cfg: &Config, paths: &Paths) -> Sandbox {
-        let mut raw: Vec<PathBuf> = cfg.tools.fs.roots.iter().map(|r| expand_home(r)).collect();
-        if raw.is_empty() {
-            let _ = std::fs::create_dir_all(paths.workspace());
-            raw.push(paths.workspace());
+        let ws = workspace_dir(cfg, paths);
+        let _ = std::fs::create_dir_all(&ws);
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for r in std::iter::once(ws).chain(cfg.tools.fs.roots.iter().map(|r| expand_home(r))) {
+            if let Ok(c) = std::fs::canonicalize(r)
+                && !roots.contains(&c) {
+                    roots.push(c);
+                }
         }
-        let roots = raw.into_iter().filter_map(|r| std::fs::canonicalize(r).ok()).collect();
         let protected = [crate::config::alice_root(), paths.home.clone()]
             .into_iter()
             .filter_map(|p| std::fs::canonicalize(p).ok())
@@ -337,7 +348,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(dir.path().join("secret.txt"), "top secret").unwrap();
         let mut cfg = Config::default();
-        cfg.tools.fs.roots = vec![root.display().to_string()];
+        cfg.tools.fs.workspace = root.display().to_string();
         let paths = Paths::at(dir.path().join("home"));
         let sb = Sandbox::new(&cfg, &paths);
         (dir, sb, paths)

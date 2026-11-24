@@ -25,7 +25,8 @@ scripts/install.sh --uninstall
 alice setup      # 対話型セットアップ（サーバー・API トークン・モデル・自動起動）
 alice model      # モデルの一覧・既定モデル変更・追加・テスト
 alice start      # サーバー起動（launchd / systemd 登録済みならサービス経由）
-alice chat       # TUI チャット（? でヘルプ、Esc で応答停止、--plain で行表示）
+alice chat       # TUI チャット（/ でコマンド候補、Esc で応答停止、--plain で行表示）
+alice usage      # サブスク（Codex）の残量と使用トークン
 alice soul       # 人格（SOUL.md）をエディタで編集
 ```
 
@@ -39,7 +40,8 @@ Web GUI: `http://127.0.0.1:7878/` を開き、`alice token` で表示される�
 | `alice chat list` / `alice chat <id>` | スレッド一覧 / 再開 |
 | `alice chat rename <id>` / `delete <id>` / `clear` | 名前変更 / 削除 / 全削除（設定は維持） |
 | `alice model [list\|add\|remove\|use\|login\|logout\|test]` | モデル管理（`use 1` / `test 1` のように番号でも指定可。`list` に利用可否 ✓/✗ を表示） |
-| `alice soul [edit\|show\|reset]` | 人格ファイル SOUL.md（性格・話し方・仕事の進め方） |
+| `alice soul [edit\|show\|reset]` | 人格ファイル SOUL.md（Alice への指示のすべて） |
+| `alice usage` | ChatGPT サブスク（codex-cli）の 5 時間枠・週間枠の残量と、モデル別の使用トークン |
 | `alice memory [list\|search "語"\|show <id>\|status\|clear]` | Memory 管理（出典の確認は `show`） |
 | `alice tool [list\|enable <tool> [ask\|allow]\|disable <tool>]` | ツール権限 |
 | `alice gateway [list\|setup [telegram\|discord]\|delete <id>]` | Telegram / Discord |
@@ -67,6 +69,7 @@ alice profile default    # default に戻す
 
 - **Telegram / Discord**: `alice gateway setup`。許可したユーザー ID 以外は無視します。Telegram は `/new /threads /model /delete /stop /status`、Discord は DM またはメンションで同じコマンドが使えます。
 - **Google**: Google Cloud で「デスクトップ アプリ」の OAuth クライアントを作成 → `alice google setup` → `alice google login`。有効にしたサービスのスコープだけを要求します。
+- **作業フォルダ**: `alice config set tools.fs.workspace ~/AliceWork`（または Web の「設定 → ツール」）。相対パスはここに解決され、ほかのフォルダは `tools.fs.roots` で追加できます。
 - **Web 検索**: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key`（または SearXNG）。
 - **ChatGPT サブスク**: `alice model add` → `codex-cli`（公式 Codex CLI のログインを利用。テキスト専用）。
 
@@ -76,7 +79,9 @@ alice profile default    # default に戻す
 
 ## 人格（SOUL.md）
 
-`~/.alice/SOUL.md`（プロファイルごと）に書いた性格・話し方・仕事の進め方が Alice の人格になります。`alice soul` か Web の「設定 → 人格」で編集でき、次の返答から反映されます。会話をすべて削除しても残り、AI 自身は書き換えられません。
+`~/.alice/SOUL.md`（プロファイルごと）が Alice に渡すシステムプロンプトのすべてです。既定の内容（役割・言語・性格・話し方・仕事の進め方・安全のための約束）もこのファイルに書かれていて、書き換えればすべて上書きできます。Alice が自動で足すのは現在時刻、作業フォルダ、話題に関係する記憶（最大 8 件）だけです。`{{name}}` はエージェント名に置き換わります。
+
+`alice soul` か Web の「設定 → 人格」で編集でき、次の返答から反映されます。会話をすべて削除しても残り、AI 自身は書き換えられません。
 
 ## データ
 
@@ -87,7 +92,7 @@ alice profile default    # default に戻す
 ├── secrets.toml    API Key・トークン（0600）
 ├── alice.db        会話・Memory（SQLite, FTS5）
 ├── attachments/    添付ファイル（スレッド単位）
-├── workspace/      ファイルツールの既定作業領域
+├── workspace/      ファイルツールの既定の作業フォルダ（tools.fs.workspace で変更可）
 ├── logs/           ログ（会話本文・秘密情報は出力しない）
 └── profiles/<name>/ 他のプロファイル（同じ構成）
 ```

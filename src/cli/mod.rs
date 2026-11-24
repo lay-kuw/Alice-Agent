@@ -59,6 +59,8 @@ pub enum Cmd {
     Gateway { args: Vec<String> },
     /// Profiles: `alice profile` (list), `alice profile <name>` (create/switch), `use <name>`, `delete <name>`
     Profile { args: Vec<String> },
+    /// Subscription limits (Codex) and tokens used
+    Usage,
     /// Personality (SOUL.md): edit, show, reset
     Soul { args: Vec<String> },
     /// Google account: status, setup, login, logout
@@ -108,6 +110,11 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Service { args }) => service_cmd(&paths, args),
         Some(Cmd::Google { args }) => google_cmd(&paths, args).await,
         Some(Cmd::Soul { args }) => soul_cmd(&paths, args),
+        Some(Cmd::Usage) => {
+            let c = Client::from_env(&paths)?;
+            print!("{}", crate::usage::render_text(&c.get("/usage").await?));
+            Ok(())
+        }
         Some(Cmd::Serve) => unreachable!(),
     }
 }
@@ -974,8 +981,11 @@ async fn tool_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                 let p = crate::tools::permission(&cfg, d);
                 println!("{:<18} {:<9} {}", d.name, p.as_str(), dim(d.description));
             }
-            let roots = if cfg.tools.fs.roots.is_empty() { vec![paths.workspace().display().to_string()] } else { cfg.tools.fs.roots.clone() };
-            println!("{}", dim(&format!("file system roots: {}", roots.join(", "))));
+            println!("{}", dim(&format!("working folder: {}", crate::tools::fs::workspace_dir(&cfg, paths).display())));
+            if !cfg.tools.fs.roots.is_empty() {
+                println!("{}", dim(&format!("also allowed: {}", cfg.tools.fs.roots.join(", "))));
+            }
+            println!("{}", dim("change: alice config set tools.fs.workspace ~/path"));
             Ok(())
         }
         ["enable", name] => {

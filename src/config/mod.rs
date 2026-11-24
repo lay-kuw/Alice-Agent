@@ -101,9 +101,18 @@ pub fn read_soul(paths: &Paths) -> String {
     std::fs::read_to_string(paths.soul()).unwrap_or_default()
 }
 
-/// Create SOUL.md from the template if it does not exist.
+/// SHA-256 of earlier, unedited default templates (upgraded in place).
+const OLD_SOUL_TEMPLATES: [&str; 1] = ["ede64c1de4c90a0faa58b2d825d358c1d9739534c83ca6431f2b6aab402d9a10"];
+
+/// Create SOUL.md from the template if it does not exist, and upgrade an
+/// unedited copy of an older default template.
 pub fn ensure_soul(paths: &Paths) {
-    if !paths.soul().exists() {
+    use sha2::Digest;
+    let unedited_old = std::fs::read(paths.soul()).ok().is_some_and(|b| {
+        let hex: String = sha2::Sha256::digest(&b).iter().map(|x| format!("{x:02x}")).collect();
+        OLD_SOUL_TEMPLATES.contains(&hex.as_str())
+    });
+    if unedited_old || !paths.soul().exists() {
         let _ = write_atomic(&paths.soul(), SOUL_TEMPLATE.as_bytes(), 0o600);
     }
 }
@@ -149,8 +158,6 @@ impl Default for ServerConfig {
 #[serde(default)]
 pub struct AgentConfig {
     pub name: String,
-    /// System prompt set explicitly by the user (kept on full reset).
-    pub system_prompt: String,
     pub language: String,
     /// `provider_id/model_name`
     pub default_model: String,
@@ -165,7 +172,6 @@ impl Default for AgentConfig {
     fn default() -> Self {
         AgentConfig {
             name: "Alice".into(),
-            system_prompt: String::new(),
             language: "ja".into(),
             default_model: String::new(),
             max_steps: 16,
@@ -304,7 +310,10 @@ pub struct ToolsConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FsConfig {
-    /// Directories the file tools may access. Empty = `~/.alice/workspace` only.
+    /// Working folder: relative paths resolve here and it is always
+    /// accessible. Empty = `~/.alice/workspace`.
+    pub workspace: String,
+    /// Additional folders the file tools may access.
     pub roots: Vec<String>,
 }
 
@@ -503,6 +512,19 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn soul_template_upgrade_keeps_user_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::at(dir.path());
+        paths.ensure().unwrap();
+        ensure_soul(&paths);
+        assert_eq!(read_soul(&paths), SOUL_TEMPLATE);
+        // An edited file is never replaced.
+        std::fs::write(paths.soul(), "my own soul").unwrap();
+        ensure_soul(&paths);
+        assert_eq!(read_soul(&paths), "my own soul");
+    }
 
     #[test]
     fn get_and_set_keys() {

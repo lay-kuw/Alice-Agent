@@ -165,3 +165,64 @@ async fn run(
     out.stop_reason = "end_turn".into();
     Ok(out)
 }
+
+/// Subscription rate limits from the official Codex app-server
+/// (`account/rateLimits/read`). Spends no tokens.
+pub async fn codex_rate_limits(exe: &str) -> std::result::Result<Value, String> {
+    let fut = async {
+        let mut child = Command::new(exe)
+            .arg("app-server")
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("cannot start '{exe}': {e}"))?;
+        let mut stdin = child.stdin.take().unwrap();
+        let reqs = [
+            serde_json::json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "alice", "version": env!("CARGO_PKG_VERSION") } } }),
+            serde_json::json!({ "method": "initialized" }),
+            serde_json::json!({ "id": 2, "method": "account/rateLimits/read" }),
+        ];
+        for r in reqs {
+            stdin.write_all(format!("{r}\n").as_bytes()).await.map_err(|e| e.to_string())?;
+        }
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            if v["id"] == 2 {
+                drop(stdin);
+                let _ = child.kill().await;
+                if let Some(e) = v.get("error") {
+                    return Err(e["message"].as_str().unwrap_or("codex error").to_string());
+                }
+                return Ok(v["result"].clone());
+            }
+        }
+        Err("codex app-server exited without an answer (is codex up to date and logged in?)".into())
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(20), fut).await.map_err(|_| "codex did not answer".to_string())?
+}
+
+/// Reduce the app-server answer to what Alice shows.
+pub fn summarize_rate_limits(v: &Value) -> Value {
+    let rl = &v["rateLimits"];
+    let window = |w: &Value| {
+        if w.is_null() {
+            return Value::Null;
+        }
+        serde_json::json!({
+            "used_percent": w["usedPercent"],
+            "window_minutes": w["windowDurationMins"],
+            "resets_at": w["resetsAt"].as_i64().map(|s| s * 1000),
+        })
+    };
+    serde_json::json!({
+        "plan": rl["planType"],
+        "primary": window(&rl["primary"]),
+        "secondary": window(&rl["secondary"]),
+        "limit_reached": rl["rateLimitReachedType"],
+        "reset_credits": v.pointer("/rateLimitResetCredits/availableCount"),
+    })
+}

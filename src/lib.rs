@@ -12,6 +12,7 @@ pub mod providers;
 pub mod server;
 pub mod storage;
 pub mod tools;
+pub mod usage;
 
 use config::{Config, Paths, Secrets};
 

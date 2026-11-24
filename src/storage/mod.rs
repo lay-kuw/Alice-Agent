@@ -315,6 +315,21 @@ pub fn db_size_bytes(path: &Path) -> u64 {
     total
 }
 
+/// Tokens reported by providers for assistant messages since `since_ms`,
+/// per model: (model, input, output, responses). Deleted threads are not counted.
+pub fn token_usage(c: &Connection, since_ms: i64) -> rusqlite::Result<Vec<(String, i64, i64, i64)>> {
+    let mut st = c.prepare_cached(
+        "SELECT COALESCE(model, ''),
+                SUM(COALESCE(json_extract(meta, '$.usage.input_tokens'), 0)),
+                SUM(COALESCE(json_extract(meta, '$.usage.output_tokens'), 0)),
+                COUNT(*)
+         FROM messages
+         WHERE role = 'assistant' AND created_at >= ?1 AND json_valid(meta)
+         GROUP BY 1 ORDER BY 3 DESC",
+    )?;
+    st.query_map([since_ms], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

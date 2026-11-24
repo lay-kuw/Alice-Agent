@@ -281,6 +281,7 @@ const HELP: &str = "Commands:
   /rename <title>   rename this thread
   /delete           delete this thread (and memories derived from it)
   /attach <path>    attach a file to the next message
+  /usage            subscription limits and tokens used
   /help             this help
   /exit             quit
 End a line with \\ to continue on the next line. Ctrl-C stops a response.";
@@ -323,6 +324,7 @@ pub async fn interactive(client: &Client, thread: Option<String>) -> CliResult<(
                         println!("{}", dim("new thread"));
                     }
                     "list" | "ls" => list(client).await?,
+                    "usage" => print!("{}", crate::usage::render_text(&client.get("/usage").await?)),
                     "open" | "switch" => {
                         let v = client.get(&format!("/threads/{arg}")).await?;
                         let id = v.pointer("/thread/id").and_then(|i| i.as_str()).unwrap_or(arg).to_string();

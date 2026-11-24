@@ -45,7 +45,22 @@ enum Overlay {
     Help,
     ConfirmDelete,
     Rename(String),
+    /// `None` while loading.
+    Usage(Option<Result<Value, String>>),
 }
+
+/// Slash commands: (command, argument hint, description).
+const COMMANDS: [(&str, &str, &str); 9] = [
+    ("/new", "", "Start a new chat"),
+    ("/threads", "", "Browse and switch threads"),
+    ("/model", "", "Choose the model for this thread"),
+    ("/rename", "<title>", "Rename this thread"),
+    ("/delete", "", "Delete this thread and its memories"),
+    ("/attach", "<path>", "Attach a file to the next message"),
+    ("/usage", "", "Subscription limits and tokens used"),
+    ("/help", "", "Keys and commands"),
+    ("/exit", "", "Quit"),
+];
 
 struct App {
     client: Client,
@@ -66,9 +81,33 @@ struct App {
     pending_attachments: Vec<String>,
     quit: bool,
     connected: bool,
+    /// Selected slash-command suggestion.
+    suggest: usize,
+    /// Results of background requests, delivered through the event loop.
+    bg: Option<mpsc::UnboundedSender<Value>>,
 }
 
 impl App {
+    /// Commands matching the input while typing a bare `/command`.
+    fn suggestions(&self) -> Vec<(&'static str, &'static str, &'static str)> {
+        if self.input.first() != Some(&'/') || self.input.iter().any(|c| c.is_whitespace()) {
+            return vec![];
+        }
+        let typed: String = self.input.iter().collect();
+        COMMANDS.iter().copied().filter(|(c, _, _)| c.starts_with(typed.as_str())).collect()
+    }
+
+    fn open_usage(&mut self) {
+        self.overlay = Overlay::Usage(None);
+        let (c, tx) = (self.client.clone(), self.bg.clone());
+        tokio::spawn(async move {
+            let r = c.get("/usage").await;
+            if let Some(tx) = tx {
+                let _ = tx.send(json!({ "type": "usage.loaded", "result": match r { Ok(v) => json!({ "ok": v }), Err(e) => json!({ "err": e }) } }));
+            }
+        });
+    }
+
     fn thread(&self) -> Option<&Value> {
         let id = self.current.as_deref()?;
         self.threads.iter().find(|t| t["id"] == id)
@@ -150,7 +189,7 @@ impl App {
             return;
         }
         if self.generating {
-            self.note("応答中です（Esc で停止）");
+            self.note("Still replying — press Esc to stop");
             return;
         }
         let id = match self.ensure_thread().await {
@@ -203,7 +242,7 @@ impl App {
                             match self.client.upload(&id, name, bytes).await {
                                 Ok(v) => {
                                     self.pending_attachments.push(v["id"].as_str().unwrap_or("").to_string());
-                                    self.note(format!("📎 {name} を添付しました"));
+                                    self.note(format!("📎 attached {name}"));
                                 }
                                 Err(e) => self.error(e),
                             }
@@ -213,8 +252,9 @@ impl App {
                     Err(e) => self.error(format!("{arg}: {e}")),
                 }
             }
+            "/usage" => self.open_usage(),
             "/help" | "/?" => self.overlay = Overlay::Help,
-            _ => self.error(format!("不明なコマンド: {cmd}（/help）")),
+            _ => self.error(format!("Unknown command: {cmd} (try /help)")),
         }
     }
 
@@ -252,7 +292,7 @@ impl App {
                 self.threads.retain(|t| t["id"] != v["thread_id"]);
                 if here {
                     self.new_chat();
-                    self.note("このスレッドは削除されました");
+                    self.note("This thread was deleted");
                 }
             }
             "threads.cleared" => {
@@ -289,7 +329,7 @@ impl App {
                 if here || v["client"] == "cli" {
                     self.overlay = Overlay::Approval(v);
                 } else {
-                    self.note(format!("承認待ち: {}（別のスレッド）", v["tool"].as_str().unwrap_or("")));
+                    self.note(format!("Approval needed for {} in another thread", v["tool"].as_str().unwrap_or("")));
                 }
             }
             "tool.approval_resolved" => {
@@ -299,6 +339,14 @@ impl App {
                     }
             }
             "config.updated" => self.reload_models().await,
+            "usage.loaded" => {
+                if let Overlay::Usage(slot) = &mut self.overlay {
+                    *slot = Some(match v["result"].get("ok") {
+                        Some(ok) => Ok(ok.clone()),
+                        None => Err(v["result"]["err"].as_str().unwrap_or("failed").to_string()),
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -312,7 +360,7 @@ impl App {
         // Overlays first.
         match &mut self.overlay {
             Overlay::None => {}
-            Overlay::Help => {
+            Overlay::Help | Overlay::Usage(_) => {
                 self.overlay = Overlay::None;
                 return;
             }
@@ -404,12 +452,46 @@ impl App {
                                 }
                                 None => self.pending_model = Some(m.clone()),
                             }
-                            self.note(format!("モデル: {m}"));
+                            self.note(format!("Model: {m}"));
                         }
                     }
                     _ => {}
                 }
                 return;
+            }
+        }
+        let sugg = self.suggestions();
+        if !sugg.is_empty() {
+            let n = sugg.len();
+            let sel = self.suggest.min(n - 1);
+            match k.code {
+                KeyCode::Up => {
+                    self.suggest = (sel + n - 1) % n;
+                    return;
+                }
+                KeyCode::Down => {
+                    self.suggest = (sel + 1) % n;
+                    return;
+                }
+                KeyCode::Tab | KeyCode::Enter => {
+                    let (cmd, arg, _) = sugg[sel];
+                    self.suggest = 0;
+                    if !arg.is_empty() || k.code == KeyCode::Tab {
+                        self.input = format!("{cmd}{}", if arg.is_empty() { "" } else { " " }).chars().collect();
+                        self.cursor = self.input.len();
+                    } else {
+                        self.input.clear();
+                        self.cursor = 0;
+                        self.command(cmd).await;
+                    }
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.input.clear();
+                    self.cursor = 0;
+                    return;
+                }
+                _ => {}
             }
         }
         match k.code {
@@ -467,6 +549,7 @@ impl App {
     fn insert(&mut self, c: char) {
         self.input.insert(self.cursor, c);
         self.cursor += 1;
+        self.suggest = 0;
     }
 }
 
@@ -696,7 +779,7 @@ fn conversation(app: &App, width: usize) -> Vec<Line<'static>> {
                         format!(" ⚠ {}", m.pointer("/meta/error").and_then(|e| e.as_str()).unwrap_or("error")),
                         s(RED),
                     ))),
-                    "cancelled" => out.push(Line::from(Span::styled(" （停止しました）", s(MUTED)))),
+                    "cancelled" => out.push(Line::from(Span::styled(" (stopped)", s(MUTED)))),
                     "complete" if calls.is_empty() => {
                         let secs = m.pointer("/meta/provider_ms").and_then(|n| n.as_u64()).unwrap_or(0) as f64 / 1000.0;
                         out.push(Line::from(Span::styled(format!("{} · {secs:.1}s", m["model"].as_str().unwrap_or("")), s(FAINT))));
@@ -729,45 +812,71 @@ fn popup<'a>(title: &'a str) -> Block<'a> {
         .title(Span::styled(format!(" {title} "), s(PINK).add_modifier(Modifier::BOLD)))
 }
 
+const GRADIENT: [Color; 5] = [PINK, Color::Rgb(226, 152, 228), LAVENDER, Color::Rgb(150, 190, 240), MINT];
+
+/// Three-line masthead: wordmark + thread title, details, a soft rule.
+fn header(f: &mut Frame, app: &App, area: Rect) {
+    let mut l1: Vec<Span> = vec![Span::raw("  ")];
+    for (i, ch) in "✿ alice".chars().enumerate() {
+        let c = if ch == '✿' { PINK } else { GRADIENT[(i - 1).min(4)] };
+        l1.push(Span::styled(ch.to_string(), Style::default().fg(c).add_modifier(Modifier::BOLD)));
+    }
+    let title = app.thread().and_then(|t| t["title"].as_str()).filter(|t| !t.is_empty()).unwrap_or("new chat").to_string();
+    l1.push(Span::styled("   ", s(FAINT)));
+    l1.push(Span::styled(title, s(TEXT).add_modifier(Modifier::BOLD)));
+
+    let (dot, state) = if app.connected { (MINT, "online") } else { (RED, "offline") };
+    let right = vec![Span::styled("● ", s(dot)), Span::styled(state, s(MUTED)), Span::raw("  ")];
+    let rw: usize = right.iter().map(|s| s.content.width()).sum();
+
+    let mut l2 = vec![
+        Span::raw("    "),
+        Span::styled(" ◆ ", s(LAVENDER)),
+        Span::styled(app.model(), s(LAVENDER)),
+        Span::raw(" "),
+    ];
+    if app.profile != "default" {
+        l2.push(Span::styled("  ◆ ", s(PEACH)));
+        l2.push(Span::styled(format!("profile {}", app.profile), s(PEACH)));
+    }
+    if !app.pending_attachments.is_empty() {
+        l2.push(Span::styled(format!("  📎 {}", app.pending_attachments.len()), s(MINT)));
+    }
+
+    let w = area.width.saturating_sub(4) as usize;
+    let rule: Vec<Span> = (0..w)
+        .map(|i| Span::styled("─", s(GRADIENT[i * GRADIENT.len() / w.max(1)]).add_modifier(Modifier::DIM)))
+        .collect();
+    let mut l3 = vec![Span::raw("  ")];
+    l3.extend(rule);
+
+    f.render_widget(Paragraph::new(vec![Line::from(l1), Line::from(l2), Line::from(l3)]), area);
+    if area.width as usize > rw + 20 {
+        let r = Rect { x: area.x + area.width - rw as u16, width: rw as u16, height: 1, ..area };
+        f.render_widget(Paragraph::new(Line::from(right)), r);
+    }
+}
+
 fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let input_text: String = app.input.iter().collect();
     let input_width = area.width.saturating_sub(6) as usize;
     let input_lines: usize = input_text.split('\n').map(|l| (l.width() / input_width.max(1)) + 1).sum::<usize>().clamp(1, 8);
-    let [header, body, input, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(input_lines as u16 + 2),
-        Constraint::Length(1),
-    ])
-    .areas(area);
-
-    // Header
-    let title = app.thread().and_then(|t| t["title"].as_str()).filter(|t| !t.is_empty()).unwrap_or("新しいチャット").to_string();
-    let dot = if app.connected { Span::styled("●", s(MINT)) } else { Span::styled("●", s(RED)) };
-    let mut right = vec![Span::styled(app.model(), s(MUTED))];
-    if app.profile != "default" {
-        right.push(Span::styled(format!(" · {}", app.profile), s(PEACH)));
-    }
-    right.push(Span::raw(" "));
-    right.push(dot);
-    let rw: usize = right.iter().map(|s| s.content.width()).sum();
-    let left = vec![Span::styled(" ✿ Alice ", s(PINK).add_modifier(Modifier::BOLD)), Span::styled(title, s(TEXT))];
-    f.render_widget(Paragraph::new(Line::from(left)), header);
-    let rarea = Rect { x: header.x + header.width.saturating_sub(rw as u16 + 1), width: rw as u16 + 1, ..header };
-    f.render_widget(Paragraph::new(Line::from(right)), rarea);
+    let head_h = if area.height >= 12 { 3 } else { 1 };
+    let [head, body, input] =
+        Layout::vertical([Constraint::Length(head_h), Constraint::Min(3), Constraint::Length(input_lines as u16 + 2)]).areas(area);
+    header(f, app, head);
 
     // Conversation
-    let inner = Rect { x: body.x + 2, width: body.width.saturating_sub(4), ..body };
+    let inner = Rect { x: body.x + 2, y: body.y + 1.min(body.height), width: body.width.saturating_sub(4), height: body.height.saturating_sub(1) };
     if app.messages.is_empty() {
         let h = inner.height / 2;
         let lines = vec![
-            Line::default(),
             Line::from(Span::styled("✿", s(PINK).add_modifier(Modifier::BOLD))).alignment(Alignment::Center),
-            Line::from(Span::styled("なにをお手伝いしましょう？", s(TEXT).add_modifier(Modifier::BOLD))).alignment(Alignment::Center),
-            Line::from(Span::styled("Enter で送信 · Ctrl+T スレッド · Ctrl+O モデル · ? ヘルプ", s(MUTED))).alignment(Alignment::Center),
+            Line::from(Span::styled("What can I help with?", s(TEXT).add_modifier(Modifier::BOLD))).alignment(Alignment::Center),
+            Line::from(Span::styled("type / for commands", s(FAINT))).alignment(Alignment::Center),
         ];
-        f.render_widget(Paragraph::new(lines), Rect { y: inner.y + h.saturating_sub(3), height: 5.min(inner.height), ..inner });
+        f.render_widget(Paragraph::new(lines), Rect { y: inner.y + h.saturating_sub(2), height: 3.min(inner.height), ..inner });
     } else {
         let lines = conversation(app, inner.width as usize);
         let total = lines.len();
@@ -777,7 +886,7 @@ fn draw(f: &mut Frame, app: &App) {
         let start = total.saturating_sub(view + scroll);
         let visible: Vec<Line> = lines.into_iter().skip(start).take(view).collect();
         f.render_widget(Paragraph::new(visible), inner);
-        if scroll > 0 {
+        if scroll > 0 && inner.height > 0 {
             let tag = Span::styled(format!(" ↓ {scroll} "), Style::default().fg(Color::Black).bg(LAVENDER));
             f.render_widget(Paragraph::new(Line::from(tag)).alignment(Alignment::Right), Rect { y: inner.y + inner.height - 1, height: 1, ..inner });
         }
@@ -785,32 +894,28 @@ fn draw(f: &mut Frame, app: &App) {
 
     // Input
     let border = if app.generating { LAVENDER } else { PINK };
-    let mut label = if app.generating { format!(" {} 考え中… Esc で停止 ", SPINNER[app.spin % 4]) } else { " メッセージ ".to_string() };
-    if !app.pending_attachments.is_empty() {
-        label.push_str(&format!("· 📎 {} ", app.pending_attachments.len()));
+    let mut block = Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(s(border));
+    if app.generating {
+        block = block.title(Span::styled(format!(" {} thinking · esc to stop ", SPINNER[app.spin % 4]), s(LAVENDER)));
     }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(s(border))
-        .title(Span::styled(label, s(border)));
+    match &app.notice {
+        Some((msg, true)) => block = block.title_bottom(Span::styled(format!(" ⚠ {msg} "), s(RED))),
+        Some((msg, false)) => block = block.title_bottom(Span::styled(format!(" ✿ {msg} "), s(MINT))),
+        None => {}
+    }
     let in_inner = block.inner(input);
     f.render_widget(block, input);
     let mut ilines: Vec<Line> = Vec::new();
     let mut cursor_pos = (0u16, 0u16);
-    let before: String = app.input[..app.cursor].iter().collect();
     let width = in_inner.width.saturating_sub(2).max(1) as usize;
     // Lay out input with soft wraps, tracking the cursor.
     let mut row = 0usize;
     let mut col = 0usize;
     let mut cur_line: Vec<Span> = vec![Span::styled("› ", s(PINK))];
-    let mut idx = 0usize;
-    let before_len = before.chars().count();
-    for ch in input_text.chars() {
-        if idx == before_len {
+    for (idx, ch) in input_text.chars().enumerate() {
+        if idx == app.cursor {
             cursor_pos = (col as u16, row as u16);
         }
-        idx += 1;
         if ch == '\n' {
             ilines.push(Line::from(std::mem::take(&mut cur_line)));
             cur_line.push(Span::raw("  "));
@@ -828,41 +933,43 @@ fn draw(f: &mut Frame, app: &App) {
         cur_line.push(Span::styled(ch.to_string(), s(TEXT)));
         col += w;
     }
-    if idx == before_len {
+    if app.cursor >= app.input.len() {
         cursor_pos = (col as u16, row as u16);
     }
     ilines.push(Line::from(cur_line));
     if app.input.is_empty() {
-        ilines = vec![Line::from(vec![Span::styled("› ", s(PINK)), Span::styled("Alice にメッセージ…", s(FAINT))])];
+        ilines = vec![Line::from(vec![Span::styled("› ", s(PINK)), Span::styled("Message Alice…", s(FAINT))])];
     }
     let skip = (cursor_pos.1 as usize + 1).saturating_sub(in_inner.height as usize);
     f.render_widget(Paragraph::new(ilines.into_iter().skip(skip).collect::<Vec<_>>()), in_inner);
-    if matches!(app.overlay, Overlay::None) {
+    if matches!(app.overlay, Overlay::None) && in_inner.height > 0 {
         f.set_cursor_position(Position::new(in_inner.x + 2 + cursor_pos.0, in_inner.y + cursor_pos.1 - skip as u16));
     }
 
-    // Footer
-    let foot = match &app.notice {
-        Some((msg, true)) => Line::from(Span::styled(format!(" ⚠ {msg}"), s(RED))),
-        Some((msg, false)) => Line::from(Span::styled(format!(" ✿ {msg}"), s(MINT))),
-        None => Line::from(vec![
-            Span::styled(" ⏎", s(PINK)),
-            Span::styled(" 送信  ", s(MUTED)),
-            Span::styled("⌥⏎", s(PINK)),
-            Span::styled(" 改行  ", s(MUTED)),
-            Span::styled("^T", s(PINK)),
-            Span::styled(" スレッド  ", s(MUTED)),
-            Span::styled("^N", s(PINK)),
-            Span::styled(" 新規  ", s(MUTED)),
-            Span::styled("^O", s(PINK)),
-            Span::styled(" モデル  ", s(MUTED)),
-            Span::styled("?", s(PINK)),
-            Span::styled(" ヘルプ  ", s(MUTED)),
-            Span::styled("^C", s(PINK)),
-            Span::styled(" 終了", s(MUTED)),
-        ]),
-    };
-    f.render_widget(Paragraph::new(foot), footer);
+    // Slash-command suggestions, floating just above the input.
+    let sugg = app.suggestions();
+    if !sugg.is_empty() && matches!(app.overlay, Overlay::None) {
+        let h = (sugg.len() as u16 + 2).min(input.y.saturating_sub(area.y));
+        let w = 58.min(area.width.saturating_sub(4));
+        let r = Rect { x: input.x + 2, y: input.y.saturating_sub(h), width: w, height: h };
+        let sel = app.suggest.min(sugg.len() - 1);
+        let items: Vec<ListItem> = sugg
+            .iter()
+            .map(|(c, a, d)| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{c:<9}"), s(PINK).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{a:<8} "), s(FAINT)),
+                    Span::styled(d.to_string(), s(TEXT)),
+                ]))
+            })
+            .collect();
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(s(FAINT)).title_bottom(Span::styled(" ↑↓ select · tab complete · ⏎ run ", s(FAINT))))
+            .highlight_style(Style::default().bg(BUBBLE))
+            .highlight_symbol("✿ ");
+        f.render_widget(Clear, r);
+        f.render_stateful_widget(list, r, &mut ListState::default().with_selected(Some(sel)));
+    }
 
     // Overlays
     match &app.overlay {
@@ -874,7 +981,7 @@ fn draw(f: &mut Frame, app: &App) {
                 .threads
                 .iter()
                 .map(|t| {
-                    let title = t["title"].as_str().filter(|s| !s.is_empty()).unwrap_or("（無題）");
+                    let title = t["title"].as_str().filter(|s| !s.is_empty()).unwrap_or("(untitled)");
                     let when = crate::util::fmt_utc(t["updated_at"].as_i64().unwrap_or(0));
                     let mark = if Some(t["id"].as_str().unwrap_or("")) == app.current.as_deref() { "● " } else { "  " };
                     ListItem::new(Line::from(vec![
@@ -885,7 +992,7 @@ fn draw(f: &mut Frame, app: &App) {
                 })
                 .collect();
             let list = List::new(items)
-                .block(popup("スレッド  ⏎ 開く · n 新規 · d 削除 · Esc"))
+                .block(popup("Threads  ⏎ open · n new · d delete · esc"))
                 .highlight_style(Style::default().bg(BUBBLE).add_modifier(Modifier::BOLD))
                 .highlight_symbol("✿ ");
             let mut st = *state;
@@ -904,12 +1011,12 @@ fn draw(f: &mut Frame, app: &App) {
                         spans.push(Span::styled("  ✓", s(MINT)));
                     }
                     if *m == app.default_model {
-                        spans.push(Span::styled("  既定", s(FAINT)));
+                        spans.push(Span::styled("  default", s(FAINT)));
                     }
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
-            let list = List::new(items).block(popup("モデル  ⏎ 選択 · Esc")).highlight_style(Style::default().bg(BUBBLE)).highlight_symbol("✿ ");
+            let list = List::new(items).block(popup("Model  ⏎ select · esc")).highlight_style(Style::default().bg(BUBBLE)).highlight_symbol("✿ ");
             let mut st = *state;
             f.render_stateful_widget(list, r, &mut st);
         }
@@ -919,9 +1026,9 @@ fn draw(f: &mut Frame, app: &App) {
             let args = serde_json::to_string_pretty(&a["arguments"]).unwrap_or_default();
             let mut lines = vec![
                 Line::from(vec![
-                    Span::styled("🔐 ", s(PEACH)),
+                    Span::styled("🔐 Allow ", s(TEXT)),
                     Span::styled(a["tool"].as_str().unwrap_or("").to_string(), s(PEACH).add_modifier(Modifier::BOLD)),
-                    Span::styled(" を実行してもいい？", s(TEXT)),
+                    Span::styled(" to run?", s(TEXT)),
                 ]),
                 Line::default(),
             ];
@@ -931,58 +1038,111 @@ fn draw(f: &mut Frame, app: &App) {
             lines.push(Line::default());
             lines.push(Line::from(vec![
                 Span::styled(" y ", Style::default().fg(Color::Black).bg(MINT)),
-                Span::styled(" 許可   ", s(TEXT)),
+                Span::styled(" allow   ", s(TEXT)),
                 Span::styled(" n ", Style::default().fg(Color::Black).bg(RED)),
-                Span::styled(" 拒否", s(TEXT)),
+                Span::styled(" deny", s(TEXT)),
             ]));
-            f.render_widget(Paragraph::new(lines).block(popup("確認")), r);
+            f.render_widget(Paragraph::new(lines).block(popup("Approval")), r);
         }
         Overlay::ConfirmDelete => {
             let r = centered(area, 54, 6);
             f.render_widget(Clear, r);
             let lines = vec![
-                Line::from(Span::styled("このスレッドを削除しますか？", s(TEXT).add_modifier(Modifier::BOLD))),
-                Line::from(Span::styled("ここから覚えたことも一緒に消えます。", s(MUTED))),
+                Line::from(Span::styled("Delete this thread?", s(TEXT).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled("Memories learned from it are deleted too.", s(MUTED))),
                 Line::from(vec![
                     Span::styled(" y ", Style::default().fg(Color::Black).bg(RED)),
-                    Span::styled(" 削除   ", s(TEXT)),
-                    Span::styled(" Esc ", Style::default().fg(Color::Black).bg(MUTED)),
-                    Span::styled(" やめる", s(TEXT)),
+                    Span::styled(" delete   ", s(TEXT)),
+                    Span::styled(" esc ", Style::default().fg(Color::Black).bg(MUTED)),
+                    Span::styled(" cancel", s(TEXT)),
                 ]),
             ];
-            f.render_widget(Paragraph::new(lines).block(popup("削除")), r);
+            f.render_widget(Paragraph::new(lines).block(popup("Delete")), r);
         }
         Overlay::Rename(buf) => {
             let r = centered(area, 60, 3);
             f.render_widget(Clear, r);
-            f.render_widget(Paragraph::new(Line::from(Span::styled(buf.clone(), s(TEXT)))).block(popup("名前を変更  ⏎ 保存 · Esc")), r);
+            f.render_widget(Paragraph::new(Line::from(Span::styled(buf.clone(), s(TEXT)))).block(popup("Rename  ⏎ save · esc")), r);
             f.set_cursor_position(Position::new(r.x + 1 + buf.width() as u16, r.y + 1));
         }
-        Overlay::Help => {
-            let r = centered(area, 62, 19);
+        Overlay::Usage(state) => {
+            let lines = usage_lines(state, app.spin);
+            let r = centered(area, 74, lines.len() as u16 + 2);
             f.render_widget(Clear, r);
-            let row = |k: &str, d: &str| Line::from(vec![Span::styled(format!("  {k:<14}"), s(PINK)), Span::styled(d.to_string(), s(TEXT))]);
-            let lines = vec![
-                row("Enter", "送信"),
-                row("Alt+Enter / ^J", "改行"),
-                row("Esc", "応答を止める"),
-                row("Ctrl+T", "スレッド一覧"),
-                row("Ctrl+N", "新しいチャット"),
-                row("Ctrl+O", "モデルを選ぶ"),
-                row("PgUp / PgDn", "スクロール（ホイールでも）"),
-                row("Ctrl+C", "停止 / 終了"),
+            f.render_widget(Paragraph::new(lines).block(popup("Usage")), r);
+        }
+        Overlay::Help => {
+            let r = centered(area, 62, 22);
+            f.render_widget(Clear, r);
+            let row = |k: &str, d: &str| Line::from(vec![Span::styled(format!("  {k:<16}"), s(PINK)), Span::styled(d.to_string(), s(TEXT))]);
+            let mut lines = vec![
+                row("enter", "send"),
+                row("alt+enter / ^J", "new line"),
+                row("esc", "stop the reply"),
+                row("ctrl+t", "threads"),
+                row("ctrl+n", "new chat"),
+                row("ctrl+o", "model"),
+                row("pgup / pgdn", "scroll (or mouse wheel)"),
+                row("ctrl+c", "stop / quit"),
                 Line::default(),
-                row("/rename 名前", "スレッド名を変更"),
-                row("/delete", "スレッドを削除"),
-                row("/attach パス", "ファイルを添付"),
-                row("/new /threads", "新規 / 一覧"),
-                row("/exit", "終了"),
-                Line::default(),
-                Line::from(Span::styled("  なにかキーを押すと閉じます", s(FAINT))),
             ];
-            f.render_widget(Paragraph::new(lines).block(popup("ヘルプ")), r);
+            for (c, a, d) in COMMANDS {
+                lines.push(row(&format!("{c} {a}"), d));
+            }
+            lines.push(Line::from(Span::styled("  press any key to close", s(FAINT))));
+            f.render_widget(Paragraph::new(lines).block(popup("Help")), r);
         }
     }
+}
+
+fn usage_lines(state: &Option<Result<Value, String>>, spin: usize) -> Vec<Line<'static>> {
+    let v = match state {
+        None => return vec![Line::from(Span::styled(format!(" {} checking…", SPINNER[spin % 4]), s(MUTED)))],
+        Some(Err(e)) => return vec![Line::from(Span::styled(format!(" ⚠ {e}"), s(RED)))],
+        Some(Ok(v)) => v,
+    };
+    let mut out = Vec::new();
+    let subs = v["subscriptions"].as_array().cloned().unwrap_or_default();
+    if subs.is_empty() {
+        out.push(Line::from(Span::styled(" No subscription (codex-cli) providers.", s(MUTED))));
+    }
+    for sub in &subs {
+        let plan = sub.pointer("/limits/plan").and_then(|p| p.as_str()).unwrap_or("").to_string();
+        out.push(Line::from(vec![
+            Span::styled(format!(" {}", sub["id"].as_str().unwrap_or("")), s(LAVENDER).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {plan}"), s(FAINT)),
+        ]));
+        if sub["ok"] != true {
+            out.push(Line::from(Span::styled(format!("   {}", sub["error"].as_str().unwrap_or("")), s(RED))));
+            continue;
+        }
+        for (name, used, reset) in crate::usage::windows(&sub["limits"]) {
+            let col = if used >= 90.0 { RED } else if used >= 70.0 { PEACH } else { MINT };
+            out.push(Line::from(vec![
+                Span::styled(format!("   {name:<7}"), s(TEXT)),
+                Span::styled(crate::usage::bar(used, 20), s(col)),
+                Span::styled(format!(" {:>3.0}% left", 100.0 - used), s(TEXT).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("  resets {reset}"), s(MUTED)),
+            ]));
+        }
+    }
+    for (label, key) in [("last 24h", "day"), ("last 30 days", "month")] {
+        out.push(Line::default());
+        out.push(Line::from(Span::styled(format!(" tokens · {label}"), s(LAVENDER).add_modifier(Modifier::BOLD))));
+        let rows = v["tokens"][key].as_array().cloned().unwrap_or_default();
+        if rows.is_empty() {
+            out.push(Line::from(Span::styled("   —", s(FAINT))));
+        }
+        for r in rows.iter().take(5) {
+            out.push(Line::from(vec![
+                Span::styled(format!("   {:<26}", crate::util::truncate(r["model"].as_str().unwrap_or(""), 26)), s(TEXT)),
+                Span::styled(format!("in {:>7}", crate::usage::compact(r["input_tokens"].as_i64().unwrap_or(0))), s(MUTED)),
+                Span::styled(format!("  out {:>7}", crate::usage::compact(r["output_tokens"].as_i64().unwrap_or(0))), s(MUTED)),
+                Span::styled(format!("  {} replies", r["responses"]), s(FAINT)),
+            ]));
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------ run
@@ -1007,6 +1167,8 @@ pub async fn run(client: &Client, thread: Option<String>, profile: &str) -> CliR
         pending_attachments: vec![],
         quit: false,
         connected: false,
+        suggest: 0,
+        bg: None,
     };
     // Fail early (before taking over the screen) if the server is unreachable.
     app.client.get("/threads").await?;
@@ -1018,6 +1180,7 @@ pub async fn run(client: &Client, thread: Option<String>, profile: &str) -> CliR
 
     // Server events on a task; terminal input on a thread.
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Value>();
+    app.bg = Some(ev_tx.clone());
     let c2 = client.clone();
     let events_task = tokio::spawn(async move {
         loop {
@@ -1074,7 +1237,7 @@ pub async fn run(client: &Client, thread: Option<String>, profile: &str) -> CliR
                     }
                 }
                 // Animate only while something is happening (no idle CPU).
-                _ = tick.tick(), if app.generating => app.spin += 1,
+                _ = tick.tick(), if app.generating || matches!(app.overlay, Overlay::Usage(None)) => app.spin += 1,
             }
         }
     }
@@ -1131,6 +1294,8 @@ mod tests {
             pending_attachments: vec![],
             quit: false,
             connected: true,
+            suggest: 0,
+            bg: None,
         }
     }
 
@@ -1159,7 +1324,7 @@ mod tests {
         for (w, h) in [(96, 30), (40, 12), (20, 6)] {
             let s = screen(&app, w, h); // must not panic on small terminals
             if w == 96 {
-                assert!(s.contains("Alice") && s.contains("週末の予定") && s.contains("eve"), "{s}");
+                assert!(s.contains("alice") && s.contains("週末の予定") && s.contains("profile eve") && s.contains("online"), "{s}");
                 assert!(s.contains("you") && s.contains("伏見稲荷大社") && s.contains("•"), "{s}");
                 assert!(s.contains("calendar_create") && s.contains("雨だったら"), "{s}");
                 assert!(!s.contains("**"), "markdown markers leaked: {s}");
@@ -1168,14 +1333,24 @@ mod tests {
         app.overlay = Overlay::Approval(json!({ "approval_id": "a", "tool": "fs_delete", "arguments": { "path": "x" } }));
         assert!(screen(&app, 96, 30).contains("fs_delete"));
         app.overlay = Overlay::Threads(ListState::default().with_selected(Some(0)));
-        assert!(screen(&app, 96, 30).contains("スレッド"));
+        assert!(screen(&app, 96, 30).contains("Threads"));
         app.overlay = Overlay::Help;
-        assert!(screen(&app, 96, 30).contains("ヘルプ"));
+        assert!(screen(&app, 96, 30).contains("/usage"));
+        app.overlay = Overlay::Usage(Some(Ok(json!({
+            "subscriptions": [{ "id": "codex-cli", "ok": true, "limits": { "plan": "plus",
+                "primary": { "used_percent": 30, "window_minutes": 300, "resets_at": crate::util::now_ms() + 3_600_000 } } }],
+            "tokens": { "day": [{ "model": "codex-cli/default", "input_tokens": 1200, "output_tokens": 300, "responses": 2 }], "month": [] } }))));
+        let u = screen(&app, 96, 30);
+        assert!(u.contains("70% left") && u.contains("1.2k"), "{u}");
         app.messages.clear();
+        app.input = vec!['/', 'r'];
+        app.cursor = 2;
+        app.overlay = Overlay::None;
+        let sg = screen(&app, 96, 30);
+        assert!(sg.contains("/rename") && !sg.contains("/usage"), "{sg}");
         app.input.clear();
         app.cursor = 0;
-        app.overlay = Overlay::None;
-        assert!(screen(&app, 96, 30).contains("なにをお手伝い"));
+        assert!(screen(&app, 96, 30).contains("What can I help with?"));
     }
 
     #[test]

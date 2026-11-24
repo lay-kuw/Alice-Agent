@@ -20,7 +20,7 @@
 </div>
 
 <div id="app" class="app hidden">
-  <aside id="sidebar" class="sidebar glass">
+  <aside id="sidebar" class="sidebar">
     <div class="side-head">
       <div class="brand"><span class="logo">Alice</span><span id="profile-tag" class="profile-tag"></span></div>
       <button id="new-chat" class="primary wide" data-i18n="newChat"></button>
@@ -32,23 +32,19 @@
   </aside>
   <div id="scrim" class="scrim"></div>
 
-  <main class="main glass">
+  <main class="main">
     <header class="top">
       <button id="toggle-side" class="ghost icon" aria-label="Threads">☰</button>
       <div id="thread-title" class="title"></div>
       <select id="model-select" aria-label="Model"></select>
-      <button id="thread-menu" class="ghost icon" aria-label="Thread actions">⋯</button>
     </header>
-    <div id="menu" class="menu hidden">
-      <button data-act="rename" data-i18n="rename"></button>
-      <button data-act="delete" class="danger" data-i18n="deleteThread"></button>
-    </div>
 
     <section id="messages" class="messages" aria-live="polite">
       <div id="empty" class="empty"><h2 data-i18n="empty"></h2></div>
     </section>
 
     <form id="composer" class="composer">
+      <div id="slash" class="slash hidden" role="listbox"></div>
       <div id="attach-list" class="attach-list"></div>
       <div class="composer-row">
         <label class="attach" data-i18n-title="attach">＋<input id="file-input" type="file" multiple hidden></label>
@@ -78,6 +74,19 @@
       </nav>
       <div id="settings-content" class="settings-content"></div>
     </div>
+  </div>
+</div>
+<div id="thread-pop" class="menu hidden" role="menu">
+  <button data-act="rename" data-i18n="rename"></button>
+  <button data-act="delete" class="danger" data-i18n="deleteThread"></button>
+</div>
+<div id="modal" class="settings hidden" role="dialog" aria-modal="true">
+  <div class="modal-panel">
+    <header class="settings-head">
+      <h2 id="modal-title"></h2>
+      <button id="close-modal" class="ghost icon" aria-label="Close">✕</button>
+    </header>
+    <div id="modal-body" class="modal-body"></div>
   </div>
 </div>
 <div id="toast" class="toast hidden"></div>

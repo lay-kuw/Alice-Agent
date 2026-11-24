@@ -75,6 +75,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/providers", post(add_provider))
         .route("/providers/status", get(providers_status))
         .route("/channels/status", get(channels_status))
+        .route("/usage", get(usage))
         .route("/providers/{id}", axum::routing::delete(remove_provider))
         .route("/secrets/{name}", put(set_secret).delete(delete_secret))
         .route("/memories", get(list_memories).delete(clear_memories))
@@ -628,6 +629,10 @@ async fn providers_status(State(app): State<AppRef>) -> Json<Value> {
     Json(json!({ "providers": futures_util::future::join_all(checks).await }))
 }
 
+async fn usage(State(app): State<AppRef>) -> Json<Value> {
+    Json(crate::usage::collect(&app).await)
+}
+
 async fn channels_status(State(app): State<AppRef>) -> Json<Value> {
     let st = app.channel_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let get = |n: &str| st.get(n).cloned().unwrap_or(json!({ "state": "disabled", "detail": "" }));
@@ -872,7 +877,8 @@ async fn patch_config(State(app): State<AppRef>, Json(b): Json<serde_json::Map<S
 async fn list_tools(State(app): State<AppRef>) -> Json<Value> {
     let cfg = app.config();
     let roots: Vec<String> = tools::fs::Sandbox::new(&cfg, &app.paths).roots().iter().map(|p| p.display().to_string()).collect();
-    Json(json!({ "tools": tools::list_json(&cfg, &app), "fs_roots": roots }))
+    let ws = tools::fs::workspace_dir(&cfg, &app.paths).display().to_string();
+    Json(json!({ "tools": tools::list_json(&cfg, &app), "fs_roots": roots, "workspace": ws }))
 }
 
 /// Body: `{ "fs_delete": "ask", "web": "allow", ... }` (tool or group names).

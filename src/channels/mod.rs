@@ -156,6 +156,7 @@ const HELP: &str = "Alice commands:
 /delete — delete the current thread (and memories from it)
 /stop — stop the current response
 /status — current thread, model and server status
+/usage — subscription limits and tokens used
 Anything else is sent to Alice.";
 
 /// Entry point for a message from an allowed user.
@@ -440,6 +441,7 @@ async fn command<S: Surface>(app: &AppRef, s: &Arc<S>, chat: &str, text: &str) -
                 vec![],
             )
         }
+        "/usage" => (crate::usage::render_text(&crate::usage::collect(app).await), vec![]),
         _ => ("Unknown command. /help".into(), vec![]),
     })
 }

@@ -250,6 +250,7 @@ pub async fn run(app: AppRef, token: String, stop: CancellationToken) {
         ("delete", "Delete the current thread"),
         ("stop", "Stop the current response"),
         ("status", "Show status"),
+        ("usage", "Subscription limits and tokens used"),
         ("help", "Help"),
     ]
     .iter()

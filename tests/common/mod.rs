@@ -101,9 +101,8 @@ async fn chat(State(st): State<Arc<FakeLlm>>, Json(req): Json<Value>) -> axum::r
     }
     let tool_text = msgs[last_user_idx..].iter().filter(|m| m["role"] == "tool").filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("|");
     let mem: Vec<&str> = system
-        .split("<memories>")
-        .nth(1)
-        .and_then(|s| s.split("</memories>").next())
+        .rsplit_once("<memories>\n")
+        .and_then(|(_, s)| s.split("</memories>").next())
         .map(|s| s.lines().filter(|l| l.starts_with("- ")).collect())
         .unwrap_or_default();
     let reply = format!(

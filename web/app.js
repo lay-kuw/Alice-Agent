@@ -66,7 +66,15 @@ const I18N = {
     'mem.note': '削除の対象は Alice のデータベース・検索インデックス・添付ファイルです。LLM プロバイダーや Telegram/Discord に送信済みのデータは対象外です。',
     'st.memories': '記憶', 'st.sources': '出典', 'st.threads': 'スレッド', 'st.db': 'データベース', 'st.att': '添付', 'st.version': 'バージョン',
     'st.uptime': '稼働時間', 'st.mem': 'メモリ', 'st.cpu': 'CPU', 'st.messages': 'メッセージ', 'sys.logs': 'ログ', refresh: '更新',
-    profile: 'プロファイル: {p}',
+    profile: 'プロファイル: {p}', more: 'その他の操作',
+    'g.uiLang': '表示言語', 'g.soulHint': '返答の言語や口調は「人格 (SOUL)」で設定します。',
+    't.ws': '作業フォルダ', 't.wsHint': 'ファイルツールが相対パスで読み書きする場所。空欄なら ~/.alice/workspace。', 't.extra': 'ほかにアクセスを許可するフォルダ（1 行に 1 つ・任意）',
+    'cmd.new': '新しいチャット', 'cmd.model': 'このスレッドのモデルを変更', 'cmd.rename': 'このスレッドの名前を変更', 'cmd.delete': 'このスレッドを削除',
+    'cmd.attach': 'ファイルを添付', 'cmd.usage': 'サブスクの残量と使用トークン', 'cmd.soul': '人格 (SOUL) を編集', 'cmd.settings': '設定を開く', 'cmd.help': 'コマンド一覧',
+    'cmd.unknown': '不明なコマンド: {c}', 'cmd.noModel': 'モデルが見つかりません: {m}', 'cmd.noThread': 'まだスレッドがありません',
+    'u.title': '使用状況', 'u.left': '残り {p}%', 'u.reset': '{t} にリセット', 'u.none': 'サブスク（codex-cli）のプロバイダーがありません。',
+    'u.credits': 'リセット権: {n} 回', 'u.tokens': 'Alice が使ったトークン', 'u.day': '24 時間', 'u.month': '30 日', 'u.model': 'モデル', 'u.in': '入力', 'u.out': '出力', 'u.replies': '回答',
+    'u.win.5h': '5 時間枠', 'u.win.weekly': '週間枠', 'u.checking': '確認中…',
   },
   en: {
     'login.hint': 'Enter the API token shown by `alice token` on the server.', 'login.submit': 'Sign in', 'login.invalid': 'Invalid token',
@@ -119,7 +127,15 @@ const I18N = {
     'mem.note': "Deletion covers Alice's database, search index and attachments. Data already sent to LLM providers or Telegram/Discord is outside Alice's control.",
     'st.memories': 'memories', 'st.sources': 'sources', 'st.threads': 'threads', 'st.db': 'database', 'st.att': 'attachments', 'st.version': 'version',
     'st.uptime': 'uptime', 'st.mem': 'memory', 'st.cpu': 'cpu', 'st.messages': 'messages', 'sys.logs': 'Logs', refresh: 'Refresh',
-    profile: 'Profile: {p}',
+    profile: 'Profile: {p}', more: 'More actions',
+    'g.uiLang': 'Display language', 'g.soulHint': 'Reply language and tone are set in Personality (SOUL).',
+    't.ws': 'Working folder', 't.wsHint': 'Where file tools read and write relative paths. Empty = ~/.alice/workspace.', 't.extra': 'Other allowed folders (one per line, optional)',
+    'cmd.new': 'New chat', 'cmd.model': "Change this thread's model", 'cmd.rename': 'Rename this thread', 'cmd.delete': 'Delete this thread',
+    'cmd.attach': 'Attach files', 'cmd.usage': 'Subscription limits and tokens used', 'cmd.soul': 'Edit personality (SOUL)', 'cmd.settings': 'Open settings', 'cmd.help': 'List commands',
+    'cmd.unknown': 'Unknown command: {c}', 'cmd.noModel': 'No such model: {m}', 'cmd.noThread': 'No thread yet',
+    'u.title': 'Usage', 'u.left': '{p}% left', 'u.reset': 'resets {t}', 'u.none': 'No subscription (codex-cli) providers.',
+    'u.credits': 'Reset credits: {n}', 'u.tokens': 'Tokens used by Alice', 'u.day': '24 hours', 'u.month': '30 days', 'u.model': 'Model', 'u.in': 'In', 'u.out': 'Out', 'u.replies': 'Replies',
+    'u.win.5h': '5-hour window', 'u.win.weekly': 'Weekly window', 'u.checking': 'Checking…',
   },
 };
 let LANG = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
@@ -311,11 +327,40 @@ async function loadThreads() {
 
 function renderThreads() {
   $('threads').replaceChildren(...S.threads.map((th) =>
-    el('button', {
-      class: 'thread' + (th.id === S.current ? ' active' : ''), title: th.title || t('newTitle'),
-      onclick: () => { openThread(th.id); closeSide(); },
-    }, th.generating ? el('span', { class: 'dot' }) : null, el('span', { class: 't' }, th.title || t('newTitle')))));
+    el('div', { class: 'thread' + (th.id === S.current ? ' active' : '') },
+      el('button', { class: 'open', title: th.title || t('newTitle'), onclick: () => { openThread(th.id); closeSide(); } },
+        th.generating ? el('span', { class: 'dot' }) : null, el('span', { class: 't' }, th.title || t('newTitle'))),
+      el('button', { class: 'more', title: t('more'), 'aria-label': t('more'), 'aria-haspopup': 'menu', onclick: (e) => openThreadMenu(e, th.id) }, '⋯'))));
 }
+
+let menuThread = null;
+function openThreadMenu(e, id) {
+  e.stopPropagation();
+  const pop = $('thread-pop');
+  const btn = e.currentTarget;
+  if (menuThread === id && !pop.classList.contains('hidden')) return closeThreadMenu();
+  closeThreadMenu();
+  menuThread = id;
+  btn.classList.add('on');
+  pop.classList.remove('hidden');
+  const r = btn.getBoundingClientRect();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = Math.min(r.right + 6, innerWidth - w - 8) + 'px';
+  pop.style.top = Math.min(r.top, innerHeight - h - 8) + 'px';
+}
+function closeThreadMenu() {
+  $('thread-pop').classList.add('hidden');
+  for (const b of document.querySelectorAll('.thread .more.on')) b.classList.remove('on');
+  menuThread = null;
+}
+document.addEventListener('click', closeThreadMenu);
+$('threads').addEventListener('scroll', closeThreadMenu);
+$('thread-pop').addEventListener('click', (e) => {
+  const id = menuThread, act = e.target.dataset.act;
+  closeThreadMenu();
+  if (act === 'rename') renameThread(id);
+  if (act === 'delete') deleteThread(id);
+});
 
 function closeSide() { $('app').classList.remove('side-open'); }
 
@@ -351,7 +396,6 @@ function renderHeader() {
   sel.replaceChildren(...S.models.models.map((m) => el('option', { value: m }, m)));
   if (cur) sel.value = cur;
   sel.disabled = !S.models.models.length;
-  $('thread-menu').classList.toggle('hidden', !S.current);
 }
 
 $('model-select').addEventListener('change', (e) => guard(async () => {
@@ -360,22 +404,16 @@ $('model-select').addEventListener('change', (e) => guard(async () => {
   S.thread = (await api('PATCH', '/threads/' + S.current, { model: v })).thread;
 }));
 
-$('thread-title').addEventListener('click', renameThread);
-async function renameThread() {
-  if (!S.current) return;
-  const name = prompt(t('prompt.title'), S.thread?.title || '');
-  if (name != null) guard(() => api('PATCH', '/threads/' + S.current, { title: name }));
+function renameThread(id, title) {
+  if (!id) return toast(t('cmd.noThread'));
+  const cur = S.threads.find((x) => x.id === id)?.title || '';
+  const name = title ?? prompt(t('prompt.title'), cur);
+  if (name != null) guard(() => api('PATCH', '/threads/' + id, { title: name }));
 }
-async function deleteThread() {
-  if (S.current && confirm(t('confirm.delete'))) guard(() => api('DELETE', '/threads/' + S.current));
+function deleteThread(id) {
+  if (!id) return toast(t('cmd.noThread'));
+  if (confirm(t('confirm.delete'))) guard(() => api('DELETE', '/threads/' + id));
 }
-
-$('thread-menu').addEventListener('click', (e) => { e.stopPropagation(); $('menu').classList.toggle('hidden'); });
-document.addEventListener('click', () => $('menu').classList.add('hidden'));
-$('menu').addEventListener('click', (e) => {
-  if (e.target.dataset.act === 'rename') renameThread();
-  if (e.target.dataset.act === 'delete') deleteThread();
-});
 $('new-chat').addEventListener('click', () => { newChat(); closeSide(); });
 $('toggle-side').addEventListener('click', () => $('app').classList.toggle('side-open'));
 $('scrim').addEventListener('click', closeSide);
@@ -481,10 +519,93 @@ const input = $('input');
 input.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + 'px';
+  renderSlash();
 });
 input.addEventListener('keydown', (e) => {
+  const items = slashItems();
+  if (items.length && !e.isComposing) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      slashSel = (slashSel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+      return renderSlash();
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+      e.preventDefault();
+      return pickSlash(items[Math.min(slashSel, items.length - 1)], e.key === 'Tab');
+    }
+    if (e.key === 'Escape') { e.preventDefault(); input.value = ''; return renderSlash(); }
+  }
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
 });
+input.addEventListener('blur', () => setTimeout(() => $('slash').classList.add('hidden'), 150));
+input.addEventListener('focus', renderSlash);
+
+// ------------------------------------------------------------ slash commands
+
+const COMMANDS = [
+  { c: '/new', d: 'cmd.new', run: () => newChat() },
+  { c: '/model', a: '<name>', d: 'cmd.model', run: (arg) => setModel(arg) },
+  { c: '/rename', a: '<title>', d: 'cmd.rename', run: (arg) => renameThread(S.current, arg || undefined) },
+  { c: '/delete', d: 'cmd.delete', run: () => deleteThread(S.current) },
+  { c: '/attach', d: 'cmd.attach', run: () => $('file-input').click() },
+  { c: '/usage', d: 'cmd.usage', run: () => showUsage() },
+  { c: '/soul', d: 'cmd.soul', run: () => openSettings('soul') },
+  { c: '/settings', d: 'cmd.settings', run: () => openSettings('general') },
+  { c: '/help', d: 'cmd.help', run: () => { input.value = '/'; renderSlash(); input.focus(); } },
+];
+let slashSel = 0;
+
+/// Suggestions for the current input: commands while typing `/name`,
+/// model names after `/model `.
+function slashItems() {
+  const v = input.value;
+  if (!v.startsWith('/') || v.includes('\n')) return [];
+  const m = v.match(/^\/model\s+(\S*)$/);
+  if (m) return S.models.models.filter((x) => x.includes(m[1])).map((x) => ({ c: '/model', a: x, model: x }));
+  if (/\s/.test(v)) return [];
+  return COMMANDS.filter((x) => x.c.startsWith(v));
+}
+
+function renderSlash() {
+  const box = $('slash');
+  const items = document.activeElement === input ? slashItems() : [];
+  box.classList.toggle('hidden', !items.length);
+  if (!items.length) { slashSel = 0; return; }
+  slashSel = Math.min(slashSel, items.length - 1);
+  box.replaceChildren(...items.map((it, i) => el('button', {
+    type: 'button', class: i === slashSel ? 'on' : '', role: 'option',
+    onmousedown: (e) => { e.preventDefault(); pickSlash(it, false); },
+  }, el('span', { class: 'cmd' }, it.c), el('span', { class: 'arg' }, it.a || ''), el('span', { class: 'desc' }, it.model ? (it.model === currentModel() ? '✓' : '') : t(it.d)))));
+}
+
+function pickSlash(it, completeOnly) {
+  slashSel = 0;
+  if (it.model) { input.value = ''; renderSlash(); return setModel(it.model); }
+  if (completeOnly || (it.a && !input.value.includes(' '))) {
+    input.value = it.c + (it.a ? ' ' : '');
+    renderSlash();
+    return;
+  }
+  input.value = '';
+  input.dispatchEvent(new Event('input'));
+  it.run('');
+}
+
+/// Typed commands with arguments (`/rename Trip`, `/model x`).
+function runCommand(text) {
+  const [, name, arg = ''] = text.match(/^(\/\S+)\s*([\s\S]*)$/) || [];
+  const cmd = COMMANDS.find((x) => x.c === name);
+  if (!cmd) return toast(t('cmd.unknown', { c: name }));
+  cmd.run(arg.trim());
+}
+
+const currentModel = () => (S.thread ? S.thread.model : S.newModel) || S.models.default;
+function setModel(name) {
+  if (!name) { $('model-select').focus(); return; }
+  if (!S.models.models.includes(name)) return toast(t('cmd.noModel', { m: name }));
+  $('model-select').value = name;
+  $('model-select').dispatchEvent(new Event('change'));
+}
 
 async function ensureThread() {
   if (S.current) return S.current;
@@ -510,6 +631,11 @@ $('file-input').addEventListener('change', (e) => {
 $('composer').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = input.value.trim();
+  if (text.startsWith('/') && !S.pending.length) {
+    input.value = '';
+    input.dispatchEvent(new Event('input'));
+    return runCommand(text);
+  }
   if ((!text && !S.pending.length) || S.generating) return;
   try {
     const id = await ensureThread();
@@ -618,10 +744,64 @@ function handleEvent(v) {
 
 async function loadModels() { S.models = await api('GET', '/models'); }
 
-$('open-settings').addEventListener('click', () => { $('settings').classList.remove('hidden'); showTab('general'); closeSide(); });
+function openSettings(tab) { $('settings').classList.remove('hidden'); showTab(tab); closeSide(); }
+$('open-settings').addEventListener('click', () => openSettings('general'));
 $('close-settings').addEventListener('click', () => $('settings').classList.add('hidden'));
 $('settings').addEventListener('click', (e) => { if (e.target.id === 'settings') $('settings').classList.add('hidden'); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('settings').classList.add('hidden'); });
+$('close-modal').addEventListener('click', () => $('modal').classList.add('hidden'));
+$('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') $('modal').classList.add('hidden'); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  $('settings').classList.add('hidden'); $('modal').classList.add('hidden'); closeThreadMenu();
+});
+
+function showModal(title, ...nodes) {
+  $('modal-title').textContent = title;
+  $('modal-body').replaceChildren(...nodes);
+  $('modal').classList.remove('hidden');
+}
+
+function relTime(ms) {
+  const m = Math.max(0, Math.round((ms - Date.now()) / 60000));
+  const rtf = new Intl.RelativeTimeFormat(LANG, { numeric: 'auto' });
+  if (m < 60) return rtf.format(m, 'minute');
+  if (m < 1440) return rtf.format(Math.round(m / 60), 'hour');
+  return rtf.format(Math.round(m / 1440), 'day');
+}
+const compact = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
+
+async function showUsage() {
+  showModal(t('u.title'), el('p', { class: 'muted' }, t('u.checking')));
+  let v;
+  try { v = await api('GET', '/usage'); } catch (e) { return showModal(t('u.title'), el('p', { class: 'error' }, e.message)); }
+  const subs = v.subscriptions.map((sub) => {
+    if (!sub.ok) return el('div', { class: 'panel' }, el('h4', {}, sub.id, ' ', badge('ng', t('m.ng'))), el('p', { class: 'hint' }, sub.error));
+    const L = sub.limits;
+    const win = (w) => {
+      if (!w) return null;
+      const name = w.window_minutes === 300 ? t('u.win.5h') : w.window_minutes === 10080 ? t('u.win.weekly') : `${Math.round(w.window_minutes / 60)}h`;
+      const used = w.used_percent;
+      const bar = el('i');
+      bar.style.width = Math.min(100, used) + '%';
+      return el('div', { class: 'field' },
+        el('div', { class: 'spread' }, el('strong', {}, name), el('span', {}, el('b', {}, t('u.left', { p: Math.max(0, 100 - used) })), ' · ', el('span', { class: 'muted small' }, t('u.reset', { t: relTime(w.resets_at) })))),
+        el('div', { class: 'meter' + (used >= 90 ? ' ng' : used >= 70 ? ' warn' : '') }, bar));
+    };
+    return el('div', { class: 'panel' },
+      el('h4', {}, sub.id, ' ', L.plan ? badge('ok', L.plan) : null), el('br'),
+      win(L.primary), win(L.secondary),
+      L.reset_credits ? el('p', { class: 'hint' }, t('u.credits', { n: L.reset_credits })) : null);
+  });
+  const table = (rows) => rows.length
+    ? el('table', { class: 'usage' }, el('tr', {}, el('th', {}, t('u.model')), el('th', {}, t('u.in')), el('th', {}, t('u.out')), el('th', {}, t('u.replies'))),
+      ...rows.map((r) => el('tr', {}, el('td', {}, r.model), el('td', {}, compact(r.input_tokens)), el('td', {}, compact(r.output_tokens)), el('td', {}, r.responses))))
+    : el('p', { class: 'muted small' }, '—');
+  showModal(t('u.title'),
+    ...(subs.length ? subs : [el('p', { class: 'muted' }, t('u.none'))]),
+    el('h3', {}, t('u.tokens')),
+    el('p', { class: 'small muted' }, t('u.day')), table(v.tokens.day),
+    el('p', { class: 'small muted' }, t('u.month')), table(v.tokens.month));
+}
 $('settings-tabs').addEventListener('click', (e) => { if (e.target.dataset.tab) showTab(e.target.dataset.tab); });
 
 let currentTab = 'general';
@@ -751,7 +931,9 @@ const TABS = {
     const c = await api('GET', '/config');
     S.config = c;
     const inp = (v, type = 'text') => el('input', { type, value: v ?? '' });
-    const name = inp(c.agent.name), lang = inp(c.agent.language), bind = inp(c.server.bind), port = inp(c.server.port, 'number'), pub = inp(c.server.public_url, 'url');
+    const name = inp(c.agent.name), bind = inp(c.server.bind), port = inp(c.server.port, 'number'), pub = inp(c.server.public_url, 'url');
+    const lang = el('select', {}, el('option', { value: 'ja' }, '日本語'), el('option', { value: 'en' }, 'English'));
+    lang.value = LANG;
     let theme = c.agent.appearance;
     const seg = el('div', { class: 'seg' });
     const renderSeg = () => seg.replaceChildren(...['system', 'light', 'dark'].map((m) =>
@@ -768,7 +950,7 @@ const TABS = {
       toast(restart ? t('g.restart') : t('saved'));
     });
     return [
-      el('div', { class: 'panel' }, el('h4', {}, t('g.agent')), el('br'), field(t('g.name'), name), field(t('g.lang'), lang), field(t('g.theme'), seg)),
+      el('div', { class: 'panel' }, el('h4', {}, t('g.agent')), el('br'), field(t('g.name'), name), field(t('g.uiLang'), lang, t('g.soulHint')), field(t('g.theme'), seg)),
       el('details', { class: 'adv panel' }, el('summary', {}, t('g.server')), field(t('g.bind'), bind), field(t('g.port'), port), field(t('g.public'), pub)),
       el('div', { class: 'row' }, el('button', { class: 'primary', onclick: save }, t('save')),
         el('button', { class: 'ghost', onclick: () => guard(async () => { await api('POST', '/logout'); showLogin(); }) }, t('signout'))),
@@ -892,16 +1074,18 @@ const TABS = {
         el('div', { class: 'grow' }, el('strong', {}, tool.name), el('div', { class: 'small muted' }, tool.description + (tool.available ? '' : ' ' + t('t.notcfg')))),
         el('div', {}, sel)));
     }
-    const roots = el('textarea', { rows: 3, placeholder: t('t.dirsPh') });
+    const ws = el('input', { type: 'text', value: c.tools.fs.workspace || '', placeholder: '~/.alice/workspace' });
+    const roots = el('textarea', { rows: 3, placeholder: '~/Documents' });
     roots.value = (c.tools.fs.roots || []).join('\n');
     return [
       el('h3', {}, t('t.perm')),
       ...Object.entries(lists).map(([g, items]) => el('div', {}, el('p', { class: 'small muted' }, groups[g] || g), el('div', { class: 'list' }, items))),
       el('p', { class: 'hint' }, t('t.permNote')),
       el('h3', {}, t('t.fs')),
-      el('div', { class: 'panel' }, field(t('t.dirs'), roots, t('t.effective') + v.fs_roots.join(', ')),
+      el('div', { class: 'panel' }, field(t('t.ws'), ws, t('t.wsHint') + ' ' + t('t.effective') + v.workspace),
+        field(t('t.extra'), roots, t('t.effective') + v.fs_roots.join(', ')),
         el('button', { class: 'primary', onclick: () => guard(async () => {
-          await api('PATCH', '/config', { 'tools.fs.roots': roots.value.split('\n').map((s) => s.trim()).filter(Boolean) });
+          await api('PATCH', '/config', { 'tools.fs.workspace': ws.value.trim(), 'tools.fs.roots': roots.value.split('\n').map((s) => s.trim()).filter(Boolean) });
           toast(t('saved')); showTab('tools');
         }) }, t('t.saveDirs'))),
       webPanel(c),

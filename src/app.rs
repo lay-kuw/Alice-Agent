@@ -51,6 +51,9 @@ pub struct App {
     pub skill_cache: Mutex<Option<(crate::skills::Fingerprint, Arc<crate::skills::Catalog>)>>,
     pub auth: crate::skills::auth::AuthState,
     pub bridges: Mutex<HashMap<String, Arc<Bridge>>>,
+    /// Models discovered from providers (names, efforts); ids live in config.
+    pub models: Mutex<crate::providers::catalog::Discovered>,
+    pub models_refreshing: std::sync::atomic::AtomicBool,
 }
 
 pub type AppRef = Arc<App>;
@@ -77,6 +80,8 @@ impl App {
             skill_cache: Mutex::new(None),
             auth: Default::default(),
             bridges: Mutex::new(HashMap::new()),
+            models: Mutex::new(HashMap::new()),
+            models_refreshing: Default::default(),
         })
     }
 

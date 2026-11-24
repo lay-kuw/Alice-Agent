@@ -746,7 +746,8 @@ async fn provider_status(paths: &Paths) -> std::collections::HashMap<String, (St
 }
 
 fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, String)>) -> Vec<String> {
-    let default = v["default"].as_str().unwrap_or("");
+    let (default, default_effort) = alice_split(v["default"].as_str().unwrap_or(""));
+    let catalog = v["catalog"].as_array().cloned().unwrap_or_default();
     let mut all = Vec::new();
     for p in v["providers"].as_array().cloned().unwrap_or_default() {
         let kind = p["kind"].as_str().unwrap_or("");
@@ -771,13 +772,31 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
             let full = format!("{}/{}", p["id"].as_str().unwrap_or(""), m.as_str().unwrap_or(""));
             all.push(full.clone());
             let mark = if full == default { "*" } else { " " };
-            println!("  {mark} {:>2}) {full}", all.len());
+            let info = catalog.iter().find(|c| c["id"] == full.as_str());
+            let name = info.and_then(|i| i["name"].as_str()).filter(|n| *n != m.as_str().unwrap_or("")).unwrap_or("");
+            let efforts: Vec<String> = info
+                .and_then(|i| i["efforts"].as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.as_str())
+                .map(|e| {
+                    let current = if full == default { default_effort } else { None };
+                    let dflt = info.and_then(|i| i["default_effort"].as_str());
+                    if Some(e) == current.or(dflt) { format!("[{e}]") } else { e.to_string() }
+                })
+                .collect();
+            let extra = [name.to_string(), efforts.join(" ")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+            println!("  {mark} {:>2}) {full}  {}", all.len(), dim(&extra));
         }
     }
     if all.is_empty() {
         println!("No models configured. Add one with `alice model add`.");
     }
     all
+}
+
+fn alice_split(id: &str) -> (&str, Option<&str>) {
+    crate::config::split_effort(id)
 }
 
 async fn set_default(paths: &Paths, model: &str) -> CliResult<()> {
@@ -804,12 +823,13 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
         [] => loop {
             let v = models_json(paths).await?;
             let all = print_models(&v, &provider_status(paths).await);
-            let ans = ask("\nNumber = set default, a = add, r <n> = remove, t <n> = test, Enter = quit", "");
+            let ans = ask("\nNumber [effort] = set default (e.g. `2 high`), a = add, r <n> = remove, t <n> = test, f = refresh list, Enter = quit", "");
             let (cmd, rest) = ans.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((ans.as_str(), ""));
             let pick = |s: &str| s.parse::<usize>().ok().and_then(|n| all.get(n.wrapping_sub(1)).cloned());
             match cmd {
                 "" | "q" => return Ok(()),
                 "a" => model_add(paths).await?,
+                "f" => refresh_models(paths).await?,
                 "r" => match pick(rest) {
                     Some(m) => remove_provider(paths, m.split('/').next().unwrap_or("")).await?,
                     None => println!("give a number"),
@@ -819,7 +839,8 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                     None => println!("give a number"),
                 },
                 n => match pick(n) {
-                    Some(m) => set_default(paths, &m).await?,
+                    Some(m) if rest.is_empty() => set_default(paths, &m).await?,
+                    Some(m) => set_default(paths, &format!("{m}#{rest}")).await?,
                     None => println!("unknown choice"),
                 },
             }
@@ -835,17 +856,39 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             remove_provider(paths, m.split('/').next().unwrap_or(&m)).await
         }
         ["use", id] => set_default(paths, &pick_model(paths, id).await?).await,
+        ["use", id, effort] => set_default(paths, &format!("{}#{effort}", alice_split(&pick_model(paths, id).await?).0)).await,
+        ["refresh"] => refresh_models(paths).await,
         ["test", id] => test_model(paths, &pick_model(paths, id).await?).await,
         ["login", provider] => login(paths, provider, &[]).await,
         ["login", provider, extra @ ..] => login(paths, provider, extra).await,
         ["logout", provider] => logout(paths, provider).await,
-        _ => Err("usage: alice model [list|add|remove <id>|use <id>|login <provider>|logout <provider>|test <id>]".into()),
+        _ => Err("usage: alice model [list|refresh|add|remove <id>|use <id> [effort]|login <provider>|logout <provider>|test <id>]".into()),
     }
+}
+
+/// Ask every provider for its current models (needs the running server).
+async fn refresh_models(paths: &Paths) -> CliResult<()> {
+    let Backend::Remote(c) = backend(paths).await else {
+        return Err("start Alice first (`alice start`); models are listed through the server".into());
+    };
+    let v = c.post("/models/refresh", &json!({})).await?;
+    for r in v["results"].as_array().into_iter().flatten() {
+        let id = r["id"].as_str().unwrap_or("");
+        match (r["ok"] == true, r["models"].as_u64()) {
+            (true, Some(n)) => println!("{id}: {n} models"),
+            (true, None) => println!("{id}: {}", dim("lists no models; add them with `alice model add`")),
+            _ => println!("{id}: {}", r["error"].as_str().unwrap_or("failed")),
+        }
+    }
+    Ok(())
 }
 
 /// Accept a full model ID, a number from `alice model list`, or a unique
 /// model / provider name.
 async fn pick_model(paths: &Paths, arg: &str) -> CliResult<String> {
+    if let (base, Some(e)) = alice_split(arg) {
+        return Ok(format!("{}#{e}", Box::pin(pick_model(paths, base)).await?));
+    }
     let v = models_json(paths).await?;
     let all: Vec<String> = v["providers"]
         .as_array()

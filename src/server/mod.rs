@@ -76,6 +76,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/models", get(list_models))
         .route("/models/default", put(set_default_model))
         .route("/models/test", post(test_model))
+        .route("/models/refresh", post(refresh_models))
         .route("/providers", post(add_provider))
         .route("/providers/status", get(providers_status))
         .route("/channels/status", get(channels_status))
@@ -356,10 +357,9 @@ struct CreateThread {
 
 async fn create_thread(State(app): State<AppRef>, body: Option<Json<CreateThread>>) -> ApiResult<(StatusCode, Json<Value>)> {
     let b = body.map(|b| b.0).unwrap_or_default();
-    if let Some(m) = b.model.as_deref().filter(|m| !m.is_empty())
-        && app.config().resolve_model(m).is_none() {
-            return Err(bad(format!("unknown model: {m}")));
-        }
+    if let Some(m) = b.model.as_deref().filter(|m| !m.is_empty()) {
+        providers::catalog::validate(&app, m).map_err(bad)?;
+    }
     let t = storage::create_thread(&app.db.lock(), b.title.trim(), b.model.as_deref().filter(|m| !m.is_empty()))?;
     app.emit(json!({ "type": "thread.created", "thread_id": t.id, "thread": t }));
     Ok((StatusCode::CREATED, Json(json!({ "thread": t }))))
@@ -380,10 +380,9 @@ struct UpdateThread {
 
 async fn update_thread(State(app): State<AppRef>, Path(id): Path<String>, Json(b): Json<UpdateThread>) -> ApiResult<Json<Value>> {
     let id = resolve(&app, &id)?;
-    if let Some(m) = b.model.as_deref().filter(|m| !m.is_empty())
-        && app.config().resolve_model(m).is_none() {
-            return Err(bad(format!("unknown model: {m}")));
-        }
+    if let Some(m) = b.model.as_deref().filter(|m| !m.is_empty()) {
+        providers::catalog::validate(&app, m).map_err(bad)?;
+    }
     let title = b.title.as_deref().map(str::trim);
     let model = b.model.as_deref().map(|m| if m.is_empty() { None } else { Some(m) });
     let t = storage::update_thread(&app.db.lock(), &id, title, model)?.ok_or_else(not_found)?;
@@ -618,7 +617,14 @@ async fn list_models(State(app): State<AppRef>) -> Json<Value> {
             })
         })
         .collect();
-    Json(json!({ "default": cfg.agent.default_model, "models": cfg.all_models(), "providers": providers }))
+    providers::catalog::refresh_if_stale(&app);
+    Json(json!({ "default": cfg.agent.default_model, "models": cfg.all_models(), "providers": providers, "catalog": providers::catalog::catalog(&app) }))
+}
+
+async fn refresh_models(State(app): State<AppRef>) -> Json<Value> {
+    let report = providers::catalog::refresh(&app).await;
+    let cfg = app.config();
+    Json(json!({ "results": report, "default": cfg.agent.default_model, "models": cfg.all_models(), "catalog": providers::catalog::catalog(&app) }))
 }
 
 #[derive(Deserialize)]
@@ -652,6 +658,7 @@ async fn channels_status(State(app): State<AppRef>) -> Json<Value> {
 }
 
 async fn set_default_model(State(app): State<AppRef>, Json(b): Json<ModelBody>) -> ApiResult<Json<Value>> {
+    providers::catalog::validate(&app, &b.model).map_err(bad)?;
     let cfg = app
         .update_config(|c| {
             if c.resolve_model(&b.model).is_none() {
@@ -676,6 +683,7 @@ async fn test_model(State(app): State<AppRef>, Json(b): Json<ModelBody>) -> ApiR
         tools: vec![],
         max_tokens: 1000,
         mcp: None,
+        effort: crate::config::split_effort(&b.model).1.map(str::to_string),
     };
     let t0 = std::time::Instant::now();
     let mut first: Option<u128> = None;
@@ -1233,19 +1241,28 @@ pub async fn serve(app: AppRef) -> std::io::Result<()> {
     }
     crate::info!("alice {} (profile {}) listening on http://{addr}", env!("CARGO_PKG_VERSION"), app.paths.profile);
     let router = router(app.clone());
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let ctrl_c = tokio::signal::ctrl_c();
-            #[cfg(unix)]
-            {
-                let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal");
-                tokio::select! { _ = ctrl_c => {}, _ = term.recv() => {} }
-            }
-            #[cfg(not(unix))]
-            let _ = ctrl_c.await;
-            crate::info!("shutting down");
-        })
-        .await?;
+    let (stopping_tx, stopping) = tokio::sync::oneshot::channel::<()>();
+    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+        let ctrl_c = tokio::signal::ctrl_c();
+        #[cfg(unix)]
+        {
+            let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal");
+            tokio::select! { _ = ctrl_c => {}, _ = term.recv() => {} }
+        }
+        #[cfg(not(unix))]
+        let _ = ctrl_c.await;
+        crate::info!("shutting down");
+        let _ = stopping_tx.send(());
+    });
+    // Event streams (Web, TUI, iPhone) never end on their own: give requests
+    // in flight a few seconds, then exit instead of waiting forever.
+    tokio::select! {
+        r = server => r?,
+        _ = async {
+            let _ = stopping.await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        } => crate::info!("closing remaining connections"),
+    }
     // Leave the DB checkpointed on exit.
     let _ = storage::checkpoint(&app.db.lock());
     Ok(())

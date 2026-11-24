@@ -2,6 +2,7 @@
 //! The agent core never knows which provider it is talking to.
 
 pub mod anthropic;
+pub mod catalog;
 pub mod cli;
 pub mod gemini;
 pub mod openai;
@@ -75,6 +76,8 @@ pub struct ChatRequest<'a> {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolSpec>,
     pub max_tokens: u32,
+    /// Reasoning effort (providers that support it).
+    pub effort: Option<String>,
     /// Tools reachable through `alice mcp` for this turn (MCP-capable CLIs).
     pub mcp: Option<McpBridge>,
 }

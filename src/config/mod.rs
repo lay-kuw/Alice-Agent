@@ -268,6 +268,18 @@ impl ProviderKind {
     pub fn needs_api_key(self) -> bool {
         matches!(self, ProviderKind::Openai | ProviderKind::Anthropic | ProviderKind::Gemini)
     }
+    /// Accepts a reasoning effort (`provider/model#effort`).
+    pub fn supports_effort(self) -> bool {
+        matches!(self, ProviderKind::CodexCli)
+    }
+}
+
+/// `provider/model#effort` -> (`provider/model`, Some(`effort`)).
+pub fn split_effort(model_id: &str) -> (&str, Option<&str>) {
+    match model_id.rsplit_once('#') {
+        Some((m, e)) if !e.is_empty() && e.chars().all(|c| c.is_ascii_lowercase()) => (m, Some(e)),
+        _ => (model_id, None),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -409,9 +421,14 @@ impl Config {
     }
 
     /// Resolve `provider/model` into its provider config and model name.
+    /// The provider and model name; a `#effort` suffix is allowed where supported.
     pub fn resolve_model<'a>(&'a self, model_id: &'a str) -> Option<(&'a ProviderConfig, &'a str)> {
-        let (pid, name) = model_id.split_once('/')?;
+        let (base, effort) = split_effort(model_id);
+        let (pid, name) = base.split_once('/')?;
         let p = self.provider(pid)?;
+        if effort.is_some() && !p.kind.supports_effort() {
+            return None;
+        }
         // Only models registered for the provider are valid.
         p.models.iter().any(|m| m == name).then_some((p, name))
     }
@@ -588,5 +605,9 @@ mod tests {
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.all_models(), vec!["openai/gpt-x".to_string()]);
         assert_eq!(back.resolve_model("openai/gpt-x").unwrap().1, "gpt-x");
+        // Only providers that take an effort accept the suffix.
+        assert!(back.resolve_model("openai/gpt-x#high").is_none());
+        assert_eq!(split_effort("codex-cli/gpt-6.2-sol#high"), ("codex-cli/gpt-6.2-sol", Some("high")));
+        assert_eq!(split_effort("a/b#C1"), ("a/b#C1", None));
     }
 }

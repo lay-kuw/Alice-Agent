@@ -28,7 +28,7 @@ struct MailView: View {
                 .pastel()
                 .overlay {
                     if google.inbox.isEmpty {
-                        if google.loading.contains("mail") {
+                        if !google.inboxLoaded || google.loading.contains("mail") {
                             ProgressView()
                         } else {
                             SoftEmpty(title: submitted.isEmpty ? "Inbox zero" : "No results", systemImage: submitted.isEmpty ? "envelope.open" : "magnifyingglass", message: submitted.isEmpty ? "All caught up ✨" : nil)
@@ -47,7 +47,7 @@ struct MailView: View {
                         Task { await google.loadInbox() }
                     }
                 }
-                .task { if google.inbox.isEmpty { await google.loadInbox() } }
+                .task { if !google.inboxLoaded { await google.loadInbox() } }
                 .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
             }
             .navigationTitle(submitted.isEmpty ? "Inbox" : "Search")

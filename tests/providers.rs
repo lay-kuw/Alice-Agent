@@ -67,6 +67,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
         tools: vec![tool()],
         max_tokens: 1000,
         mcp: None,
+        effort: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
@@ -93,7 +94,7 @@ async fn anthropic_stream_text_thinking_and_tool_use() {
     // Replay within a turn sends the exact blocks (thinking included).
     let mut replay = ChatMessage::assistant("Let me look.");
     replay.provider_state = Some(json!({ "anthropic_blocks": blocks }));
-    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10, mcp: None });
+    let body = providers::anthropic::build_body(&ChatRequest { model: "m", system: String::new(), messages: vec![ChatMessage::user("q"), replay], tools: vec![], max_tokens: 10, mcp: None, effort: None });
     assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
 }
 
@@ -109,7 +110,7 @@ async fn gemini_stream_text_and_function_call_with_signature() {
     let seen = Arc::new(Mutex::new(vec![]));
     let url = serve("/v1beta/models/{model}", body, seen.clone()).await;
     let p = ProviderConfig { id: "g".into(), kind: ProviderKind::Gemini, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100, mcp: None };
+    let req = ChatRequest { model: "gemini-x", system: "sys".into(), messages: vec![ChatMessage::user("hi")], tools: vec![tool()], max_tokens: 100, mcp: None, effort: None };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
     let c = providers::stream(&reqwest::Client::new(), &p, Some("gk"), &req, &mut on).await.unwrap();
@@ -135,7 +136,7 @@ async fn http_errors_are_reported_without_secrets() {
     let url = format!("http://{}/v1", l.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
     let p = ProviderConfig { id: "o".into(), kind: ProviderKind::Openai, base_url: url, models: vec![], context_tokens: 0 };
-    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10, mcp: None };
+    let req = ChatRequest { model: "x", system: String::new(), messages: vec![ChatMessage::user("hi")], tools: vec![], max_tokens: 10, mcp: None, effort: None };
     let mut on = |_: &str| {};
     let e = providers::stream(&reqwest::Client::new(), &p, Some("sk-SECRET"), &req, &mut on).await.unwrap_err();
     assert_eq!(e.0, "HTTP 401: Incorrect API key");
@@ -169,6 +170,7 @@ echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_inp
         tools: vec![],
         max_tokens: 100,
         mcp: None,
+        effort: None,
     };
     let mut text = String::new();
     let mut on = |d: &str| text.push_str(d);
@@ -179,11 +181,42 @@ echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_inp
     for a in ["exec", "--json", "--ephemeral", "--sandbox read-only", "--skip-git-repo-check"] {
         assert!(args.contains(a), "{args}");
     }
+    assert!(!args.contains("model_reasoning_effort") && !args.contains("-m "), "{args}");
     let stdin = std::fs::read_to_string(dir.path().join("stdin")).unwrap();
     assert!(stdin.contains("be nice") && stdin.contains("[User]\nfirst") && stdin.contains("[Assistant]\nanswer") && stdin.contains("second"));
+
+    // Model and reasoning effort are passed to Codex.
+    let req2 = ChatRequest { model: "gpt-6-luna", effort: Some("high".into()), messages: vec![ChatMessage::user("hi")], ..req };
+    providers::stream(&reqwest::Client::new(), &p, None, &req2, &mut on).await.unwrap();
+    let args = std::fs::read_to_string(dir.path().join("args")).unwrap();
+    assert!(args.contains("-m gpt-6-luna") && args.contains("model_reasoning_effort=\"high\""), "{args}");
+    let req = req2;
 
     // A failing CLI reports its error.
     std::fs::write(&exe, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"not logged in\"}}'\nexit 1\n").unwrap();
     let e = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap_err();
     assert_eq!(e.0, "not logged in");
+}
+
+#[tokio::test]
+async fn gemini_models_are_discovered() {
+    use axum::{Json, routing::get};
+    let router = Router::new().route(
+        "/v1beta/models",
+        get(|h: axum::http::HeaderMap| async move {
+            assert_eq!(h["x-goog-api-key"], "k");
+            Json(json!({ "models": [
+                { "name": "models/gemini-9-pro", "displayName": "Gemini 9 Pro", "description": "smart", "supportedGenerationMethods": ["generateContent", "countTokens"] },
+                { "name": "models/gemini-embedding-9", "supportedGenerationMethods": ["embedContent"] },
+                { "name": "models/gemini-9-flash-tts", "supportedGenerationMethods": ["generateContent"] } ] }))
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
+    let p = ProviderConfig { id: "g".into(), kind: ProviderKind::Gemini, base_url: url, models: vec![], context_tokens: 0 };
+    let list = providers::catalog::discover(&reqwest::Client::new(), &p, Some("k")).await.unwrap().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].model.as_str(), list[0].name.as_str()), ("gemini-9-pro", "Gemini 9 Pro"));
+    assert!(providers::catalog::discover(&reqwest::Client::new(), &p, None).await.is_err());
 }

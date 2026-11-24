@@ -211,30 +211,38 @@ extension AliceClient {
 
 // MARK: - Store
 
-/// Google data for the Calendar, Mail and Tasks tabs. Nothing is cached on
-/// disk; everything is fetched from the Alice server, which holds the tokens.
+/// Google data for the Calendar, Mail and Tasks tabs. Kept in memory only (no
+/// disk cache); the Alice server holds the tokens and caches Google's answers,
+/// so repeat loads are instant. Data already on screen is refreshed quietly.
 @MainActor
 @Observable
 public final class GoogleStore {
     public let client: AliceClient
     public private(set) var status: GoogleStatus?
-    public private(set) var events: [CalendarEvent] = []
-    public private(set) var eventsRange: (Date, Date)?
+    /// Every event loaded so far, by id.
+    public private(set) var eventsById: [String: CalendarEvent] = [:]
+    /// Week starts whose events are loaded.
+    public private(set) var loadedWeeks: Set<Date> = []
     public private(set) var inbox: [MailSummary] = []
+    public private(set) var inboxLoaded = false
     public private(set) var nextPage: String?
+    public private(set) var bodies: [String: MailMessage] = [:]
     public private(set) var lists: [TaskList] = []
+    public private(set) var tasksLoaded = false
     public private(set) var loading: Set<String> = []
     public var lastError: String?
+    /// Background loads (prefetch) never raise alerts; the tab retries when opened.
+    private var background = false
 
     public init(client: AliceClient) {
         self.client = client
     }
 
-    private func run(_ key: String, _ body: () async throws -> Void) async {
+    private func run(_ key: String, quiet: Bool = false, _ body: () async throws -> Void) async {
         loading.insert(key)
         defer { loading.remove(key) }
         do { try await body() } catch is CancellationError {} catch {
-            if (error as? URLError)?.code == .cancelled { return }
+            if (error as? URLError)?.code == .cancelled || quiet || background { return }
             lastError = error.localizedDescription
         }
     }
@@ -243,12 +251,39 @@ public final class GoogleStore {
         await run("status") { status = try await client.googleStatus() }
     }
 
+    /// Load everything the tabs show first, in parallel (call on connect).
+    public func prefetch() async {
+        background = true
+        defer { background = false }
+        await loadStatus()
+        guard let s = status, s.ready else { return }
+        let week = Self.startOfWeek(.now)
+        async let cal: Void = s.enabled("calendar") ? loadWeek(week) : ()
+        async let mail: Void = s.enabled("gmail") ? loadInbox() : ()
+        async let tasks: Void = s.enabled("tasks") ? loadTasks() : ()
+        _ = await (cal, mail, tasks)
+    }
+
     // Calendar
 
-    public func loadEvents(from: Date, to: Date) async {
-        await run("events") {
-            events = try await client.events(from: from, to: to)
-            eventsRange = (from, to)
+    public static func startOfWeek(_ d: Date) -> Date {
+        let cal = Calendar.current
+        return cal.dateInterval(of: .weekOfYear, for: d)?.start ?? cal.startOfDay(for: d)
+    }
+
+    /// Load a week plus its neighbours in one request, so swiping is instant.
+    public func loadWeek(_ weekStart: Date) async {
+        let cal = Calendar.current
+        guard let from = cal.date(byAdding: .day, value: -7, to: weekStart), let to = cal.date(byAdding: .day, value: 14, to: weekStart) else { return }
+        await run("events", quiet: loadedWeeks.contains(weekStart)) {
+            let list = try await client.events(from: from, to: to)
+            // Replace what was known for this range.
+            eventsById = eventsById.filter { _, e in
+                guard let s = e.startDate else { return true }
+                return s < from || s >= to
+            }
+            for e in list { eventsById[e.id] = e }
+            for w in [-7, 0, 7] { if let d = cal.date(byAdding: .day, value: w, to: weekStart) { loadedWeeks.insert(d) } }
         }
     }
 
@@ -256,7 +291,7 @@ public final class GoogleStore {
         let cal = Calendar.current
         let start = cal.startOfDay(for: day)
         guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
-        return events.filter { e in
+        return eventsById.values.filter { e in
             guard let s = e.startDate else { return false }
             let eEnd = e.endDate ?? s
             // All-day end dates are exclusive.
@@ -268,32 +303,39 @@ public final class GoogleStore {
     public func addEvent(summary: String, start: Date, end: Date, allDay: Bool, location: String, notes: String) async -> Bool {
         var ok = false
         await run("save") {
+            let e: CalendarEvent
             if allDay {
                 let next = Calendar.current.date(byAdding: .day, value: 1, to: end) ?? end
-                try await client.createEvent(summary: summary, start: GoogleDate.day(start), end: GoogleDate.day(next), location: location, notes: notes)
+                e = try await client.createEvent(summary: summary, start: GoogleDate.day(start), end: GoogleDate.day(next), location: location, notes: notes)
             } else {
-                try await client.createEvent(summary: summary, start: GoogleDate.rfc3339(start), end: GoogleDate.rfc3339(end), location: location, notes: notes)
+                e = try await client.createEvent(summary: summary, start: GoogleDate.rfc3339(start), end: GoogleDate.rfc3339(end), location: location, notes: notes)
             }
+            eventsById[e.id] = e
             ok = true
-            if let (a, b) = eventsRange { events = try await client.events(from: a, to: b) }
         }
         return ok
     }
 
     public func deleteEvent(_ e: CalendarEvent) async {
-        let before = events
-        events.removeAll { $0.id == e.id }
+        eventsById[e.id] = nil
         await run("save") { try await client.deleteEvent(e.id) }
-        if lastError != nil { events = before }
+        if lastError != nil { eventsById[e.id] = e }
     }
 
     // Mail
 
     public func loadInbox(query: String = "") async {
-        await run("mail") {
+        await run("mail", quiet: inboxLoaded) {
             let r = try await client.mail(query: query)
             inbox = r.messages
             nextPage = r.nextPage
+            inboxLoaded = true
+        }
+        // Bodies of the newest messages, so opening them is instant.
+        let ids = inbox.prefix(8).map(\.id).filter { bodies[$0] == nil }
+        await withTaskGroup(of: MailMessage?.self) { group in
+            for id in ids { group.addTask { [client] in try? await client.mailMessage(id) } }
+            for await m in group { if let m { bodies[m.id] = m } }
         }
     }
 
@@ -307,9 +349,9 @@ public final class GoogleStore {
     }
 
     public func open(_ id: String) async -> MailMessage? {
-        var m: MailMessage?
-        await run("open") { m = try await client.mailMessage(id) }
-        return m
+        if let m = bodies[id] { return m }
+        await run("open") { bodies[id] = try await client.mailMessage(id) }
+        return bodies[id]
     }
 
     public func send(to: String, cc: String, subject: String, body: String, replyTo: String?) async -> Bool {
@@ -324,18 +366,26 @@ public final class GoogleStore {
     // Tasks
 
     public func loadTasks() async {
-        await run("tasks") { lists = try await client.taskLists() }
-    }
-
-    public func addTask(list: String, title: String, due: Date?) async {
-        await run("save") {
-            let t = try await client.createTask(list: list, title: title, due: due.map(GoogleDate.day))
-            if let i = lists.firstIndex(where: { $0.id == list }) { lists[i].tasks.insert(t, at: 0) }
+        await run("tasks", quiet: tasksLoaded) {
+            lists = try await client.taskLists()
+            tasksLoaded = true
         }
     }
 
+    public func addTask(list: String, title: String, due: Date?) async {
+        guard let li = lists.firstIndex(where: { $0.id == list }) else { return }
+        // Show it at once; replace with the server's copy.
+        let temp = TaskItem(id: "new-\(UUID().uuidString)", title: title, notes: nil, due: due.map(GoogleDate.day), completed: false, parent: nil)
+        lists[li].tasks.insert(temp, at: 0)
+        await run("save") {
+            let t = try await client.createTask(list: list, title: title, due: due.map(GoogleDate.day))
+            if let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == temp.id }) { lists[li].tasks[ti] = t }
+        }
+        if lastError != nil, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks.removeAll { $0.id == temp.id } }
+    }
+
     public func toggle(_ task: TaskItem, in list: String) async {
-        guard let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        guard !task.id.hasPrefix("new-"), let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) else { return }
         let done = !task.completed
         lists[li].tasks[ti].completed = done // optimistic
         await run("save") { try await client.updateTask(list: list, id: task.id, fields: ["completed": done]) }

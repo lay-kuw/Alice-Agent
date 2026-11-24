@@ -364,6 +364,7 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             tools: tool_specs,
             max_tokens: cfg.agent.max_tokens,
             mcp: None,
+            effort: crate::config::split_effort(model_id).1.map(str::to_string),
         };
         let mut req = req;
         // Codex reaches tools through `alice mcp` with a token for this turn only.

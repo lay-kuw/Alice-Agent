@@ -84,5 +84,6 @@ fn migrate_google(paths: &Paths, config: &mut Config, secrets: &mut Secrets) -> 
 pub async fn serve(paths: Paths) -> Result<(), String> {
     let app = build_app(paths)?;
     channels::start(&app);
+    providers::catalog::refresh_if_stale(&app);
     server::serve(app).await.map_err(|e| e.to_string())
 }

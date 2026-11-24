@@ -151,6 +151,7 @@ textarea { resize: vertical; }
 .top { display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
 .top .title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.01em; }
 .top select { width: auto; max-width: 46%; border-radius: 99px; padding: 6px 14px; font-size: 13.5px; background: var(--glass); border-color: var(--glass-border); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+#effort-select { max-width: 30%; }
 #toggle-side { display: none; }
 .menu { position: fixed; z-index: 40; border-radius: 14px; padding: 6px; display: grid; min-width: 170px; box-shadow: var(--shadow); background: var(--pop); border: 1px solid var(--glass-border); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
 .menu button { border: 0; text-align: left; background: transparent; }

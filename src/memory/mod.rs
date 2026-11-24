@@ -347,6 +347,7 @@ pub fn extraction_request<'a>(model: &'a str, user_text: &str, earlier: &[String
         tools: vec![],
         max_tokens: 2000,
         mcp: None,
+        effort: None,
     }
 }
 

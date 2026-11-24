@@ -44,11 +44,19 @@ fn url(g: &G, kind: &str, path: &str) -> String {
 
 async fn call(g: &G<'_>, method: reqwest::Method, u: String, body: Option<&Value>) -> Result<Value, String> {
     let token = crate::skills::auth::access_token(g.app, g.skill).await?;
-    let mut rb = g.app.http.request(method, u).bearer_auth(token).timeout(Duration::from_secs(30));
-    if let Some(b) = body {
-        rb = rb.json(b);
+    let build = || {
+        let mut rb = g.app.http.request(method.clone(), &u).bearer_auth(&token).timeout(Duration::from_secs(30));
+        if let Some(b) = body {
+            rb = rb.json(b);
+        }
+        rb
+    };
+    // A dropped keep-alive connection fails before anything is sent; reads retry once.
+    let r = match build().send().await {
+        Err(e) if method == reqwest::Method::GET && !e.is_timeout() => build().send().await,
+        r => r,
     }
-    let r = rb.send().await.map_err(|e| e.without_url().to_string())?;
+    .map_err(|e| e.without_url().to_string())?;
     let status = r.status();
     let text = r.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {

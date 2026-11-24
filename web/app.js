@@ -30,6 +30,8 @@ const I18N = {
     'soul.desc': 'Alice の性格・話し方・仕事の進め方を書くファイルです。保存すると次の返答から反映されます。会話を全部消しても残ります。',
     'soul.reset': 'テンプレートに戻す', 'soul.resetq': 'SOUL.md をテンプレートに戻しますか？',
     'm.providers': 'プロバイダー', 'm.ok': '利用OK', 'm.ng': '要設定', 'm.unknown': '未確認', 'm.checking': '確認中…',
+    'm.refresh': 'モデル一覧を更新', 'm.refreshing': '更新中…', 'm.refreshed': 'モデル一覧を更新しました',
+    'effort.label': '推論の深さ', 'effort.auto': '推論: 自動（{e}）', 'effort.low': '推論: 軽め', 'effort.medium': '推論: 標準', 'effort.high': '推論: 深め', 'effort.xhigh': '推論: とても深め', 'effort.max': '推論: 最大', 'effort.ultra': '推論: ウルトラ',
     'm.default': '既定', 'm.makeDefault': '既定にする', 'm.test': 'テスト', 'm.testing': 'テスト中…', 'm.remove': '削除',
     'm.removeq': 'プロバイダー {p} と API キーを削除しますか？', 'm.key': 'API キー', 'm.keySet': '設定済み — 変更する場合のみ入力', 'm.saveKey': 'キーを保存',
     'm.none': 'まだプロバイダーがありません。', 'm.add': 'プロバイダーを追加', 'm.kind': '種類', 'm.id': 'ID（例: openai）', 'm.base': 'ベース URL（任意。openai-compatible は必須）',
@@ -98,6 +100,8 @@ const I18N = {
     'soul.desc': "Alice's personality, tone and way of working. Changes apply from the next reply and survive deleting all conversations.",
     'soul.reset': 'Reset to template', 'soul.resetq': 'Replace SOUL.md with the template?',
     'm.providers': 'Providers', 'm.ok': 'Ready', 'm.ng': 'Needs setup', 'm.unknown': 'Unchecked', 'm.checking': 'Checking…',
+    'm.refresh': 'Refresh model list', 'm.refreshing': 'Refreshing…', 'm.refreshed': 'Model list updated',
+    'effort.label': 'Reasoning', 'effort.auto': 'Reasoning: auto ({e})', 'effort.low': 'Reasoning: low', 'effort.medium': 'Reasoning: medium', 'effort.high': 'Reasoning: high', 'effort.xhigh': 'Reasoning: extra high', 'effort.max': 'Reasoning: max', 'effort.ultra': 'Reasoning: ultra',
     'm.default': 'default', 'm.makeDefault': 'Make default', 'm.test': 'Test', 'm.testing': 'Testing…', 'm.remove': 'Remove',
     'm.removeq': 'Remove provider {p} and its API key?', 'm.key': 'API key', 'm.keySet': 'Set — enter only to replace', 'm.saveKey': 'Save key',
     'm.none': 'No providers yet.', 'm.add': 'Add provider', 'm.kind': 'Type', 'm.id': 'ID (e.g. openai)', 'm.base': 'Base URL (optional; required for openai-compatible)',
@@ -403,19 +407,52 @@ async function openThread(id) {
 
 function renderAll() { renderThreads(); renderHeader(); renderMessages(); renderComposer(); }
 
+/// `provider/model#effort` -> [base, effort]
+const splitEffort = (id) => { const m = /^(.*)#([a-z]+)$/.exec(id || ''); return m ? [m[1], m[2]] : [id || '', '']; };
+const modelInfo = (id) => (S.models.catalog || []).find((c) => c.id === id);
+
 function renderHeader() {
   $('thread-title').textContent = S.thread?.title || t('newTitle');
   const sel = $('model-select');
-  const cur = (S.thread ? S.thread.model : S.newModel) || S.models.default;
-  sel.replaceChildren(...S.models.models.map((m) => el('option', { value: m }, m)));
-  if (cur) sel.value = cur;
+  const [base, effort] = splitEffort((S.thread ? S.thread.model : S.newModel) || S.models.default);
+  // Grouped by provider, with the provider's display names.
+  const groups = new Map();
+  for (const m of S.models.models) {
+    const p = m.split('/')[0];
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(el('option', { value: m }, modelInfo(m)?.name || m.slice(p.length + 1)));
+  }
+  sel.replaceChildren(...[...groups].map(([p, opts]) => (groups.size > 1 ? el('optgroup', { label: p }, ...opts) : opts)).flat());
+  if (base) sel.value = base;
+  sel.title = modelInfo(base)?.description || base;
   sel.disabled = !S.models.models.length;
+  const info = modelInfo(base);
+  const eff = $('effort-select');
+  eff.hidden = !info?.efforts?.length;
+  if (!eff.hidden) {
+    eff.replaceChildren(
+      el('option', { value: '' }, t('effort.auto', { e: info.default_effort || '-' })),
+      ...info.efforts.map((e) => el('option', { value: e }, t('effort.' + e) === 'effort.' + e ? e : t('effort.' + e))));
+    eff.value = info.efforts.includes(effort) ? effort : '';
+  }
+}
+
+async function chooseModel(id) {
+  if (!S.current) { S.newModel = id; renderHeader(); return; }
+  S.thread = (await api('PATCH', '/threads/' + S.current, { model: id })).thread;
+  renderHeader();
 }
 
 $('model-select').addEventListener('change', (e) => guard(async () => {
+  // Keep the effort when the new model supports it.
+  const [, effort] = splitEffort(currentModel());
   const v = e.target.value;
-  if (!S.current) { S.newModel = v; return; }
-  S.thread = (await api('PATCH', '/threads/' + S.current, { model: v })).thread;
+  await chooseModel(effort && modelInfo(v)?.efforts?.includes(effort) ? `${v}#${effort}` : v);
+}));
+
+$('effort-select').addEventListener('change', (e) => guard(async () => {
+  const base = $('model-select').value;
+  await chooseModel(e.target.value ? `${base}#${e.target.value}` : base);
 }));
 
 function renameThread(id, title) {
@@ -616,9 +653,9 @@ function runCommand(text) {
 const currentModel = () => (S.thread ? S.thread.model : S.newModel) || S.models.default;
 function setModel(name) {
   if (!name) { $('model-select').focus(); return; }
-  if (!S.models.models.includes(name)) return toast(t('cmd.noModel', { m: name }));
-  $('model-select').value = name;
-  $('model-select').dispatchEvent(new Event('change'));
+  const [base, effort] = splitEffort(name);
+  if (!S.models.models.includes(base)) return toast(t('cmd.noModel', { m: name }));
+  guard(() => chooseModel(effort ? `${base}#${effort}` : base));
 }
 
 async function ensureThread() {
@@ -1059,10 +1096,14 @@ const TABS = {
         el('div', { class: 'list' }, ...p.models.map((m) => {
           const id = `${p.id}/${m}`;
           const res = el('span', { class: 'small muted' });
+          const info = modelInfo(id);
+          const isDefault = splitEffort(v.default)[0] === id;
           return el('div', { class: 'item' },
-            el('div', { class: 'grow' }, m, ' ', id === v.default ? badge('ok', t('m.default')) : null, ' ', res),
+            el('div', { class: 'grow' }, info?.name && info.name !== m ? el('b', {}, info.name + ' ') : null, el('span', { class: info?.name && info.name !== m ? 'small muted' : '' }, m), ' ',
+              isDefault ? badge('ok', t('m.default') + (splitEffort(v.default)[1] ? ' · ' + splitEffort(v.default)[1] : '')) : null, ' ', res,
+              info?.efforts?.length ? el('div', { class: 'small muted' }, t('effort.label') + ': ' + info.efforts.join(' · ')) : null),
             el('div', { class: 'row' },
-              id === v.default ? null : el('button', { class: 'ghost', onclick: () => guard(async () => { await api('PUT', '/models/default', { model: id }); showTab('models'); }) }, t('m.makeDefault')),
+              isDefault ? null : el('button', { class: 'ghost', onclick: () => guard(async () => { await api('PUT', '/models/default', { model: id }); showTab('models'); }) }, t('m.makeDefault')),
               el('button', { onclick: async () => {
                 res.textContent = t('m.testing');
                 const r = await api('POST', '/models/test', { model: id }).catch((e) => ({ ok: false, error: e.message }));
@@ -1090,6 +1131,13 @@ const TABS = {
       }
     }).catch(() => {});
 
+    panels.unshift(el('div', { class: 'row' }, el('button', { class: 'ghost', onclick: (e) => guard(async () => {
+      e.target.disabled = true; e.target.textContent = t('m.refreshing');
+      const r = await api('POST', '/models/refresh');
+      const failed = r.results.filter((x) => !x.ok);
+      toast(failed.length ? failed.map((x) => `${x.id}: ${x.error}`).join('\n') : t('m.refreshed'));
+      showTab('models');
+    }) }, t('m.refresh'))));
     const kind = el('select', {}, ...['openai', 'anthropic', 'gemini', 'openai-compatible', 'ollama', 'codex-cli', 'gemini-cli'].map((k) => el('option', { value: k }, k)));
     const id = el('input', { type: 'text', placeholder: t('m.id') });
     const base = el('input', { type: 'text', placeholder: t('m.base') });

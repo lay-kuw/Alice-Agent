@@ -18,7 +18,7 @@ struct TasksView: View {
                     if let list = current {
                         let open = list.tasks.filter { !$0.completed }
                         let done = list.tasks.filter(\.completed)
-                        if open.isEmpty && !google.loading.contains("tasks") {
+                        if open.isEmpty && google.tasksLoaded {
                             SoftEmpty(title: "All done!", systemImage: "checkmark.seal", message: "Enjoy your free time 🌷")
                                 .listRowBackground(Color.clear).listRowSeparator(.hidden)
                         }
@@ -43,9 +43,9 @@ struct TasksView: View {
                 }
                 .listStyle(.plain)
                 .pastel()
-                .overlay { if google.lists.isEmpty && google.loading.contains("tasks") { ProgressView() } }
+                .overlay { if !google.tasksLoaded { ProgressView() } }
                 .refreshable { await google.loadTasks() }
-                .task { if google.lists.isEmpty { await google.loadTasks() } }
+                .task { if !google.tasksLoaded { await google.loadTasks() } }
             }
             .navigationTitle(current?.title ?? String(localized: "Tasks"))
             .googleErrors(google)

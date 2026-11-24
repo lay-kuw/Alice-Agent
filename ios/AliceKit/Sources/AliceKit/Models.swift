@@ -123,6 +123,38 @@ public struct ModelsResponse: Codable, Sendable {
     public let `default`: String
     public let models: [String]
     public let providers: [ProviderInfo]
+    /// Display names and reasoning efforts (older servers omit it).
+    public let catalog: [ModelInfo]?
+
+    public func info(_ id: String) -> ModelInfo? { catalog?.first { $0.id == ModelID.base(id) } }
+}
+
+public struct ModelInfo: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let provider: String
+    public let model: String
+    public let name: String
+    public let description: String
+    public let efforts: [String]
+    public let defaultEffort: String?
+}
+
+/// `provider/model#effort` helpers.
+public enum ModelID {
+    public static func base(_ id: String) -> String { split(id).0 }
+    public static func effort(_ id: String) -> String? { split(id).1 }
+
+    public static func split(_ id: String) -> (String, String?) {
+        guard let i = id.lastIndex(of: "#") else { return (id, nil) }
+        let e = id[id.index(after: i)...]
+        guard !e.isEmpty, e.allSatisfy({ $0.isLowercase && $0.isASCII }) else { return (id, nil) }
+        return (String(id[..<i]), String(e))
+    }
+
+    public static func join(_ base: String, _ effort: String?) -> String {
+        guard let effort, !effort.isEmpty else { return base }
+        return "\(base)#\(effort)"
+    }
 }
 
 public struct PostResult: Codable, Sendable {

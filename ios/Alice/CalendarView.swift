@@ -21,9 +21,9 @@ struct CalendarView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 30)
                 }
-                .refreshable { await load() }
+                .refreshable { await google.loadWeek(weekStart) }
                 .background(PastelBackground())
-                .task(id: weekStart) { await load() }
+                .task(id: weekStart) { await google.loadWeek(weekStart) }
             }
             .navigationTitle(weekStart.formatted(.dateTime.year().month(.wide)))
             .toolbar {
@@ -111,13 +111,13 @@ struct CalendarView: View {
                 .font(.system(.title2, design: .rounded).weight(.bold))
             Text(selected.formatted(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
             Spacer()
-            if google.loading.contains("events") { ProgressView().controlSize(.small) }
+            if google.loading.contains("events") { ProgressView().controlSize(.small).opacity(google.loadedWeeks.contains(weekStart) ? 0.4 : 1) }
         }
     }
 
     @ViewBuilder private var dayEvents: some View {
         let list = google.events(on: selected)
-        if list.isEmpty && !google.loading.contains("events") {
+        if list.isEmpty && google.loadedWeeks.contains(weekStart) {
             SoftEmpty(title: "Nothing planned", systemImage: "sun.haze", message: "A free day ☕️")
                 .card()
         } else {
@@ -153,15 +153,7 @@ struct CalendarView: View {
         }
     }
 
-    private func load() async {
-        guard let end = Calendar.current.date(byAdding: .day, value: 7, to: weekStart) else { return }
-        await google.loadEvents(from: weekStart, to: end)
-    }
-
-    static func startOfWeek(_ d: Date) -> Date {
-        let cal = Calendar.current
-        return cal.dateInterval(of: .weekOfYear, for: d)?.start ?? cal.startOfDay(for: d)
-    }
+    static func startOfWeek(_ d: Date) -> Date { GoogleStore.startOfWeek(d) }
 }
 
 struct EventRow: View {

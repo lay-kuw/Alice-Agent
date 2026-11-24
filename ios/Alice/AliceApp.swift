@@ -27,12 +27,23 @@ struct RootView: View {
             }
         }
         .onAppear {
+            #if DEBUG
+            // Simulator runs: `SIMCTL_CHILD_ALICE_DEV_URL=… SIMCTL_CHILD_ALICE_DEV_TOKEN=… xcrun simctl launch …`
+            let env = ProcessInfo.processInfo.environment
+            if active == nil, let u = env["ALICE_DEV_URL"], let t = env["ALICE_DEV_TOKEN"] {
+                connect(Connection(name: "Dev", url: u, token: t))
+                return
+            }
+            #endif
             if active == nil, connections.count == 1 { connect(connections[0]) }
         }
         .onChange(of: phase) { _, p in
             // Keep no stream open in the background; resync on return.
             if p == .background { store?.stopEvents() }
-            if p == .active { store?.start() }
+            if p == .active {
+                store?.start()
+                if let google { Task { await google.prefetch() } }
+            }
         }
     }
 
@@ -77,5 +88,10 @@ struct MainTabs: View {
                 .tag("tasks")
         }
         .tint(Palette.lavender)
+        #if DEBUG
+        .onAppear { if let t = ProcessInfo.processInfo.environment["ALICE_DEV_TAB"] { tab = t } }
+        #endif
+        // Load every tab in the background so switching is instant.
+        .task { await google.prefetch() }
     }
 }

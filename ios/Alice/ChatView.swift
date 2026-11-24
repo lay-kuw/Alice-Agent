@@ -31,6 +31,7 @@ struct ChatView: View {
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
+            .background(PastelBackground())
             .onChange(of: store.messages.last?.content) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: store.messages.count) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -70,18 +71,57 @@ struct ChatView: View {
     }
 
     private var modelMenu: some View {
-        Menu {
-            let current = store.currentThread?.model ?? store.pendingModel ?? ""
-            Button {
-                Task { await store.setModel("") }
-            } label: {
-                Label("Default (\(store.models?.default ?? "-"))", systemImage: current.isEmpty ? "checkmark" : "")
+        let current = store.currentThread?.model ?? store.pendingModel ?? ""
+        let effective = current.isEmpty ? (store.models?.default ?? "") : current
+        let (base, effort) = ModelID.split(effective)
+        let info = store.models?.info(base)
+        let all = store.models?.models ?? []
+        let providers = all.reduce(into: [String]()) { acc, m in
+            let p = String(m.split(separator: "/").first ?? "")
+            if !acc.contains(p) { acc.append(p) }
+        }
+        return Menu {
+            Button { Task { await store.setModel("") } } label: {
+                Label("Default", systemImage: current.isEmpty ? "checkmark" : "")
+                Text(store.models.flatMap { $0.info($0.default)?.name } ?? store.models?.default ?? "")
             }
-            ForEach(store.models?.models ?? [], id: \.self) { m in
-                Button { Task { await store.setModel(m) } } label: { Label(m, systemImage: m == current ? "checkmark" : "") }
+            ForEach(providers, id: \.self) { p in
+                Section(p) {
+                    ForEach(all.filter { $0.hasPrefix(p + "/") }, id: \.self) { m in
+                        let mi = store.models?.info(m)
+                        Button {
+                            // Keep the reasoning level when the new model supports it.
+                            let keep = effort.flatMap { e in mi?.efforts.contains(e) == true ? e : nil }
+                            Task { await store.setModel(ModelID.join(m, keep)) }
+                        } label: {
+                            Label(mi?.name ?? String(m.dropFirst(p.count + 1)), systemImage: m == base && !current.isEmpty ? "checkmark" : "")
+                            if let d = mi?.description, !d.isEmpty { Text(d) }
+                        }
+                    }
+                }
+            }
+            if let info, !info.efforts.isEmpty {
+                Section("Reasoning") {
+                    Button { Task { await store.setModel(base) } } label: {
+                        Label("Auto (\(info.defaultEffort ?? "-"))", systemImage: effort == nil ? "checkmark" : "")
+                    }
+                    ForEach(info.efforts, id: \.self) { e in
+                        Button { Task { await store.setModel(ModelID.join(base, e)) } } label: {
+                            Label(e.capitalized, systemImage: e == effort ? "checkmark" : "")
+                        }
+                    }
+                }
             }
         } label: {
-            Image(systemName: "cpu")
+            HStack(spacing: 4) {
+                Text(info?.name ?? (base.isEmpty ? "Model" : String(base.split(separator: "/").last ?? ""))).lineLimit(1)
+                if let effort { Text(effort).foregroundStyle(Palette.pink) }
+                Image(systemName: "chevron.down").font(.caption2.bold())
+            }
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
@@ -115,7 +155,7 @@ struct ChatView: View {
                     .focused($focused)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
                 if store.generating {
                     Button { Task { await store.stopGeneration() } } label: {
                         Image(systemName: "stop.circle.fill").font(.title)
@@ -138,7 +178,7 @@ struct ChatView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(.ultraThinMaterial)
     }
 }
 
@@ -157,7 +197,7 @@ struct MessageRow: View {
                             .textSelection(.enabled)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 9)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
                     }
                 }
             }

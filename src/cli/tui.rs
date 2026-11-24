@@ -70,6 +70,10 @@ struct App {
     messages: Vec<Value>,
     generating: bool,
     models: Vec<String>,
+    /// Display names and reasoning efforts (`/api/models` catalog).
+    catalog: Vec<Value>,
+    /// Effort chosen in the model picker (None = the model's default).
+    pick_effort: Option<String>,
     default_model: String,
     pending_model: Option<String>,
     input: Vec<char>,
@@ -113,6 +117,33 @@ impl App {
         self.threads.iter().find(|t| t["id"] == id)
     }
 
+    fn info(&self, id: &str) -> Option<&Value> {
+        self.catalog.iter().find(|c| c["id"] == id)
+    }
+
+    fn efforts(&self, id: &str) -> Vec<String> {
+        efforts_in(&self.catalog, id)
+    }
+
+    /// "GPT-6.2-Sol · high" for the header.
+    fn model_label(&self) -> String {
+        let full = self.model();
+        let (base, effort) = crate::config::split_effort(&full);
+        let name = self.info(base).and_then(|i| i["name"].as_str()).filter(|n| !n.is_empty() && *n != "Default").map(str::to_string).unwrap_or_else(|| base.to_string());
+        match effort {
+            Some(e) => format!("{name} · {e}"),
+            None => name,
+        }
+    }
+
+    fn open_models(&mut self) {
+        let full = self.model();
+        let (base, effort) = crate::config::split_effort(&full);
+        let sel = self.models.iter().position(|m| m == base).unwrap_or(0);
+        self.pick_effort = effort.map(str::to_string);
+        self.overlay = Overlay::Models(ListState::default().with_selected(Some(sel)));
+    }
+
     fn model(&self) -> String {
         self.thread()
             .and_then(|t| t["model"].as_str())
@@ -138,6 +169,7 @@ impl App {
     async fn reload_models(&mut self) {
         if let Ok(v) = self.client.get("/models").await {
             self.models = v["models"].as_array().into_iter().flatten().filter_map(|m| m.as_str().map(str::to_string)).collect();
+            self.catalog = v["catalog"].as_array().cloned().unwrap_or_default();
             self.default_model = v["default"].as_str().unwrap_or("").to_string();
         }
     }
@@ -218,10 +250,7 @@ impl App {
             "/exit" | "/quit" | "/q" => self.quit = true,
             "/new" => self.new_chat(),
             "/threads" | "/list" => self.overlay = Overlay::Threads(ListState::default().with_selected(Some(0))),
-            "/model" => {
-                let sel = self.models.iter().position(|m| *m == self.model()).unwrap_or(0);
-                self.overlay = Overlay::Models(ListState::default().with_selected(Some(sel)));
-            }
+            "/model" => self.open_models(),
             "/rename" if !arg.is_empty() => {
                 if let Some(id) = self.current.clone()
                     && let Err(e) = self.client.patch(&format!("/threads/{id}"), &json!({ "title": arg })).await {
@@ -436,12 +465,25 @@ impl App {
             }
             Overlay::Models(state) => {
                 let n = self.models.len();
+                let highlighted = state.selected().and_then(|i| self.models.get(i)).cloned().unwrap_or_default();
+                let efforts = efforts_in(&self.catalog, &highlighted);
                 match k.code {
                     KeyCode::Esc | KeyCode::Char('q') => self.overlay = Overlay::None,
                     KeyCode::Up | KeyCode::Char('k') => state.select(Some(state.selected().unwrap_or(0).saturating_sub(1))),
                     KeyCode::Down | KeyCode::Char('j') => state.select(Some((state.selected().unwrap_or(0) + 1).min(n.saturating_sub(1)))),
+                    // ←/→ cycle the reasoning effort: auto, then each supported level.
+                    KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') if !efforts.is_empty() => {
+                        let cur = self.pick_effort.as_ref().and_then(|e| efforts.iter().position(|x| x == e)).map(|i| i + 1).unwrap_or(0);
+                        let len = efforts.len() + 1;
+                        let next = if matches!(k.code, KeyCode::Left | KeyCode::Char('h')) { (cur + len - 1) % len } else { (cur + 1) % len };
+                        self.pick_effort = (next > 0).then(|| efforts[next - 1].clone());
+                    }
                     KeyCode::Enter => {
-                        let m = state.selected().and_then(|i| self.models.get(i)).cloned();
+                        let effort = self.pick_effort.clone().filter(|e| efforts.contains(e));
+                        let m = state.selected().and_then(|i| self.models.get(i)).map(|m| match &effort {
+                            Some(e) => format!("{m}#{e}"),
+                            None => m.clone(),
+                        });
                         self.overlay = Overlay::None;
                         if let Some(m) = m {
                             match self.current.clone() {
@@ -505,10 +547,7 @@ impl App {
             KeyCode::Char('d') if ctrl && self.input.is_empty() => self.quit = true,
             KeyCode::Char('t') if ctrl => self.overlay = Overlay::Threads(ListState::default().with_selected(Some(0))),
             KeyCode::Char('n') if ctrl => self.new_chat(),
-            KeyCode::Char('o') if ctrl => {
-                let sel = self.models.iter().position(|m| *m == self.model()).unwrap_or(0);
-                self.overlay = Overlay::Models(ListState::default().with_selected(Some(sel)));
-            }
+            KeyCode::Char('o') if ctrl => self.open_models(),
             KeyCode::Char('j') if ctrl => self.insert('\n'),
             KeyCode::Char('a') if ctrl => self.cursor = line_start(&self.input, self.cursor),
             KeyCode::Char('e') if ctrl => self.cursor = line_end(&self.input, self.cursor),
@@ -566,6 +605,11 @@ fn upsert(list: &mut Vec<Value>, m: Value) {
         Some(x) => *x = m,
         None => list.push(m),
     }
+}
+
+fn efforts_in(catalog: &[Value], id: &str) -> Vec<String> {
+    let info = catalog.iter().find(|c| c["id"] == id);
+    info.and_then(|i| i["efforts"].as_array()).into_iter().flatten().filter_map(|e| e.as_str().map(str::to_string)).collect()
 }
 
 fn ends_turn(m: &Value) -> bool {
@@ -834,7 +878,7 @@ fn header(f: &mut Frame, app: &App, area: Rect) {
     let mut l2 = vec![
         Span::raw("    "),
         Span::styled(" ◆ ", s(LAVENDER)),
-        Span::styled(app.model(), s(LAVENDER)),
+        Span::styled(app.model_label(), s(LAVENDER)),
         Span::raw(" "),
     ];
     if app.profile != "default" {
@@ -1001,24 +1045,39 @@ fn draw(f: &mut Frame, app: &App) {
             f.render_stateful_widget(list, r, &mut st);
         }
         Overlay::Models(state) => {
-            let r = centered(area, 56, (app.models.len() as u16 + 2).clamp(4, 18));
+            let r = centered(area, 72, (app.models.len() as u16 + 2).clamp(4, 20));
             f.render_widget(Clear, r);
-            let cur = app.model();
+            let full = app.model();
+            let cur = crate::config::split_effort(&full).0;
+            let default = crate::config::split_effort(&app.default_model).0;
+            let sel = state.selected().unwrap_or(0);
             let items: Vec<ListItem> = app
                 .models
                 .iter()
-                .map(|m| {
-                    let mut spans = vec![Span::styled(m.clone(), s(TEXT))];
-                    if *m == cur {
+                .enumerate()
+                .map(|(i, m)| {
+                    let info = app.info(m);
+                    let name = info.and_then(|x| x["name"].as_str()).filter(|n| !n.is_empty()).unwrap_or(m);
+                    let mut spans = vec![Span::styled(name.to_string(), s(TEXT))];
+                    if name != m {
+                        spans.push(Span::styled(format!("  {m}"), s(FAINT)));
+                    }
+                    if m == cur {
                         spans.push(Span::styled("  ✓", s(MINT)));
                     }
-                    if *m == app.default_model {
+                    if m == default {
                         spans.push(Span::styled("  default", s(FAINT)));
+                    }
+                    let efforts = app.efforts(m);
+                    if i == sel && !efforts.is_empty() {
+                        let dflt = info.and_then(|x| x["default_effort"].as_str()).unwrap_or("-");
+                        let e = app.pick_effort.clone().filter(|e| efforts.contains(e)).unwrap_or_else(|| format!("auto ({dflt})"));
+                        spans.push(Span::styled(format!("   ‹ {e} ›"), s(PINK).add_modifier(Modifier::BOLD)));
                     }
                     ListItem::new(Line::from(spans))
                 })
                 .collect();
-            let list = List::new(items).block(popup("Model  ⏎ select · esc")).highlight_style(Style::default().bg(BUBBLE)).highlight_symbol("✿ ");
+            let list = List::new(items).block(popup("Model  ⏎ select · ←→ reasoning · esc")).highlight_style(Style::default().bg(BUBBLE)).highlight_symbol("✿ ");
             let mut st = *state;
             f.render_stateful_widget(list, r, &mut st);
         }
@@ -1160,6 +1219,8 @@ pub async fn run(client: &Client, thread: Option<String>, profile: &str) -> CliR
         models: vec![],
         default_model: String::new(),
         pending_model: None,
+        catalog: Vec::new(),
+        pick_effort: None,
         input: vec![],
         cursor: 0,
         scroll: 0,
@@ -1287,6 +1348,8 @@ mod tests {
             models: vec!["codex-cli/default".into()],
             default_model: "codex-cli/default".into(),
             pending_model: None,
+        catalog: Vec::new(),
+        pick_effort: None,
             input: "雨だったら？".chars().collect(),
             cursor: 6,
             scroll: 0,

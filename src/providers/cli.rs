@@ -315,9 +315,9 @@ pub async fn stream(p: &ProviderConfig, req: &ChatRequest<'_>, on_delta: OnDelta
     let mut buf = String::new();
     let mut sink = |d: &str| buf.push_str(d);
     let result = if mode == ToolMode::Text {
-        run(p.kind, &exe, req.model, &prompt, &scratch, bridge, &mut sink).await
+        run(p.kind, &exe, req, &prompt, &scratch, bridge, &mut sink).await
     } else {
-        run(p.kind, &exe, req.model, &prompt, &scratch, bridge, on_delta).await
+        run(p.kind, &exe, req, &prompt, &scratch, bridge, on_delta).await
     };
     let _ = std::fs::remove_dir_all(&scratch);
     let mut out = result?;
@@ -338,12 +338,13 @@ pub async fn stream(p: &ProviderConfig, req: &ChatRequest<'_>, on_delta: OnDelta
 async fn run(
     kind: ProviderKind,
     exe: &str,
-    model: &str,
+    req: &ChatRequest<'_>,
     prompt: &str,
     dir: &std::path::Path,
     bridge: Option<&McpBridge>,
     on_delta: OnDelta<'_>,
 ) -> Result<Completion> {
+    let (model, effort) = (req.model, req.effort.as_deref());
     let mut cmd = match kind {
         ProviderKind::CodexCli => codex_cmd(exe),
         _ => Command::new(exe),
@@ -361,6 +362,9 @@ async fn run(
             }
             if !model.is_empty() && model != "default" {
                 cmd.args(["-m", model]);
+            }
+            if let Some(e) = effort {
+                cmd.arg("-c").arg(format!("model_reasoning_effort=\"{e}\""));
             }
             cmd.arg("-");
         }
@@ -462,6 +466,17 @@ async fn run(
 /// Subscription rate limits from the official Codex app-server
 /// (`account/rateLimits/read`). Spends no tokens.
 pub async fn codex_rate_limits(exe: &str) -> std::result::Result<Value, String> {
+    codex_app_server(exe, "account/rateLimits/read", Value::Null).await
+}
+
+/// Models the logged-in Codex account can use (`model/list`), without hidden ones.
+pub async fn codex_models(exe: &str) -> std::result::Result<Vec<Value>, String> {
+    let v = codex_app_server(exe, "model/list", serde_json::json!({})).await?;
+    Ok(v["data"].as_array().cloned().unwrap_or_default().into_iter().filter(|m| m["hidden"] != true).collect())
+}
+
+/// One request to `codex app-server` (JSON-RPC over stdio) with Alice's CODEX_HOME.
+async fn codex_app_server(exe: &str, method: &str, params: Value) -> std::result::Result<Value, String> {
     let fut = async {
         let mut child = codex_cmd(exe)
             .arg("app-server")
@@ -476,7 +491,7 @@ pub async fn codex_rate_limits(exe: &str) -> std::result::Result<Value, String> 
         let reqs = [
             serde_json::json!({ "id": 1, "method": "initialize", "params": { "clientInfo": { "name": "alice", "version": env!("CARGO_PKG_VERSION") } } }),
             serde_json::json!({ "method": "initialized" }),
-            serde_json::json!({ "id": 2, "method": "account/rateLimits/read" }),
+            if params.is_null() { serde_json::json!({ "id": 2, "method": method }) } else { serde_json::json!({ "id": 2, "method": method, "params": params }) },
         ];
         for r in reqs {
             stdin.write_all(format!("{r}\n").as_bytes()).await.map_err(|e| e.to_string())?;

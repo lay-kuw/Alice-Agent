@@ -39,7 +39,7 @@ Web GUI: `http://127.0.0.1:7878/` を開き、`alice token` で表示される�
 | `alice chat "質問"` | 新しいスレッドで 1 回だけ質問 |
 | `alice chat list` / `alice chat <id>` | スレッド一覧 / 再開 |
 | `alice chat rename <id>` / `delete <id>` / `clear` | 名前変更 / 削除 / 全削除（設定は維持） |
-| `alice model [list\|add\|remove\|use\|login\|logout\|test]` | モデル管理（`use 1` / `test 1` のように番号でも指定可。`list` に利用可否 ✓/✗ を表示） |
+| `alice model [list\|refresh\|add\|remove\|use\|login\|logout\|test]` | モデル管理（`use 1` / `test 1` のように番号でも指定可。`use 2 high` で推論の深さも指定。`list` に利用可否 ✓/✗ と表示名・推論の深さを表示） |
 | `alice soul [edit\|show\|reset]` | 人格ファイル SOUL.md（Alice への指示のすべて） |
 | `alice usage` | ChatGPT サブスク（codex-cli）の 5 時間枠・週間枠の残量と、モデル別の使用トークン |
 | `alice memory [list\|search "語"\|show <id>\|status\|clear]` | Memory 管理（出典の確認は `show`） |
@@ -74,6 +74,7 @@ alice profile default    # default に戻す
 - **作業フォルダ**: `alice config set tools.fs.workspace ~/AliceWork`（または Web の「設定 → ツール」）。相対パスはここに解決され、ほかのフォルダは `tools.fs.roots` で追加できます。
 - **Web 検索**: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key`（または SearXNG）。
 - **ChatGPT サブスク**: `alice model add` → `codex-cli` → `alice model login codex-cli`（Alice 専用のログイン。普段の `~/.codex` は使いません）。スキルは内蔵 MCP サーバー経由で使え、承認は Alice の画面で行います。
+- **モデル一覧の自動取得**: Codex（アカウントで使えるモデルと推論の深さ）、Gemini / Anthropic / OpenAI 互換サーバーは、起動時と 6 時間ごとに一覧を取り直します（`alice model refresh` で今すぐ）。推論の深さは `codex-cli/gpt-6.2-sol#high` のようにモデル ID の後ろに付けて指定し、Web・TUI・iPhone のモデル選択からも選べます。
 
 ## iPhone アプリ
 

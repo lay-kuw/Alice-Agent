@@ -3,7 +3,7 @@
 mod common;
 
 use common::Harness;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 fn content(m: &serde_json::Value) -> String {
@@ -298,6 +298,11 @@ async fn tool_permissions_are_enforced() {
     // Allowed by default: fs_list runs.
     let r = h.chat(&t, "call fs_list", "cli").await;
     assert!(content(&r).contains("victim.txt"), "{}", content(&r));
+    // Each turn's last assistant message is marked final; the step that called a tool is not.
+    let msgs = h.get(&format!("/threads/{t}/messages")).await["messages"].as_array().cloned().unwrap();
+    let asst: Vec<&Value> = msgs.iter().filter(|m| m["role"] == "assistant").collect();
+    assert_eq!(asst.first().unwrap()["meta"]["final"], false);
+    assert_eq!(asst.last().unwrap()["meta"]["final"], true);
 
     // Destructive by default: fs_delete asks; rejecting keeps the file.
     let mut ev = h.events(Some(&t)).await;

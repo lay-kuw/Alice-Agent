@@ -39,13 +39,18 @@ pub fn codex_home() -> Option<std::path::PathBuf> {
 const CODEX_OFF: &[&str] = &[
     "shell_tool", "unified_exec", "unified_exec_tty", "browser_use", "browser_use_external", "computer_use",
     "in_app_browser", "in_app_chat", "in_app_local_automation", "image_generation", "apps", "plugins", "remote_plugin",
-    "hooks", "goals", "multi_agent", "skill_search", "skill_mcp_dependency_install", "view_image", "tool_suggest",
-    "shell_snapshot", "workspace_dependencies", "code_mode_host",
+    "hooks", "goals", "skill_search", "skill_mcp_dependency_install", "view_image", "tool_suggest",
+    "shell_snapshot", "workspace_dependencies",
 ];
 
+/// Codex reaches MCP tools only from inside its `exec` code-mode tool: a V8
+/// isolate with no file system, network or Node. Everything it can call is
+/// listed in `exec`'s description, which [`codex_safe`] checks.
+const CODEX_ON: &[&str] = &["code_mode_host"];
+
 const CODEX_CONFIG_HEAD: &str = "# Written by Alice before every Codex run. Changes here are overwritten.\n\
-approval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n\
-include_apply_patch_tool = false\n\n[history]\npersistence = \"none\"\n\n[features]\n";
+approval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\n\n\
+[history]\npersistence = \"none\"\n\n[agents]\nenabled = false\n\n[features]\n";
 
 /// Create Alice's CODEX_HOME and (re)write its config.toml.
 pub fn prepare_codex_home() -> std::result::Result<std::path::PathBuf, String> {
@@ -59,6 +64,9 @@ pub fn prepare_codex_home() -> std::result::Result<std::path::PathBuf, String> {
     let mut cfg = CODEX_CONFIG_HEAD.to_string();
     for f in CODEX_OFF {
         cfg.push_str(&format!("{f} = false\n"));
+    }
+    for f in CODEX_ON {
+        cfg.push_str(&format!("{f} = true\n"));
     }
     let path = home.join("config.toml");
     if std::fs::read_to_string(&path).ok().as_deref() != Some(cfg.as_str()) {
@@ -166,10 +174,13 @@ pub async fn codex_safe(exe: &str) -> std::result::Result<(), String> {
                 if names.is_empty() {
                     // Fail closed: an unreadable list is not a safe list.
                     Err("Codex returned no tool list".into())
-                } else if bad.is_empty() {
-                    Ok(())
-                } else {
+                } else if !bad.is_empty() {
                     Err(format!("Codex exposes tools outside Alice's control: {}", bad.join(", ")))
+                } else if names.iter().any(|n| n == "exec") && !code_mode_host(&real) {
+                    // Without the host, MCP tools cannot be called at all.
+                    Err("codex-code-mode-host is not installed".into())
+                } else {
+                    Ok(())
                 }
             }
             Err(e) => Err(format!("cannot read Codex tool list: {e}")),
@@ -184,6 +195,11 @@ pub async fn codex_safe(exe: &str) -> std::result::Result<(), String> {
     }
     *CHECK.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, r.clone()));
     r
+}
+
+/// The code-mode host ships next to the codex binary (or is on PATH).
+fn code_mode_host(codex: &std::path::Path) -> bool {
+    codex.parent().is_some_and(|d| d.join("codex-code-mode-host").is_file()) || which("codex-code-mode-host").is_some()
 }
 
 fn which(exe: &str) -> Option<std::path::PathBuf> {

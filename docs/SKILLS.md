@@ -140,6 +140,7 @@ Alice は Codex を **Alice 専用の CODEX_HOME（`~/.alice/codex/`）** で起
 
 - ユーザー普段の `~/.codex`（プラグイン・MCP サーバー・フック・履歴・記憶）は読み込まない。ログインも Alice 専用（`alice model login codex-cli`）。
 - `config.toml` は Alice が毎回書き出す：シェル・統合 exec・ブラウザ・コンピューター操作・画像生成・アプリ・プラグイン・フック・Web 検索を無効化、サンドボックスは読み取り専用、承認ポリシーは never、作業フォルダは空の一時ディレクトリ、MCP サーバーは `alice mcp` だけ。
+- Codex は MCP ツールを code mode の `exec`（ファイル・ネットワーク・Node のない V8 isolate）の中からしか呼べないため、`code_mode_host` だけは有効にする。isolate から呼べるのは `exec` の説明に列挙されたツールだけで、それも安全確認の対象。`codex-code-mode-host` が無ければ MCP は使えないので、テキスト方式に切り替える。
 - MCP の承認は Codex 側では行わず（`default_tools_approval_mode = "approve"`）、Alice の Tool Gate が行う。
 - **安全確認**：ツールを渡す前に `codex debug prompt-input` でモデルに見えるツール一覧を取り出し、許可リスト外のツール（シェルなど）が 1 つでもあれば MCP を使わず、テキスト方式に切り替える。結果は Codex のバージョンごとにキャッシュする。
 

@@ -436,6 +436,9 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             "usage": completion.usage,
             "stop_reason": completion.stop_reason,
             "memories": mem_ids,
+            // Last message of the turn. Calls made through MCP are already
+            // answered, so `tool_calls` alone does not mean another step follows.
+            "final": completion.tool_calls.is_empty(),
         });
         let updated = {
             let c = app.db.lock();

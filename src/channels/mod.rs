@@ -306,7 +306,7 @@ async fn run_turn<S: Surface>(
             }
             "message.completed" if v["message"]["role"] == "assistant" => {
                 let m = &v["message"];
-                let has_tools = m["tool_calls"].as_array().is_some_and(|a| !a.is_empty());
+                let has_tools = m["tool_calls"].as_array().is_some_and(|a| !a.is_empty()) && m["meta"]["final"] != true;
                 let status = m["status"].as_str().unwrap_or("");
                 if status == "complete" && has_tools {
                     // Keep the visible text; the next step streams after it.

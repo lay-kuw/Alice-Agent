@@ -178,7 +178,7 @@ pub async fn send_and_stream(
                     continue;
                 }
                 md.finish();
-                let has_tools = m["tool_calls"].as_array().is_some_and(|a| !a.is_empty());
+                let has_tools = m["tool_calls"].as_array().is_some_and(|a| !a.is_empty()) && m["meta"]["final"] != true;
                 match m["status"].as_str().unwrap_or("") {
                     "cancelled" => {
                         println!("{}", dim("(stopped)"));

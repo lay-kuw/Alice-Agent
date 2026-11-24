@@ -468,7 +468,7 @@ function msgEl(m) {
   if (tools.length) box.append(el('div', {}, tools));
   if (m.status === 'error') box.append(el('div', { class: 'meta' }, t('error') + ': ' + (m.meta?.error || '')));
   if (m.status === 'cancelled') box.append(el('div', { class: 'meta' }, t('stopped')));
-  if (m.status === 'complete' && !(m.tool_calls || []).length && m.meta) {
+  if (m.status === 'complete' && m.meta && (m.meta.final || !(m.tool_calls || []).length)) {
     box.append(el('div', { class: 'meta' }, `${m.model || ''} · ${((m.meta.provider_ms || 0) / 1000).toFixed(1)}s`));
   }
   return box;
@@ -695,7 +695,7 @@ async function resync() {
   try { await loadThreads(); if (S.current) await openThread(S.current); } catch {}
 }
 
-const endsTurn = (m) => m.role === 'assistant' && (m.status !== 'complete' || !(m.tool_calls || []).length);
+const endsTurn = (m) => m.role === 'assistant' && (m.status !== 'complete' || m.meta?.final || !(m.tool_calls || []).length);
 
 function handleEvent(v) {
   const here = v.thread_id && v.thread_id === S.current;

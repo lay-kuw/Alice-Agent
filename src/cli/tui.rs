@@ -569,7 +569,9 @@ fn upsert(list: &mut Vec<Value>, m: Value) {
 }
 
 fn ends_turn(m: &Value) -> bool {
-    m["role"] == "assistant" && (m["status"] != "complete" || m["tool_calls"].as_array().is_none_or(|a| a.is_empty())) && m["status"] != "streaming"
+    m["role"] == "assistant"
+        && (m["status"] != "complete" || m["meta"]["final"] == true || m["tool_calls"].as_array().is_none_or(|a| a.is_empty()))
+        && m["status"] != "streaming"
 }
 
 // ------------------------------------------------------------------ text layout
@@ -780,7 +782,7 @@ fn conversation(app: &App, width: usize) -> Vec<Line<'static>> {
                         s(RED),
                     ))),
                     "cancelled" => out.push(Line::from(Span::styled(" (stopped)", s(MUTED)))),
-                    "complete" if calls.is_empty() => {
+                    "complete" if calls.is_empty() || m["meta"]["final"] == true => {
                         let secs = m.pointer("/meta/provider_ms").and_then(|n| n.as_u64()).unwrap_or(0) as f64 / 1000.0;
                         out.push(Line::from(Span::styled(format!("{} · {secs:.1}s", m["model"].as_str().unwrap_or("")), s(FAINT))));
                     }

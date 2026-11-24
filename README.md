@@ -25,7 +25,8 @@ scripts/install.sh --uninstall
 alice setup      # 対話型セットアップ（サーバー・API トークン・モデル・自動起動）
 alice model      # モデルの一覧・既定モデル変更・追加・テスト
 alice start      # サーバー起動（launchd / systemd 登録済みならサービス経由）
-alice chat       # 対話チャット（Ctrl-C で応答停止、/help でコマンド一覧）
+alice chat       # TUI チャット（? でヘルプ、Esc で応答停止、--plain で行表示）
+alice soul       # 人格（SOUL.md）をエディタで編集
 ```
 
 Web GUI: `http://127.0.0.1:7878/` を開き、`alice token` で表示されるトークンでサインイン。
@@ -37,7 +38,8 @@ Web GUI: `http://127.0.0.1:7878/` を開き、`alice token` で表示される�
 | `alice chat "質問"` | 新しいスレッドで 1 回だけ質問 |
 | `alice chat list` / `alice chat <id>` | スレッド一覧 / 再開 |
 | `alice chat rename <id>` / `delete <id>` / `clear` | 名前変更 / 削除 / 全削除（設定は維持） |
-| `alice model [list\|add\|remove\|use\|login\|logout\|test]` | モデル管理 |
+| `alice model [list\|add\|remove\|use\|login\|logout\|test]` | モデル管理（`use 1` / `test 1` のように番号でも指定可。`list` に利用可否 ✓/✗ を表示） |
+| `alice soul [edit\|show\|reset]` | 人格ファイル SOUL.md（性格・話し方・仕事の進め方） |
 | `alice memory [list\|search "語"\|show <id>\|status\|clear]` | Memory 管理（出典の確認は `show`） |
 | `alice tool [list\|enable <tool> [ask\|allow]\|disable <tool>]` | ツール権限 |
 | `alice gateway [list\|setup [telegram\|discord]\|delete <id>]` | Telegram / Discord |
@@ -72,11 +74,16 @@ alice profile default    # default に戻す
 
 `ios/Alice.xcodeproj` を Xcode で開き、Signing の Team を設定して実機にインストールします。サーバー URL と `alice token` のトークンで接続します（Tailscale の `tailscale serve` などの HTTPS 推奨）。
 
+## 人格（SOUL.md）
+
+`~/.alice/SOUL.md`（プロファイルごと）に書いた性格・話し方・仕事の進め方が Alice の人格になります。`alice soul` か Web の「設定 → 人格」で編集でき、次の返答から反映されます。会話をすべて削除しても残り、AI 自身は書き換えられません。
+
 ## データ
 
 ```
 ~/.alice/
 ├── config.toml     設定（会話由来の情報は含まない）
+├── SOUL.md         人格
 ├── secrets.toml    API Key・トークン（0600）
 ├── alice.db        会話・Memory（SQLite, FTS5）
 ├── attachments/    添付ファイル（スレッド単位）

@@ -7,6 +7,7 @@ pub mod client;
 pub mod markdown;
 pub mod profile;
 pub mod service;
+pub mod tui;
 
 use crate::config::{Config, Paths, Permission, ProviderConfig, ProviderKind, Secrets};
 use chat::dim;
@@ -44,7 +45,7 @@ pub enum Cmd {
         #[arg(short = 'n', long, default_value_t = 50)]
         lines: usize,
     },
-    /// Chat: `alice chat`, `alice chat "message"`, `alice chat new|list|<id>|delete <id>|rename <id>|clear`
+    /// Chat: `alice chat` (TUI), `alice chat "message"`, `alice chat new|list|<id>|delete <id>|rename <id>|clear`, `--plain`
     Chat { args: Vec<String> },
     /// Manage models: list, add, remove <id>, use <id>, login <provider>, logout <provider>, test <id>
     Model { args: Vec<String> },
@@ -58,6 +59,8 @@ pub enum Cmd {
     Gateway { args: Vec<String> },
     /// Profiles: `alice profile` (list), `alice profile <name>` (create/switch), `use <name>`, `delete <name>`
     Profile { args: Vec<String> },
+    /// Personality (SOUL.md): edit, show, reset
+    Soul { args: Vec<String> },
     /// Google account: status, setup, login, logout
     Google { args: Vec<String> },
     /// Auto-start service: install, uninstall, status
@@ -80,7 +83,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
                 return Ok(());
             }
             let c = Client::from_env(&paths)?;
-            chat::interactive(&c, None).await
+            interactive(&c, None, &paths, false).await
         }
         Some(Cmd::Setup) => setup(&paths).await,
         Some(Cmd::Start) => service::start(&paths).await,
@@ -104,6 +107,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Profile { args }) => profile::cmd(&paths, args).await,
         Some(Cmd::Service { args }) => service_cmd(&paths, args),
         Some(Cmd::Google { args }) => google_cmd(&paths, args).await,
+        Some(Cmd::Soul { args }) => soul_cmd(&paths, args),
         Some(Cmd::Serve) => unreachable!(),
     }
 }
@@ -240,6 +244,9 @@ async fn setup(paths: &Paths) -> CliResult<()> {
     }
     println!("   Show it any time with `alice token` (used to log in from the Web GUI and the iPhone app).");
 
+    crate::config::ensure_soul(paths);
+    println!("   Personality: {} (edit any time with `alice soul`)", paths.soul().display());
+
     println!("\n4. Model provider");
     if cfg.providers.is_empty() || confirm("   Add a model provider now?", cfg.providers.is_empty()) {
         model_add(paths).await?;
@@ -291,6 +298,47 @@ async fn token_cmd(paths: &Paths, rotate: bool) -> CliResult<()> {
     println!("Server URL: {url}");
     println!("API token:  {}", s.get("server.token").unwrap_or(""));
     Ok(())
+}
+
+/// SOUL.md is a settings file, so it is edited directly (the server reads it every turn).
+fn soul_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
+    paths.ensure().map_err(|e| e.to_string())?;
+    crate::config::ensure_soul(paths);
+    let file = paths.soul();
+    match args.first().map(String::as_str) {
+        None | Some("edit") => {
+            let editor = std::env::var("VISUAL").or_else(|_| std::env::var("EDITOR")).unwrap_or_else(|_| "vi".into());
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("{editor} \"$1\""))
+                .arg("sh")
+                .arg(&file)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("{editor} exited with {status}"));
+            }
+            println!("Saved {}. Alice uses it from the next reply.", file.display());
+            Ok(())
+        }
+        Some("show") => {
+            print!("{}", crate::config::read_soul(paths));
+            Ok(())
+        }
+        Some("path") => {
+            println!("{}", file.display());
+            Ok(())
+        }
+        Some("reset") => {
+            if !confirm("Replace SOUL.md with the default template?", false) {
+                return Ok(());
+            }
+            crate::config::write_atomic(&file, crate::config::SOUL_TEMPLATE.as_bytes(), 0o600)?;
+            println!("Reset {}.", file.display());
+            Ok(())
+        }
+        _ => Err("usage: alice soul [edit | show | path | reset]".into()),
+    }
 }
 
 async fn google_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
@@ -392,12 +440,24 @@ fn looks_like_id(s: &str) -> bool {
     (4..=12).contains(&s.len()) && s.chars().all(|c| c.is_ascii_digit() || (c.is_ascii_lowercase() && !"ilou".contains(c)))
 }
 
+/// Full-screen TUI on a terminal; the line-based REPL otherwise (or with --plain).
+async fn interactive(c: &Client, thread: Option<String>, paths: &Paths, plain: bool) -> CliResult<()> {
+    use std::io::IsTerminal;
+    if plain || !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() || std::env::var("TERM").as_deref() == Ok("dumb") {
+        chat::interactive(c, thread).await
+    } else {
+        tui::run(c, thread, &paths.profile).await
+    }
+}
+
 async fn chat_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     let c = Client::from_env(paths)?;
+    let plain = args.iter().any(|a| a == "--plain");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--plain").collect();
     let first = args.first().map(String::as_str);
     match (first, args.len()) {
-        (None, _) => chat::interactive(&c, None).await,
-        (Some("new"), 1) => chat::interactive(&c, None).await,
+        (None, _) => interactive(&c, None, paths, plain).await,
+        (Some("new"), 1) => interactive(&c, None, paths, plain).await,
         (Some("list" | "ls"), 1) => chat::list(&c).await,
         (Some("delete" | "rm"), 2) => {
             c.delete(&format!("/threads/{}", args[1]), None).await?;
@@ -421,7 +481,7 @@ async fn chat_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             Ok(())
         }
         (Some(id), 1) if looks_like_id(id) => match c.get(&format!("/threads/{id}")).await {
-            Ok(v) => chat::interactive(&c, v.pointer("/thread/id").and_then(|i| i.as_str()).map(str::to_string)).await,
+            Ok(v) => interactive(&c, v.pointer("/thread/id").and_then(|i| i.as_str()).map(str::to_string), paths, plain).await,
             Err(_) => chat::one_shot(&c, id).await,
         },
         _ => chat::one_shot(&c, &args.join(" ")).await,
@@ -502,17 +562,43 @@ async fn models_json(paths: &Paths) -> CliResult<Value> {
     }
 }
 
-fn print_models(v: &Value) -> Vec<String> {
+/// Provider health from the running server (empty when it is not running).
+async fn provider_status(paths: &Paths) -> std::collections::HashMap<String, (String, String)> {
+    let mut m = std::collections::HashMap::new();
+    if let Backend::Remote(c) = backend(paths).await
+        && let Ok(v) = c.get("/providers/status").await {
+            for p in v["providers"].as_array().into_iter().flatten() {
+                m.insert(
+                    p["id"].as_str().unwrap_or("").to_string(),
+                    (p["status"].as_str().unwrap_or("").to_string(), p["detail"].as_str().unwrap_or("").to_string()),
+                );
+            }
+        }
+    m
+}
+
+fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, String)>) -> Vec<String> {
     let default = v["default"].as_str().unwrap_or("");
     let mut all = Vec::new();
     for p in v["providers"].as_array().cloned().unwrap_or_default() {
         let kind = p["kind"].as_str().unwrap_or("");
+        let id = p["id"].as_str().unwrap_or("");
+        if let Some((st, detail)) = status.get(id) {
+            let icon = match st.as_str() {
+                "ok" => if chat::color() { "\x1b[32m✓\x1b[0m" } else { "✓" },
+                "ng" => if chat::color() { "\x1b[31m✗\x1b[0m" } else { "✗" },
+                _ => "?",
+            };
+            print!("{icon} ");
+            let _ = detail;
+        }
         let auth = match ProviderKind::parse(kind) {
             Some(k) if k.needs_api_key() => if p["has_key"] == true { "key set" } else { "no key" },
             Some(ProviderKind::CodexCli | ProviderKind::GeminiCli) => "cli login",
             _ => "",
         };
-        println!("{} {}", p["id"].as_str().unwrap_or(""), dim(&format!("({kind}{})", if auth.is_empty() { String::new() } else { format!(", {auth}") })));
+        let detail = status.get(id).map(|(_, d)| format!(" — {d}")).unwrap_or_default();
+        println!("{id} {}", dim(&format!("({kind}{}){detail}", if auth.is_empty() { String::new() } else { format!(", {auth}") })));
         for m in p["models"].as_array().cloned().unwrap_or_default() {
             let full = format!("{}/{}", p["id"].as_str().unwrap_or(""), m.as_str().unwrap_or(""));
             all.push(full.clone());
@@ -549,7 +635,7 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     match a.as_slice() {
         [] => loop {
             let v = models_json(paths).await?;
-            let all = print_models(&v);
+            let all = print_models(&v, &provider_status(paths).await);
             let ans = ask("\nNumber = set default, a = add, r <n> = remove, t <n> = test, Enter = quit", "");
             let (cmd, rest) = ans.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((ans.as_str(), ""));
             let pick = |s: &str| s.parse::<usize>().ok().and_then(|n| all.get(n.wrapping_sub(1)).cloned());
@@ -572,16 +658,46 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             println!();
         },
         ["list" | "ls"] => {
-            print_models(&models_json(paths).await?);
+            print_models(&models_json(paths).await?, &provider_status(paths).await);
             Ok(())
         }
         ["add"] => model_add(paths).await,
-        ["remove" | "rm", id] => remove_provider(paths, id.split('/').next().unwrap_or(id)).await,
-        ["use", id] => set_default(paths, id).await,
-        ["test", id] => test_model(paths, id).await,
+        ["remove" | "rm", id] => {
+            let m = pick_model(paths, id).await?;
+            remove_provider(paths, m.split('/').next().unwrap_or(&m)).await
+        }
+        ["use", id] => set_default(paths, &pick_model(paths, id).await?).await,
+        ["test", id] => test_model(paths, &pick_model(paths, id).await?).await,
         ["login", provider] => login(paths, provider).await,
         ["logout", provider] => logout(paths, provider).await,
         _ => Err("usage: alice model [list|add|remove <id>|use <id>|login <provider>|logout <provider>|test <id>]".into()),
+    }
+}
+
+/// Accept a full model ID, a number from `alice model list`, or a unique
+/// model / provider name.
+async fn pick_model(paths: &Paths, arg: &str) -> CliResult<String> {
+    let v = models_json(paths).await?;
+    let all: Vec<String> = v["providers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|p| {
+            let id = p["id"].as_str().unwrap_or("").to_string();
+            p["models"].as_array().into_iter().flatten().filter_map(move |m| m.as_str().map(|m| format!("{id}/{m}"))).collect::<Vec<_>>()
+        })
+        .collect();
+    if let Ok(n) = arg.parse::<usize>() {
+        return all.get(n.wrapping_sub(1)).cloned().ok_or_else(|| format!("no model #{n} (see `alice model list`)"));
+    }
+    if all.iter().any(|m| m == arg) {
+        return Ok(arg.to_string());
+    }
+    let hits: Vec<&String> = all.iter().filter(|m| m.split('/').nth(1) == Some(arg) || m.split('/').next() == Some(arg)).collect();
+    match hits.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] => Err(format!("unknown model: {arg} (see `alice model list`)")),
+        _ => Err(format!("'{arg}' is ambiguous: {}", hits.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))),
     }
 }
 

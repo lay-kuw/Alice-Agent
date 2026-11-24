@@ -40,6 +40,11 @@ impl Client {
         Ok(Client { base: base.trim_end_matches('/').to_string(), token, http })
     }
 
+    pub fn new(base: &str, token: &str) -> Client {
+        let http = reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(3)).build().expect("http client");
+        Client { base: base.trim_end_matches('/').to_string(), token: token.to_string(), http }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}/api{}", self.base, path)
     }

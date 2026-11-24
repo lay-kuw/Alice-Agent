@@ -106,7 +106,9 @@ pub async fn dispatch(app: &AppRef, dc: &Arc<Discord>, t: &str, d: &Value) {
     match t {
         "READY" => {
             let id = d.pointer("/user/id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-            info!("discord: connected as {}", d.pointer("/user/username").and_then(|u| u.as_str()).unwrap_or("?"));
+            let name = d.pointer("/user/username").and_then(|u| u.as_str()).unwrap_or("?");
+            info!("discord: connected as {name}");
+            app.set_channel_status("discord", "connected", name);
             *dc.bot_id.lock().unwrap_or_else(|e| e.into_inner()) = id;
         }
         "MESSAGE_CREATE" => {
@@ -209,10 +211,12 @@ pub async fn run(app: AppRef, token: String, stop: CancellationToken) {
             Ok(()) => return, // stopped
             Err(e) => {
                 warn!("discord: gateway disconnected: {}", crate::util::truncate(&e, 200));
-                if e.contains("4004") || e.contains("4014") {
+                if e.contains("4004") || e.contains("4014") || e.contains("HTTP 401") {
                     warn!("discord: authentication failed or intents not allowed; check the bot token");
+                    app.set_channel_status("discord", "error", "the bot token was rejected");
                     return;
                 }
+                app.set_channel_status("discord", "error", crate::util::truncate(&e, 200));
             }
         }
         tokio::select! {

@@ -73,6 +73,8 @@ pub fn router(app: AppRef) -> Router {
         .route("/models/default", put(set_default_model))
         .route("/models/test", post(test_model))
         .route("/providers", post(add_provider))
+        .route("/providers/status", get(providers_status))
+        .route("/channels/status", get(channels_status))
         .route("/providers/{id}", axum::routing::delete(remove_provider))
         .route("/secrets/{name}", put(set_secret).delete(delete_secret))
         .route("/memories", get(list_memories).delete(clear_memories))
@@ -81,6 +83,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/config", get(get_config).patch(patch_config))
         .route("/tools", get(list_tools).patch(patch_tools))
         .route("/logs", get(logs))
+        .route("/soul", get(get_soul).put(put_soul))
         .route("/google", get(google_status))
         .route("/google/login", post(google_login))
         .route("/google/finish", post(google_finish))
@@ -102,9 +105,10 @@ pub fn router(app: AppRef) -> Router {
 
 // ---------------------------------------------------------------- auth
 
-/// Cookies are not port-scoped, so each profile uses its own cookie name.
+/// Cookies are not port-scoped, so each server (profile / machine behind a
+/// port forward) uses its own cookie name.
 fn cookie_name(app: &App) -> String {
-    if app.paths.is_default() { "alice_session".into() } else { format!("alice_session_{}", app.paths.profile) }
+    format!("alice_session_{}", app.config().server.port)
 }
 
 fn cookie_token(app: &App, headers: &HeaderMap) -> Option<String> {
@@ -609,6 +613,27 @@ struct ModelBody {
     model: String,
 }
 
+async fn providers_status(State(app): State<AppRef>) -> Json<Value> {
+    let cfg = app.config();
+    let secrets = app.secrets();
+    let checks = cfg.providers.iter().map(|p| {
+        let key = secrets.provider_key(&p.id).map(str::to_string);
+        let http = app.http.clone();
+        let p = p.clone();
+        async move {
+            let (state, detail) = providers::health(&http, &p, key.as_deref()).await;
+            json!({ "id": p.id, "status": state, "detail": detail })
+        }
+    });
+    Json(json!({ "providers": futures_util::future::join_all(checks).await }))
+}
+
+async fn channels_status(State(app): State<AppRef>) -> Json<Value> {
+    let st = app.channel_status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let get = |n: &str| st.get(n).cloned().unwrap_or(json!({ "state": "disabled", "detail": "" }));
+    Json(json!({ "telegram": get("telegram"), "discord": get("discord") }))
+}
+
 async fn set_default_model(State(app): State<AppRef>, Json(b): Json<ModelBody>) -> ApiResult<Json<Value>> {
     let cfg = app
         .update_config(|c| {
@@ -878,6 +903,29 @@ async fn patch_tools(State(app): State<AppRef>, Json(b): Json<serde_json::Map<St
     .map_err(bad)?;
     let cfg = app.config();
     Ok(Json(json!({ "tools": tools::list_json(&cfg, &app) })))
+}
+
+// ---------------------------------------------------------------- soul
+
+async fn get_soul(State(app): State<AppRef>) -> Json<Value> {
+    Json(json!({
+        "content": crate::config::read_soul(&app.paths),
+        "path": app.paths.soul().display().to_string(),
+        "template": crate::config::SOUL_TEMPLATE,
+    }))
+}
+
+#[derive(Deserialize)]
+struct SoulBody {
+    content: String,
+}
+
+async fn put_soul(State(app): State<AppRef>, Json(b): Json<SoulBody>) -> ApiResult<Json<Value>> {
+    if b.content.len() > 64 * 1024 {
+        return Err(bad("SOUL.md is limited to 64 KB"));
+    }
+    crate::config::write_atomic(&app.paths.soul(), b.content.as_bytes(), 0o600).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ---------------------------------------------------------------- google

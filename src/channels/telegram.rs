@@ -232,9 +232,14 @@ async fn incoming(app: &AppRef, tg: &Arc<Telegram>, m: &Value) -> Option<Incomin
 pub async fn run(app: AppRef, token: String, stop: CancellationToken) {
     let tg = Arc::new(Telegram::new(&app, &token));
     match tg.call("getMe", &json!({})).await {
-        Ok(me) => info!("telegram: connected as @{}", me["username"].as_str().unwrap_or("?")),
+        Ok(me) => {
+            let name = me["username"].as_str().unwrap_or("?");
+            info!("telegram: connected as @{name}");
+            app.set_channel_status("telegram", "connected", &format!("@{name}"));
+        }
         Err(e) => {
             warn!("telegram: cannot connect: {e}");
+            app.set_channel_status("telegram", "error", &e);
             return;
         }
     }
@@ -285,11 +290,15 @@ pub async fn run(app: AppRef, token: String, stop: CancellationToken) {
         };
         let updates = match r {
             Ok(v) => {
+                if backoff > 1 {
+                    app.set_channel_status("telegram", "connected", "");
+                }
                 backoff = 1;
                 v.as_array().cloned().unwrap_or_default()
             }
             Err(e) => {
                 warn!("telegram: getUpdates failed: {}", crate::util::truncate(&e, 200));
+                app.set_channel_status("telegram", "error", crate::util::truncate(&e, 200));
                 tokio::select! {
                     _ = stop.cancelled() => return,
                     _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}

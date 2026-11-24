@@ -553,6 +553,7 @@ async fn supervise(app: AppRef, name: &'static str) {
     loop {
         let cfg = app.config();
         let token = gateway_ready(&cfg, &app.secrets(), name);
+        let has_token = token.is_some();
         let stop = CancellationToken::new();
         let run = {
             let app = app.clone();
@@ -571,6 +572,17 @@ async fn supervise(app: AppRef, name: &'static str) {
                 }
             }
         };
+        if !has_token {
+            let cfg = app.config();
+            let enabled = if name == "telegram" { cfg.channels.telegram.enabled } else { cfg.channels.discord.enabled };
+            if enabled {
+                app.set_channel_status(name, "error", "bot token is not set");
+            } else {
+                app.set_channel_status(name, "disabled", "");
+            }
+        } else {
+            app.set_channel_status(name, "connecting", "");
+        }
         let fingerprint = gateway_fingerprint(&app, name);
         tokio::pin!(run);
         loop {

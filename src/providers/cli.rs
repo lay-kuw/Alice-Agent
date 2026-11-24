@@ -146,6 +146,11 @@ async fn run(
     }
     let status = child.wait().await.map_err(|e| ProviderError(e.to_string()))?;
     if let Some(e) = error {
+        if e.contains("not supported when using Codex with a ChatGPT account") {
+            return Err(ProviderError(format!(
+                "{e} Use the model name `default` (Codex picks the model for your plan) or a model your ChatGPT plan offers."
+            )));
+        }
         return Err(ProviderError(e));
     }
     if !status.success() && out.text.is_empty() {

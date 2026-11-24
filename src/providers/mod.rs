@@ -217,3 +217,58 @@ pub(crate) fn parse_args(s: &str) -> Value {
     }
     serde_json::from_str(s).unwrap_or_else(|_| json!({ "_invalid_json": s }))
 }
+
+/// Check whether a provider is usable without spending tokens:
+/// list models for API providers, `codex login status` for Codex CLI.
+/// Returns ("ok" | "ng" | "unknown", detail).
+pub async fn health(http: &reqwest::Client, p: &ProviderConfig, api_key: Option<&str>) -> (&'static str, String) {
+    use std::time::Duration;
+    let base = p.base_url().trim_end_matches('/').to_string();
+    if p.kind.needs_api_key() && api_key.is_none() {
+        return ("ng", "API key is not set".into());
+    }
+    let req = match p.kind {
+        ProviderKind::Openai | ProviderKind::OpenaiCompatible | ProviderKind::Ollama => {
+            let mut r = http.get(format!("{base}/models"));
+            if let Some(k) = api_key {
+                r = r.bearer_auth(k);
+            }
+            r
+        }
+        ProviderKind::Anthropic => http
+            .get(format!("{base}/v1/models?limit=1"))
+            .header("x-api-key", api_key.unwrap_or(""))
+            .header("anthropic-version", "2023-06-01"),
+        ProviderKind::Gemini => http.get(format!("{base}/v1beta/models?pageSize=1")).header("x-goog-api-key", api_key.unwrap_or("")),
+        ProviderKind::CodexCli => {
+            let out = tokio::process::Command::new(p.base_url()).args(["login", "status"]).output();
+            return match tokio::time::timeout(Duration::from_secs(8), out).await {
+                Ok(Ok(o)) if o.status.success() => {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr);
+                    ("ok", text.lines().find(|l| !l.trim().is_empty()).unwrap_or("logged in").trim().to_string())
+                }
+                Ok(Ok(_)) => ("ng", "not logged in (run `alice model login <id>`)".into()),
+                Ok(Err(_)) => ("ng", format!("'{}' is not installed", p.base_url())),
+                Err(_) => ("unknown", "codex did not answer".into()),
+            };
+        }
+        ProviderKind::GeminiCli => {
+            let out = tokio::process::Command::new(p.base_url()).arg("--version").output();
+            return match tokio::time::timeout(Duration::from_secs(8), out).await {
+                Ok(Ok(o)) if o.status.success() => ("unknown", "installed; login can only be checked by sending a message (experimental)".into()),
+                _ => ("ng", format!("'{}' is not installed", p.base_url())),
+            };
+        }
+    };
+    match req.timeout(Duration::from_secs(8)).send().await {
+        Ok(r) if r.status().is_success() => ("ok", "connected".into()),
+        Ok(r) if matches!(r.status().as_u16(), 401 | 403) => ("ng", "API key was rejected".into()),
+        // Some OpenAI-compatible servers do not implement /models; the server is reachable.
+        Ok(r) if matches!(p.kind, ProviderKind::OpenaiCompatible | ProviderKind::Ollama) => {
+            ("unknown", format!("reachable (HTTP {} on /models); use Test", r.status().as_u16()))
+        }
+        Ok(r) => ("ng", format!("HTTP {}", r.status().as_u16())),
+        Err(e) if e.is_connect() || e.is_timeout() => ("ng", "cannot connect".into()),
+        Err(e) => ("ng", e.without_url().to_string()),
+    }
+}

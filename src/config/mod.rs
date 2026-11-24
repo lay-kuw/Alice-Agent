@@ -82,6 +82,8 @@ impl Paths {
     pub fn logs(&self) -> PathBuf { self.home.join("logs") }
     pub fn log_file(&self) -> PathBuf { self.logs().join("alice.log") }
     pub fn pid_file(&self) -> PathBuf { self.home.join("alice.pid") }
+    /// Personality, tone and working style (user-written; kept on reset).
+    pub fn soul(&self) -> PathBuf { self.home.join("SOUL.md") }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         for d in [self.home.clone(), self.attachments(), self.workspace(), self.logs()] {
@@ -89,6 +91,20 @@ impl Paths {
             set_mode(&d, 0o700);
         }
         Ok(())
+    }
+}
+
+pub const SOUL_TEMPLATE: &str = include_str!("../../docs/SOUL.template.md");
+
+/// Read SOUL.md (empty if missing).
+pub fn read_soul(paths: &Paths) -> String {
+    std::fs::read_to_string(paths.soul()).unwrap_or_default()
+}
+
+/// Create SOUL.md from the template if it does not exist.
+pub fn ensure_soul(paths: &Paths) {
+    if !paths.soul().exists() {
+        let _ = write_atomic(&paths.soul(), SOUL_TEMPLATE.as_bytes(), 0o600);
     }
 }
 
@@ -360,7 +376,8 @@ impl Config {
     pub fn resolve_model<'a>(&'a self, model_id: &'a str) -> Option<(&'a ProviderConfig, &'a str)> {
         let (pid, name) = model_id.split_once('/')?;
         let p = self.provider(pid)?;
-        Some((p, name))
+        // Only models registered for the provider are valid.
+        p.models.iter().any(|m| m == name).then_some((p, name))
     }
 
     pub fn all_models(&self) -> Vec<String> {

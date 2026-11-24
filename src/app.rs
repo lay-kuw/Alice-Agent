@@ -34,6 +34,8 @@ pub struct App {
     pub events: broadcast::Sender<Event>,
     pub active: Mutex<HashMap<String, ActiveGeneration>>,
     pub approvals: Mutex<HashMap<String, PendingApproval>>,
+    /// Live gateway state for the settings UI: name -> {state, detail}.
+    pub channel_status: Mutex<HashMap<&'static str, Value>>,
     pub started: Instant,
 }
 
@@ -56,6 +58,7 @@ impl App {
             events,
             active: Mutex::new(HashMap::new()),
             approvals: Mutex::new(HashMap::new()),
+            channel_status: Mutex::new(HashMap::new()),
             started: Instant::now(),
         })
     }
@@ -110,6 +113,13 @@ impl App {
             }
             None => false,
         }
+    }
+
+    pub fn set_channel_status(&self, name: &'static str, state: &str, detail: &str) {
+        self.channel_status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name, serde_json::json!({ "state": state, "detail": detail }));
     }
 
     /// Reject all pending approvals belonging to a thread.

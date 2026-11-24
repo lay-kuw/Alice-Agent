@@ -18,7 +18,15 @@ use config::{Config, Paths, Secrets};
 /// Load everything and build the shared application state (no network).
 pub fn build_app(paths: Paths) -> Result<app::AppRef, String> {
     paths.ensure().map_err(|e| format!("{}: {e}", paths.home.display()))?;
-    let config = Config::load(&paths)?;
+    let mut config = Config::load(&paths)?;
+    config::ensure_soul(&paths);
+    // Heal a default model that no longer exists (e.g. removed or mistyped).
+    if !config.agent.default_model.is_empty() && config.resolve_model(&config.agent.default_model).is_none() {
+        let fallback = config.all_models().into_iter().next().unwrap_or_default();
+        warn!("default model '{}' is not configured; using '{}'", config.agent.default_model, fallback);
+        config.agent.default_model = fallback;
+        config.save(&paths)?;
+    }
     let mut secrets = Secrets::load(&paths)?;
     if secrets.get("server.token").is_none() {
         secrets.set("server.token", &util::new_token());

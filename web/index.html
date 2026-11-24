@@ -10,51 +10,49 @@
 </head>
 <body>
 <div id="login" class="login hidden">
-  <form id="login-form" class="card">
-    <h1>Alice</h1>
-    <p class="muted">Enter the API token shown by <code>alice token</code>.</p>
-    <input id="login-token" type="password" autocomplete="current-password" placeholder="API token" required>
-    <button type="submit" class="primary">Sign in</button>
+  <form id="login-form" class="card glass">
+    <h1 class="logo">Alice</h1>
+    <p class="muted" data-i18n="login.hint"></p>
+    <input id="login-token" type="password" autocomplete="current-password" required>
+    <button type="submit" class="primary" data-i18n="login.submit"></button>
     <p id="login-error" class="error"></p>
   </form>
 </div>
 
 <div id="app" class="app hidden">
-  <aside id="sidebar" class="sidebar">
+  <aside id="sidebar" class="sidebar glass">
     <div class="side-head">
-      <button id="new-chat" class="primary wide">＋ New chat</button>
+      <div class="brand"><span class="logo">Alice</span><span id="profile-tag" class="profile-tag"></span></div>
+      <button id="new-chat" class="primary wide" data-i18n="newChat"></button>
     </div>
     <nav id="threads" class="threads" aria-label="Threads"></nav>
     <div class="side-foot">
-      <button id="open-settings" class="ghost wide">⚙ Settings</button>
+      <button id="open-settings" class="ghost wide" data-i18n="settings"></button>
     </div>
   </aside>
   <div id="scrim" class="scrim"></div>
 
-  <main class="main">
+  <main class="main glass">
     <header class="top">
       <button id="toggle-side" class="ghost icon" aria-label="Threads">☰</button>
-      <div id="thread-title" class="title" title="Rename">New chat</div>
+      <div id="thread-title" class="title"></div>
       <select id="model-select" aria-label="Model"></select>
       <button id="thread-menu" class="ghost icon" aria-label="Thread actions">⋯</button>
     </header>
     <div id="menu" class="menu hidden">
-      <button data-act="rename">Rename</button>
-      <button data-act="delete" class="danger">Delete thread</button>
+      <button data-act="rename" data-i18n="rename"></button>
+      <button data-act="delete" class="danger" data-i18n="deleteThread"></button>
     </div>
 
     <section id="messages" class="messages" aria-live="polite">
-      <div id="empty" class="empty">
-        <h2>How can I help?</h2>
-        <p class="muted">Threads, memory and settings are shared with the CLI, iPhone, Telegram and Discord.</p>
-      </div>
+      <div id="empty" class="empty"><h2 data-i18n="empty"></h2></div>
     </section>
 
     <form id="composer" class="composer">
       <div id="attach-list" class="attach-list"></div>
       <div class="composer-row">
-        <label class="ghost icon attach" title="Attach files">📎<input id="file-input" type="file" multiple hidden></label>
-        <textarea id="input" rows="1" placeholder="Message Alice…" autocomplete="off"></textarea>
+        <label class="attach" data-i18n-title="attach">＋<input id="file-input" type="file" multiple hidden></label>
+        <textarea id="input" rows="1" autocomplete="off"></textarea>
         <button id="send" type="submit" class="primary icon" aria-label="Send">↑</button>
         <button id="stop" type="button" class="icon hidden" aria-label="Stop">■</button>
       </div>
@@ -65,17 +63,18 @@
 <div id="settings" class="settings hidden" role="dialog" aria-modal="true">
   <div class="settings-panel">
     <header class="settings-head">
-      <h2>Settings</h2>
+      <h2 data-i18n="settings.title"></h2>
       <button id="close-settings" class="ghost icon" aria-label="Close">✕</button>
     </header>
     <div class="settings-body">
       <nav id="settings-tabs" class="tabs">
-        <button data-tab="general" class="active">General</button>
-        <button data-tab="models">Models</button>
-        <button data-tab="channels">Channels</button>
-        <button data-tab="tools">Tools</button>
-        <button data-tab="memory">Memory</button>
-        <button data-tab="system">System</button>
+        <button data-tab="general" class="active" data-i18n="tab.general"></button>
+        <button data-tab="soul" data-i18n="tab.soul"></button>
+        <button data-tab="models" data-i18n="tab.models"></button>
+        <button data-tab="channels" data-i18n="tab.channels"></button>
+        <button data-tab="tools" data-i18n="tab.tools"></button>
+        <button data-tab="memory" data-i18n="tab.memory"></button>
+        <button data-tab="system" data-i18n="tab.system"></button>
       </nav>
       <div id="settings-content" class="settings-content"></div>
     </div>

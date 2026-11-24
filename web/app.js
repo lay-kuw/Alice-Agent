@@ -816,8 +816,12 @@ async function start() {
   $('app').classList.remove('hidden');
   try {
     const c = await api('GET', '/config');
-    let theme = c.agent.appearance;
-    applyTheme(theme);
+    applyTheme(c.agent.appearance);
+    S.profile = c.profile;
+    if (c.profile && c.profile !== 'default') {
+      document.title = `Alice · ${c.profile}`;
+      $('new-chat').before(el('div', { class: 'small muted profile-tag' }, `Profile: ${c.profile}`));
+    }
   } catch {}
   connectEvents();
   await loadThreads();

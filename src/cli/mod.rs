@@ -5,6 +5,7 @@
 pub mod chat;
 pub mod client;
 pub mod markdown;
+pub mod profile;
 pub mod service;
 
 use crate::config::{Config, Paths, Permission, ProviderConfig, ProviderKind, Secrets};
@@ -17,6 +18,9 @@ use std::io::Write;
 #[derive(Parser)]
 #[command(name = "alice", version, about = "Alice Agent (A2) — a lightweight personal AI agent", disable_help_subcommand = true)]
 pub struct Cli {
+    /// Use this profile instead of the current one
+    #[arg(short = 'p', long, global = true)]
+    pub profile: Option<String>,
     #[command(subcommand)]
     pub cmd: Option<Cmd>,
 }
@@ -52,6 +56,10 @@ pub enum Cmd {
     Tool { args: Vec<String> },
     /// Telegram / Discord gateways: setup, list, delete <gw-id>
     Gateway { args: Vec<String> },
+    /// Profiles: `alice profile` (list), `alice profile <name>` (create/switch), `use <name>`, `delete <name>`
+    Profile { args: Vec<String> },
+    /// Auto-start service: install, uninstall, status
+    Service { args: Vec<String> },
     /// Show the API token and connection info for Web / iPhone (`--rotate` to replace it)
     Token {
         #[arg(long)]
@@ -65,7 +73,7 @@ pub enum Cmd {
 pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
     match cmd {
         None => {
-            if !paths.config().exists() {
+            if !paths.config().exists() && paths.is_default() {
                 println!("Welcome to Alice. Run `alice setup` to get started, or `alice --help`.");
                 return Ok(());
             }
@@ -91,6 +99,8 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Tool { args }) => tool_cmd(&paths, args).await,
         Some(Cmd::Gateway { args }) => crate::channels::gateway_cmd(&paths, args).await,
         Some(Cmd::Token { rotate }) => token_cmd(&paths, rotate).await,
+        Some(Cmd::Profile { args }) => profile::cmd(&paths, args).await,
+        Some(Cmd::Service { args }) => service_cmd(&paths, args),
         Some(Cmd::Serve) => unreachable!(),
     }
 }
@@ -197,7 +207,7 @@ fn local_add_provider(paths: &Paths, p: ProviderConfig, api_key: Option<&str>) -
 // ---------------------------------------------------------------- setup
 
 async fn setup(paths: &Paths) -> CliResult<()> {
-    println!("Alice Agent setup\n");
+    println!("Alice Agent setup (profile: {})\n", paths.profile);
     println!("1. Data directory: {}", paths.home.display());
     paths.ensure().map_err(|e| e.to_string())?;
     let mut cfg = Config::load(paths)?;
@@ -247,17 +257,17 @@ async fn setup(paths: &Paths) -> CliResult<()> {
 
 async fn status(paths: &Paths) -> CliResult<()> {
     let c = Client::from_env(paths)?;
-    let mgr = match service::manager() {
+    let mgr = match service::manager(paths) {
         service::Manager::Launchd => "launchd",
         service::Manager::Systemd => "systemd",
         service::Manager::None => "none",
     };
     if !c.is_up().await {
-        println!("Alice is not running ({}; service: {mgr})", c.base);
+        println!("Alice is not running ({}; profile: {}; service: {mgr})", c.base, paths.profile);
         return Ok(());
     }
     let s = c.get("/status").await?;
-    println!("Alice {} running at {}", s["version"].as_str().unwrap_or(""), c.base);
+    println!("Alice {} running at {} (profile: {})", s["version"].as_str().unwrap_or(""), c.base, paths.profile);
     println!("  pid {}  uptime {}s  memory {:.1} MB  cpu {}%", s["pid"], s["uptime_secs"], s["rss_kb"].as_f64().unwrap_or(0.0) / 1024.0, s["cpu_percent"]);
     println!("  threads {}  messages {}  memories {}  db {:.1} KB", s["counts"]["threads"], s["counts"]["messages"], s["counts"]["memories"], s["db_bytes"].as_f64().unwrap_or(0.0) / 1024.0);
     println!("  default model: {}", s["default_model"].as_str().filter(|m| !m.is_empty()).unwrap_or("(none)"));
@@ -274,9 +284,34 @@ async fn token_cmd(paths: &Paths, rotate: bool) -> CliResult<()> {
     }
     let cfg = Config::load(paths)?;
     let url = if cfg.server.public_url.is_empty() { format!("http://{}:{}", cfg.server.bind, cfg.server.port) } else { cfg.server.public_url.clone() };
+    println!("Profile:    {}", paths.profile);
     println!("Server URL: {url}");
     println!("API token:  {}", s.get("server.token").unwrap_or(""));
     Ok(())
+}
+
+fn service_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
+    match args.first().map(String::as_str) {
+        Some("install") => {
+            println!("{}", service::register(paths)?);
+            Ok(())
+        }
+        Some("uninstall") => {
+            service::unregister(paths)?;
+            println!("Service for profile '{}' removed.", paths.profile);
+            Ok(())
+        }
+        None | Some("status") => {
+            let m = match service::manager(paths) {
+                service::Manager::Launchd => format!("launchd ({})", service::launchd_plist(paths).display()),
+                service::Manager::Systemd => format!("systemd ({})", service::systemd_unit(paths).display()),
+                service::Manager::None => "not registered".into(),
+            };
+            println!("profile {}: {m}", paths.profile);
+            Ok(())
+        }
+        _ => Err("usage: alice service [install | uninstall | status]".into()),
+    }
 }
 
 // ---------------------------------------------------------------- chat

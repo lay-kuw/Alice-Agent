@@ -163,3 +163,4 @@ pre.log { background: var(--code); border-radius: 8px; padding: 10px; font-size:
   .settings-body { flex-direction: column; }
   .tabs { width: auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+.profile-tag { padding: 0 2px 8px; }

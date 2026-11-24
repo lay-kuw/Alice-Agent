@@ -10,20 +10,70 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub home: PathBuf,
+    /// Profile name ("default" = `~/.alice`).
+    pub profile: String,
+}
+
+pub const DEFAULT_PROFILE: &str = "default";
+
+/// `~/.alice` (the default profile's home and the root of all profiles).
+pub fn alice_root() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    home.join(".alice")
+}
+
+pub fn valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+        && !name.starts_with('-')
+}
+
+/// The profile selected with `alice profile use`, if any.
+pub fn current_profile() -> String {
+    std::fs::read_to_string(alice_root().join("current_profile"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| valid_profile_name(s))
+        .unwrap_or_else(|| DEFAULT_PROFILE.to_string())
 }
 
 impl Paths {
-    /// `$ALICE_HOME` or `~/.alice`.
-    pub fn resolve() -> Paths {
+    /// Resolution order: `$ALICE_HOME` (service units), `--profile` /
+    /// `$ALICE_PROFILE`, the current profile file, then the default profile.
+    pub fn resolve(profile_flag: Option<&str>) -> Paths {
         if let Some(h) = std::env::var_os("ALICE_HOME") {
-            return Paths { home: PathBuf::from(h) };
+            return Paths::at(PathBuf::from(h));
         }
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        Paths { home: home.join(".alice") }
+        let name = profile_flag
+            .map(str::to_string)
+            .or_else(|| std::env::var("ALICE_PROFILE").ok().filter(|s| !s.is_empty()))
+            .unwrap_or_else(current_profile);
+        Paths::profile(&name)
     }
+
+    pub fn profile(name: &str) -> Paths {
+        if name == DEFAULT_PROFILE {
+            Paths { home: alice_root(), profile: DEFAULT_PROFILE.into() }
+        } else {
+            Paths { home: alice_root().join("profiles").join(name), profile: name.into() }
+        }
+    }
+
+    /// A home directory; the profile name is inferred from `.../profiles/<name>`.
     pub fn at(home: impl Into<PathBuf>) -> Paths {
-        Paths { home: home.into() }
+        let home: PathBuf = home.into();
+        let profile = match (home.parent().and_then(|p| p.file_name()), home.file_name()) {
+            (Some(parent), Some(name)) if parent == "profiles" => name.to_string_lossy().into_owned(),
+            _ => DEFAULT_PROFILE.into(),
+        };
+        Paths { home, profile }
     }
+
+    pub fn is_default(&self) -> bool {
+        self.profile == DEFAULT_PROFILE
+    }
+
     pub fn config(&self) -> PathBuf { self.home.join("config.toml") }
     pub fn secrets(&self) -> PathBuf { self.home.join("secrets.toml") }
     pub fn db(&self) -> PathBuf { self.home.join("alice.db") }
@@ -441,6 +491,14 @@ mod tests {
         assert!(!c.memory.auto_extract);
         assert!(c.set_key("server.port", "abc").is_err());
         assert!(c.set_key("nope.x", "1").is_err());
+    }
+
+    #[test]
+    fn profile_paths() {
+        assert_eq!(Paths::at("/x/.alice").profile, "default");
+        assert_eq!(Paths::at("/x/.alice/profiles/eve").profile, "eve");
+        assert!(Paths::profile("eve").home.ends_with(".alice/profiles/eve"));
+        assert!(valid_profile_name("eve-2") && !valid_profile_name("Eve") && !valid_profile_name("../x") && !valid_profile_name(""));
     }
 
     #[test]

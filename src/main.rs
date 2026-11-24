@@ -4,7 +4,13 @@ use clap::Parser;
 
 fn main() {
     let cli = Cli::parse();
-    let paths = Paths::resolve();
+    if let Some(p) = cli.profile.as_deref() {
+        if !alice::config::valid_profile_name(p) {
+            eprintln!("error: invalid profile name: {p}");
+            std::process::exit(2);
+        }
+    }
+    let paths = Paths::resolve(cli.profile.as_deref());
     let result = match cli.cmd {
         Some(Cmd::Serve) => tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

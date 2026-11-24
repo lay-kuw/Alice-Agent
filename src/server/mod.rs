@@ -97,9 +97,15 @@ pub fn router(app: AppRef) -> Router {
 
 // ---------------------------------------------------------------- auth
 
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+/// Cookies are not port-scoped, so each profile uses its own cookie name.
+fn cookie_name(app: &App) -> String {
+    if app.paths.is_default() { "alice_session".into() } else { format!("alice_session_{}", app.paths.profile) }
+}
+
+fn cookie_token(app: &App, headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    raw.split(';').map(str::trim).find_map(|kv| kv.strip_prefix("alice_session=")).map(str::to_string)
+    let prefix = format!("{}=", cookie_name(app));
+    raw.split(';').map(str::trim).find_map(|kv| kv.strip_prefix(prefix.as_str())).map(str::to_string)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {
@@ -120,7 +126,7 @@ async fn auth(State(app): State<AppRef>, req: Request, next: Next) -> Response {
         if token_ok(&app, &t) {
             return next.run(req).await;
         }
-    } else if let Some(t) = cookie_token(headers)
+    } else if let Some(t) = cookie_token(&app, headers)
         && token_ok(&app, &t) {
             // Cookie auth: state-changing requests need the custom header,
             // which a cross-site form or simple request cannot set.
@@ -162,7 +168,8 @@ async fn login(State(app): State<AppRef>, headers: HeaderMap, Json(b): Json<Logi
     let https = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https")
         || app.config().server.public_url.starts_with("https://");
     let cookie = format!(
-        "alice_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{}",
+        "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000{}",
+        cookie_name(&app),
         b.token.trim(),
         if https { "; Secure" } else { "" }
     );
@@ -171,12 +178,12 @@ async fn login(State(app): State<AppRef>, headers: HeaderMap, Json(b): Json<Logi
     Ok(res)
 }
 
-async fn logout() -> Response {
+async fn logout(State(app): State<AppRef>) -> Response {
     let mut res = Json(json!({ "ok": true })).into_response();
-    res.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static("alice_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"),
-    );
+    let c = format!("{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0", cookie_name(&app));
+    if let Ok(v) = HeaderValue::from_str(&c) {
+        res.headers_mut().insert(header::SET_COOKIE, v);
+    }
     res
 }
 
@@ -197,8 +204,8 @@ fn asset(ct: &'static str, body: &'static str) -> Response {
 
 // ---------------------------------------------------------------- status
 
-async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "name": "alice", "version": env!("CARGO_PKG_VERSION") }))
+async fn health(State(app): State<AppRef>) -> Json<Value> {
+    Json(json!({ "ok": true, "name": "alice", "version": env!("CARGO_PKG_VERSION"), "profile": app.paths.profile }))
 }
 
 /// RSS (KB) and CPU% of a process, via `ps` (portable across Linux/macOS).
@@ -220,6 +227,7 @@ async fn status(State(app): State<AppRef>) -> ApiResult<Json<Value>> {
     let generating: Vec<String> = app.active.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "profile": app.paths.profile,
         "pid": pid,
         "uptime_secs": app.started.elapsed().as_secs(),
         "rss_kb": rss_kb,
@@ -798,6 +806,7 @@ fn public_config(app: &App) -> Value {
     let secrets = app.secrets();
     v["secrets_set"] = json!(secrets.names().filter(|n| *n != "server.token").collect::<Vec<_>>());
     v["version"] = json!(env!("CARGO_PKG_VERSION"));
+    v["profile"] = json!(app.paths.profile);
     v
 }
 
@@ -870,7 +879,7 @@ pub async fn serve(app: AppRef) -> std::io::Result<()> {
     if !loopback {
         crate::warn!("listening on non-loopback address {addr}: use Tailscale or an HTTPS reverse proxy for remote access");
     }
-    crate::info!("alice {} listening on http://{addr}", env!("CARGO_PKG_VERSION"));
+    crate::info!("alice {} (profile {}) listening on http://{addr}", env!("CARGO_PKG_VERSION"), app.paths.profile);
     let router = router(app.clone());
     axum::serve(listener, router)
         .with_graceful_shutdown(async {

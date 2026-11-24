@@ -7,18 +7,25 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const LAUNCHD_LABEL: &str = "local.alice.agent";
+/// launchd label / systemd unit differ per profile so profiles run side by side.
+pub fn launchd_label(paths: &Paths) -> String {
+    if paths.is_default() { "local.alice.agent".into() } else { format!("local.alice.agent.{}", paths.profile) }
+}
+
+pub fn systemd_name(paths: &Paths) -> String {
+    if paths.is_default() { "alice.service".into() } else { format!("alice-{}.service", paths.profile) }
+}
 
 fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn launchd_plist() -> PathBuf {
-    home().join("Library/LaunchAgents").join(format!("{LAUNCHD_LABEL}.plist"))
+pub fn launchd_plist(paths: &Paths) -> PathBuf {
+    home().join("Library/LaunchAgents").join(format!("{}.plist", launchd_label(paths)))
 }
 
-pub fn systemd_unit() -> PathBuf {
-    home().join(".config/systemd/user/alice.service")
+pub fn systemd_unit(paths: &Paths) -> PathBuf {
+    home().join(".config/systemd/user").join(systemd_name(paths))
 }
 
 #[derive(PartialEq, Debug)]
@@ -28,10 +35,10 @@ pub enum Manager {
     None,
 }
 
-pub fn manager() -> Manager {
-    if cfg!(target_os = "macos") && launchd_plist().exists() {
+pub fn manager(paths: &Paths) -> Manager {
+    if cfg!(target_os = "macos") && launchd_plist(paths).exists() {
         Manager::Launchd
-    } else if cfg!(target_os = "linux") && systemd_unit().exists() {
+    } else if cfg!(target_os = "linux") && systemd_unit(paths).exists() {
         Manager::Systemd
     } else {
         Manager::None
@@ -67,7 +74,7 @@ pub fn register(paths: &Paths) -> CliResult<String> {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>{LAUNCHD_LABEL}</string>
+  <key>Label</key><string>{}</string>
   <key>ProgramArguments</key><array><string>{}</string><string>serve</string></array>
   <key>EnvironmentVariables</key><dict><key>ALICE_HOME</key><string>{}</string></dict>
   <key>RunAtLoad</key><true/>
@@ -78,31 +85,34 @@ pub fn register(paths: &Paths) -> CliResult<String> {
 </dict>
 </plist>
 "#,
+            xml_escape(&launchd_label(paths)),
             xml_escape(&exe.display().to_string()),
             xml_escape(&paths.home.display().to_string()),
             xml_escape(&log.display().to_string()),
             xml_escape(&log.display().to_string()),
         );
-        let p = launchd_plist();
+        let label = launchd_label(paths);
+        let p = launchd_plist(paths);
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&p, plist).map_err(|e| e.to_string())?;
         let domain = format!("gui/{}", uid());
-        let _ = run(Command::new("launchctl").args(["bootout", &format!("{domain}/{LAUNCHD_LABEL}")]));
+        let _ = run(Command::new("launchctl").args(["bootout", &format!("{domain}/{label}")]));
         run(Command::new("launchctl").args(["bootstrap", &domain]).arg(&p))?;
         Ok(format!("registered launchd agent {}", p.display()))
     } else if cfg!(target_os = "linux") {
         let unit = format!(
-            "[Unit]\nDescription=Alice Agent\nAfter=network-online.target\n\n[Service]\nExecStart={} serve\nEnvironment=ALICE_HOME={}\nRestart=on-failure\nRestartSec=3\nStandardOutput=append:{}\nStandardError=append:{}\nNoNewPrivileges=true\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Alice Agent ({})\nAfter=network-online.target\n\n[Service]\nExecStart={} serve\nEnvironment=ALICE_HOME={}\nRestart=on-failure\nRestartSec=3\nStandardOutput=append:{}\nStandardError=append:{}\nNoNewPrivileges=true\n\n[Install]\nWantedBy=default.target\n",
+            paths.profile,
             exe.display(),
             paths.home.display(),
             log.display(),
             log.display()
         );
-        let p = systemd_unit();
+        let p = systemd_unit(paths);
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
         std::fs::write(&p, unit).map_err(|e| e.to_string())?;
         run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-        run(Command::new("systemctl").args(["--user", "enable", "--now", "alice.service"]))?;
+        run(Command::new("systemctl").args(["--user", "enable", "--now", &systemd_name(paths)]))?;
         Ok(format!(
             "registered systemd user unit {} (for start at boot without login: `loginctl enable-linger $USER`)",
             p.display()
@@ -112,15 +122,16 @@ pub fn register(paths: &Paths) -> CliResult<String> {
     }
 }
 
-pub fn unregister() -> CliResult<()> {
-    match manager() {
+pub fn unregister(paths: &Paths) -> CliResult<()> {
+    let label = launchd_label(paths);
+    match manager(paths) {
         Manager::Launchd => {
-            let _ = run(Command::new("launchctl").args(["bootout", &format!("gui/{}/{LAUNCHD_LABEL}", uid())]));
-            std::fs::remove_file(launchd_plist()).map_err(|e| e.to_string())
+            let _ = run(Command::new("launchctl").args(["bootout", &format!("gui/{}/{label}", uid())]));
+            std::fs::remove_file(launchd_plist(paths)).map_err(|e| e.to_string())
         }
         Manager::Systemd => {
-            let _ = run(Command::new("systemctl").args(["--user", "disable", "--now", "alice.service"]));
-            std::fs::remove_file(systemd_unit()).map_err(|e| e.to_string())
+            let _ = run(Command::new("systemctl").args(["--user", "disable", "--now", &systemd_name(paths)]));
+            std::fs::remove_file(systemd_unit(paths)).map_err(|e| e.to_string())
         }
         Manager::None => Ok(()),
     }
@@ -151,14 +162,15 @@ pub async fn start(paths: &Paths) -> CliResult<()> {
         println!("Alice is already running at {}", client.base);
         return Ok(());
     }
-    match manager() {
+    let label = launchd_label(paths);
+    match manager(paths) {
         Manager::Launchd => {
-            let target = format!("gui/{}/{LAUNCHD_LABEL}", uid());
+            let target = format!("gui/{}/{label}", uid());
             if run(Command::new("launchctl").args(["kickstart", &target])).is_err() {
-                run(Command::new("launchctl").args(["bootstrap", &format!("gui/{}", uid())]).arg(launchd_plist()))?;
+                run(Command::new("launchctl").args(["bootstrap", &format!("gui/{}", uid())]).arg(launchd_plist(paths)))?;
             }
         }
-        Manager::Systemd => run(Command::new("systemctl").args(["--user", "start", "alice.service"]))?,
+        Manager::Systemd => run(Command::new("systemctl").args(["--user", "start", &systemd_name(paths)]))?,
         Manager::None => {
             paths.ensure().map_err(|e| e.to_string())?;
             let log = std::fs::OpenOptions::new()
@@ -192,11 +204,12 @@ pub async fn start(paths: &Paths) -> CliResult<()> {
 
 pub async fn stop(paths: &Paths) -> CliResult<()> {
     let client = Client::from_env(paths)?;
-    match manager() {
+    let label = launchd_label(paths);
+    match manager(paths) {
         Manager::Launchd => {
-            let _ = run(Command::new("launchctl").args(["kill", "TERM", &format!("gui/{}/{LAUNCHD_LABEL}", uid())]));
+            let _ = run(Command::new("launchctl").args(["kill", "TERM", &format!("gui/{}/{label}", uid())]));
         }
-        Manager::Systemd => run(Command::new("systemctl").args(["--user", "stop", "alice.service"]))?,
+        Manager::Systemd => run(Command::new("systemctl").args(["--user", "stop", &systemd_name(paths)]))?,
         Manager::None => {
             let Some(pid) = read_pid(paths) else {
                 if client.is_up().await {

@@ -198,13 +198,12 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(n) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+        if b[i] == b'%' && i + 2 < b.len()
+            && let Ok(n) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                 out.push(n);
                 i += 3;
                 continue;
             }
-        }
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }
@@ -222,11 +221,10 @@ pub async fn logout(app: &App) -> Result<(), String> {
 }
 
 async fn access_token(app: &App, cfg: &Config) -> Result<String, String> {
-    if let Some((t, exp)) = ACCESS.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-        if Instant::now() < exp {
+    if let Some((t, exp)) = ACCESS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        && Instant::now() < exp {
             return Ok(t);
         }
-    }
     let secrets = app.secrets();
     let refresh = secrets.get("google.refresh_token").ok_or("Google account is not connected")?;
     let r = app
@@ -313,12 +311,11 @@ fn gmail_text(payload: &Value) -> String {
         if out.is_some() {
             return;
         }
-        if p["mimeType"].as_str() == Some(want) {
-            if let Some(d) = p.pointer("/body/data").and_then(|d| d.as_str()).and_then(b64_decode) {
+        if p["mimeType"].as_str() == Some(want)
+            && let Some(d) = p.pointer("/body/data").and_then(|d| d.as_str()).and_then(b64_decode) {
                 *out = Some(String::from_utf8_lossy(&d).into_owned());
                 return;
             }
-        }
         for part in p["parts"].as_array().into_iter().flatten() {
             walk(part, want, out);
         }

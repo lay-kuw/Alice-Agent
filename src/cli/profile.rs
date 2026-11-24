@@ -142,11 +142,10 @@ async fn delete(name: &str) -> CliResult<()> {
         println!("Cancelled.");
         return Ok(());
     }
-    if let Ok(c) = Client::from_env(&paths) {
-        if c.is_up().await {
+    if let Ok(c) = Client::from_env(&paths)
+        && c.is_up().await {
             service::stop(&paths).await?;
         }
-    }
     service::unregister(&paths)?;
     std::fs::remove_dir_all(&paths.home).map_err(|e| e.to_string())?;
     if current_profile() == name {

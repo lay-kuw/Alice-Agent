@@ -23,10 +23,7 @@ fn sse(chunks: Vec<Value>, delay_ms: u64) -> axum::response::Response {
         if !first && delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
         }
-        match it.next() {
-            Some(c) => Some((Ok::<_, std::convert::Infallible>(format!("data: {c}\n\n")), (it, false))),
-            None => None,
-        }
+        it.next().map(|c| (Ok::<_, std::convert::Infallible>(format!("data: {c}\n\n")), (it, false)))
     });
     let done = futures_util::stream::once(async { Ok::<_, std::convert::Infallible>("data: [DONE]\n\n".to_string()) });
     let body = axum::body::Body::from_stream(futures_util::StreamExt::chain(stream, done));

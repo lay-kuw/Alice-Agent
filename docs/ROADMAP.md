@@ -47,6 +47,19 @@
 - ◐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認・添付・停止・モデル選択）— AliceKit は実サーバーとの通しテスト済み、アプリはシミュレータ向けビルド成功。実機/シミュレータでの画面確認は未実施（シミュレータランタイム未導入）
 
 ## Phase 7 — Release
-- ☐ インストールスクリプト・launchd / systemd
-- ☐ ベンチマーク（CLI 起動・アイドルメモリ・Alice 処理時間）
-- ☐ セキュリティレビュー・ドキュメント
+- ☑ インストールスクリプト（`scripts/install.sh`、ソースビルド / バイナリ / アンインストール）
+- ☑ launchd 登録・起動・停止・クラッシュ時の自動再起動・解除を実機確認（macOS）
+- ◐ systemd user unit — 生成コードは実装済み、Linux 実機での確認は未実施
+- ◐ Linux x86_64 / ARM64 ビルド — CI / リリースワークフローを用意、ローカルでは未確認（クロス C コンパイラなし）
+- ☑ ベンチマーク（docs/BENCHMARK.md）
+- ☑ セキュリティレビュー（docs/SECURITY.md）と修正（データディレクトリ保護）
+- ☑ ドキュメント（README / SPEC / ARCHITECTURE）
+- ☑ 結合テスト（Rust 46 件・Swift 5 件）
+
+## 実環境での確認が必要なもの（一緒に確認する項目）
+- 実 API キーでの OpenAI / Anthropic / Gemini 疎通（`alice model test`）
+- Codex CLI（ChatGPT ログイン）での応答
+- 実 Bot での Telegram / Discord
+- 実 Google アカウントでの OAuth と各 API
+- iPhone 実機での画面・操作感
+- Linux（systemd・ARM64）

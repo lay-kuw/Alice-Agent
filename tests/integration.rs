@@ -106,7 +106,7 @@ async fn derived_information_does_not_resurrect() {
     h.chat(&b, "thanks, that is right", "web").await;
     // Wait for B's extraction calls to finish.
     for _ in 0..100 {
-        if h.extraction_requests() >= before + 1 {
+        if h.extraction_requests() > before {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;

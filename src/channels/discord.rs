@@ -136,15 +136,14 @@ pub async fn dispatch(app: &AppRef, dc: &Arc<Discord>, t: &str, d: &Value) {
                     continue;
                 }
                 let Some(url) = a["url"].as_str() else { continue };
-                if let Ok(r) = dc.http.get(url).send().await {
-                    if let Ok(b) = r.bytes().await {
+                if let Ok(r) = dc.http.get(url).send().await
+                    && let Ok(b) = r.bytes().await {
                         files.push((
                             a["filename"].as_str().unwrap_or("file").to_string(),
                             a["content_type"].as_str().unwrap_or("").to_string(),
                             b.to_vec(),
                         ));
                     }
-                }
             }
             if text.is_empty() && files.is_empty() {
                 return;

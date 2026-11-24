@@ -44,6 +44,10 @@ pub static DEFS: [ToolDef; 8] = [
 
 pub struct Sandbox {
     roots: Vec<PathBuf>,
+    /// Alice's own data (config, secrets, database, other profiles) is never
+    /// reachable, whatever the roots are, except the workspace directory.
+    protected: Vec<PathBuf>,
+    workspace: Option<PathBuf>,
 }
 
 fn expand_home(p: &str) -> PathBuf {
@@ -62,7 +66,11 @@ impl Sandbox {
             raw.push(paths.workspace());
         }
         let roots = raw.into_iter().filter_map(|r| std::fs::canonicalize(r).ok()).collect();
-        Sandbox { roots }
+        let protected = [crate::config::alice_root(), paths.home.clone()]
+            .into_iter()
+            .filter_map(|p| std::fs::canonicalize(p).ok())
+            .collect();
+        Sandbox { roots, protected, workspace: std::fs::canonicalize(paths.workspace()).ok() }
     }
 
     pub fn roots(&self) -> &[PathBuf] {
@@ -70,6 +78,10 @@ impl Sandbox {
     }
 
     fn inside(&self, p: &Path) -> bool {
+        let in_workspace = self.workspace.as_ref().is_some_and(|w| p.starts_with(w));
+        if !in_workspace && self.protected.iter().any(|d| p.starts_with(d)) {
+            return false;
+        }
         self.roots.iter().any(|r| p.starts_with(r))
     }
 
@@ -202,7 +214,12 @@ fn run(sb: &Sandbox, name: &str, args: &Value) -> Result<String, String> {
                         continue; // never follow links during walks
                     }
                     if ft.is_dir() {
-                        stack.push(path);
+                        if sb.inside(&path) {
+                            stack.push(path);
+                        }
+                        continue;
+                    }
+                    if !sb.inside(&path) {
                         continue;
                     }
                     let fname = e.file_name().to_string_lossy().to_lowercase();
@@ -349,6 +366,30 @@ mod tests {
         // Deleting the link removes only the link.
         run(&sb, "fs_delete", &json!({"path": "link.txt"})).unwrap();
         assert_eq!(std::fs::read_to_string(dir.path().join("secret.txt")).unwrap(), "top secret");
+    }
+
+    #[test]
+    fn alice_data_is_never_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let paths = Paths::at(&home);
+        paths.ensure().unwrap();
+        std::fs::write(paths.secrets(), "server.token = \"x\"").unwrap();
+        let mut cfg = Config::default();
+        // The user allows the whole parent directory, which contains Alice's data.
+        cfg.tools.fs.roots = vec![dir.path().display().to_string()];
+        let sb = Sandbox::new(&cfg, &paths);
+        let secrets = paths.secrets().display().to_string();
+        assert!(run(&sb, "fs_read", &json!({"path": secrets})).unwrap_err().contains("denied"));
+        let conf = paths.config().display().to_string();
+        assert!(run(&sb, "fs_write", &json!({"path": conf, "content": "x"})).unwrap_err().contains("denied"));
+        assert!(run(&sb, "fs_delete", &json!({"path": home.display().to_string(), "recursive": true})).is_err());
+        let found = run(&sb, "fs_search", &json!({"path": dir.path().display().to_string(), "name": "secrets"})).unwrap();
+        assert!(!found.contains("secrets.toml"), "{found}");
+        assert!(run(&sb, "fs_list", &json!({"path": dir.path().display().to_string()})).is_ok());
+        // The workspace stays usable.
+        let ws = paths.workspace().join("note.txt").display().to_string();
+        run(&sb, "fs_write", &json!({"path": ws, "content": "ok"})).unwrap();
     }
 
     #[test]

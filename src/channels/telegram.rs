@@ -204,13 +204,11 @@ fn allowed(app: &AppRef, user: Option<i64>) -> bool {
 async fn incoming(app: &AppRef, tg: &Arc<Telegram>, m: &Value) -> Option<Incoming> {
     let chat_id = m.pointer("/chat/id")?.as_i64()?.to_string();
     let mut files = Vec::new();
-    if let Some(photos) = m["photo"].as_array() {
-        if let Some(best) = photos.last() {
-            if let Ok(b) = tg.download(best["file_id"].as_str().unwrap_or("")).await {
+    if let Some(photos) = m["photo"].as_array()
+        && let Some(best) = photos.last()
+            && let Ok(b) = tg.download(best["file_id"].as_str().unwrap_or("")).await {
                 files.push(("photo.jpg".into(), "image/jpeg".into(), b));
             }
-        }
-    }
     if let Some(doc) = m.get("document") {
         match tg.download(doc["file_id"].as_str().unwrap_or("")).await {
             Ok(b) => files.push((

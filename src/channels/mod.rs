@@ -98,11 +98,10 @@ pub fn external_messages(c: &rusqlite::Connection, thread: Option<&str>) -> Vec<
 
 fn ensure_thread(app: &AppRef, channel: &str, chat: &str) -> Result<String, String> {
     let (cur, _) = chat_state(app, channel, chat);
-    if let Some(t) = cur {
-        if storage::get_thread(&app.db.lock(), &t).ok().flatten().is_some() {
+    if let Some(t) = cur
+        && storage::get_thread(&app.db.lock(), &t).ok().flatten().is_some() {
             return Ok(t);
         }
-    }
     let t = storage::create_thread(&app.db.lock(), "", None).map_err(|e| e.to_string())?;
     app.emit(json!({ "type": "thread.created", "thread_id": t.id, "thread": t }));
     set_thread(app, channel, chat, Some(&t.id));
@@ -582,13 +581,12 @@ async fn supervise(app: AppRef, name: &'static str) {
                     break;
                 }
                 ev = rx.recv() => {
-                    if let Ok(ev) = ev {
-                        if ev.json.contains("\"config.updated\"") && gateway_fingerprint(&app, name) != fingerprint {
+                    if let Ok(ev) = ev
+                        && ev.json.contains("\"config.updated\"") && gateway_fingerprint(&app, name) != fingerprint {
                             stop.cancel();
                             info!("{name}: configuration changed; restarting gateway");
                             break;
                         }
-                    }
                 }
             }
         }

@@ -373,7 +373,8 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             tools: tool_specs,
             max_tokens: cfg.agent.max_tokens,
         };
-        let alice_ms = t_step.elapsed().as_millis();
+        let alice_us = t_step.elapsed().as_micros();
+        let alice_ms = alice_us / 1000;
 
         // Stream.
         let mut partial = String::new();
@@ -413,6 +414,7 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         let tool_calls_json = if completion.tool_calls.is_empty() { None } else { serde_json::to_value(&completion.tool_calls).ok() };
         let meta = json!({
             "alice_ms": alice_ms,
+            "alice_us": alice_us,
             "ttft_ms": ttft,
             "provider_ms": provider_ms,
             "usage": completion.usage,

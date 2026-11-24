@@ -34,6 +34,8 @@
 | getrandom | ID・トークン生成 | OS CSPRNG |
 | tokio-util | CancellationToken | 生成停止 |
 | futures-util | ストリーム処理 | SSE 解析 |
+| tokio-tungstenite | WebSocket | Discord Gateway |
+| sha2 | SHA-256 | OAuth PKCE (S256) |
 
 採用しないもの: LangChain 等のフレームワーク、ORM、tracing エコシステム（自前の小さなロガー）、テンプレートエンジン、フロントエンドビルドツール。
 
@@ -120,7 +122,31 @@ start_turn(thread, user_text, client)
 - Web: `/api/login` でトークンを送ると `alice_session` Cookie（HttpOnly, SameSite=Strict, HTTPS 時 Secure）。Cookie 認証の状態変更には `X-Alice-CSRF` ヘッダ必須（クロスオリジンからはプリフライトで拒否される）。
 - iOS: トークンを Keychain に保存し Bearer で送信。
 
-## 8. デプロイ
+## 8. プロファイル
+
+- プロファイル = 独立したデータディレクトリ + 独立したサーバープロセス。`default` は `~/.alice`、他は `~/.alice/profiles/<name>/`。
+- パス解決: `$ALICE_HOME`（サービスから起動時）→ `-p/--profile` → `$ALICE_PROFILE` → `~/.alice/current_profile` → `default`。
+- ポートは作成時に空きを割り当て。launchd ラベル / systemd ユニット / Web の Cookie 名もプロファイルごとに分離。
+- 共有コードなし・共有状態なし。モデル、記憶、gateway、Google 連携、ツール権限がすべて独立する。
+
+## 9. チャネル（Telegram / Discord）
+
+- サーバー内のタスクとして動作し、`agent::start_turn` を直接呼ぶ。
+- 共通層（`channels/mod.rs`）: コマンド、スレッド選択（`channel_state`）、ストリーミング編集（1.2 秒間隔）、承認ボタン、添付、投稿した外部メッセージの記録（`channel_messages`）と削除時のベストエフォート削除。
+- プラットフォーム層は `Surface` トレイト（send / edit / delete / typing）だけを実装。Telegram は long polling、Discord は Gateway WebSocket + REST。
+- 設定変更（`config.updated`）を検知して gateway を自動再起動。
+
+## 10. Google 連携
+
+- ユーザー自身の OAuth クライアント（Desktop app）。PKCE (S256) + `state`、ループバック `http://127.0.0.1:<port>/oauth/google/callback`。ブラウザが別マシンの場合はリダイレクト URL を CLI に貼り付けて完了。
+- スコープは有効なサービス分のみ。リフレッシュトークンは `secrets.toml`、アクセストークンはメモリ。
+
+## 11. iPhone アプリ
+
+- `ios/AliceKit`（Swift Package）: API クライアント、SSE、`ChatStore`（@Observable、メモリのみ）、Markdown ブロック分割、Keychain。macOS でもテスト可能。
+- `ios/Alice`（SwiftUI）: 画面のみ。永続キャッシュなし。スレッド削除は SSE で即時に反映。
+
+## 12. デプロイ
 
 - macOS: `~/Library/LaunchAgents/local.alice.agent.plist`（launchd、KeepAlive）。
 - Linux: `~/.config/systemd/user/alice.service`（systemd user unit）。

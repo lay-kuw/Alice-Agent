@@ -1,0 +1,26 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-24.04, name: alice-linux-x86_64 }
+          - { os: ubuntu-24.04-arm, name: alice-linux-aarch64 }
+          - { os: macos-15, name: alice-macos-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - run: |
+          mkdir dist
+          cp target/release/alice dist/${{ matrix.name }}
+          cd dist && shasum -a 256 ${{ matrix.name }} > ${{ matrix.name }}.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*

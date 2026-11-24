@@ -269,6 +269,8 @@ struct MarkdownView: View {
                         .overlay(alignment: .leading) { Rectangle().fill(.quaternary).frame(width: 3) }
                 case .code(let lang, let code):
                     CodeBlock(language: lang, code: code)
+                case .table(let header, let align, let rows):
+                    TableBlock(header: header, align: align, rows: rows)
                 }
             }
         }
@@ -340,5 +342,48 @@ struct AttachmentChip: View {
             guard attachment.isImage, image == nil, let d = try? await client.attachmentData(attachment.id) else { return }
             image = UIImage(data: d)
         }
+    }
+}
+
+/// A Markdown table as a rounded card; wide tables scroll sideways.
+struct TableBlock: View {
+    let header: [String]
+    let align: [TableAlign]
+    let rows: [[String]]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(header.indices, id: \.self) { i in
+                        cell(header[i], i).font(.subheadline.weight(.semibold))
+                    }
+                }
+                .background(Palette.lavender.opacity(0.18))
+                ForEach(rows.indices, id: \.self) { r in
+                    Divider().overlay(Palette.lavender.opacity(0.2))
+                    GridRow {
+                        ForEach(header.indices, id: \.self) { i in
+                            cell(i < rows[r].count ? rows[r][i] : "", i).font(.subheadline)
+                        }
+                    }
+                    .background(r % 2 == 1 ? Palette.lavender.opacity(0.06) : .clear)
+                }
+            }
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.lavender.opacity(0.3), lineWidth: 0.5))
+        }
+    }
+
+    private func cell(_ s: String, _ i: Int) -> some View {
+        let a = i < align.count ? align[i] : .left
+        return Text(MarkdownBlock.inline(s))
+            .textSelection(.enabled)
+            .multilineTextAlignment(a == .right ? .trailing : a == .center ? .center : .leading)
+            .frame(minWidth: 44, maxWidth: 260, alignment: a == .right ? .trailing : a == .center ? .center : .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .gridColumnAlignment(a == .right ? .trailing : a == .center ? .center : .leading)
     }
 }

@@ -16,6 +16,7 @@ struct MailView: View {
                     }
                     ForEach(google.inbox) { m in
                         NavigationLink(value: m) { MailRow(mail: m) }
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 12))
                             .listRowBackground(Color.clear)
                             .listRowSeparatorTint(Palette.lavender.opacity(0.25))
                             .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore(query: submitted) } } }
@@ -66,24 +67,24 @@ struct MailRow: View {
     let mail: MailSummary
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Avatar(name: mail.senderName, key: MailAddress.address(mail.from))
+        HStack(alignment: .top, spacing: 10) {
+            Avatar(name: mail.senderName, key: MailAddress.address(mail.from), size: 30)
                 .overlay(alignment: .topLeading) {
                     if mail.unread {
-                        Circle().fill(Palette.pink).frame(width: 11, height: 11).overlay(Circle().stroke(.background, lineWidth: 2)).offset(x: -2, y: -2)
+                        Circle().fill(Palette.pink).frame(width: 9, height: 9).overlay(Circle().stroke(.background, lineWidth: 1.5)).offset(x: -2, y: -2)
                     }
                 }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline) {
                     Text(mail.senderName).font(.subheadline.weight(mail.unread ? .bold : .medium)).lineLimit(1)
-                    Spacer()
-                    Text(mail.sentAt.map(Fmt.short) ?? "").font(.caption).foregroundStyle(mail.unread ? Palette.pink : .secondary)
+                    Spacer(minLength: 6)
+                    Text(mail.sentAt.map(Fmt.short) ?? "").font(.caption2).foregroundStyle(mail.unread ? Palette.pink : .secondary)
                 }
-                Text(mail.displaySubject).font(.subheadline.weight(mail.unread ? .semibold : .regular)).lineLimit(1)
-                Text(mail.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(mail.displaySubject).font(.footnote.weight(mail.unread ? .semibold : .regular)).lineLimit(1)
+                Text(mail.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 1)
     }
 }
 

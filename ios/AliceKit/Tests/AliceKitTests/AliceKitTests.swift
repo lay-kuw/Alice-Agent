@@ -97,3 +97,13 @@ func liveServer() async throws {
     let m = try AliceClient.decoder.decode(Message.self, from: Data(j.utf8))
     #expect(m.endsTurn)
 }
+
+@Test func markdownTables() {
+    let b = MarkdownBlock.parse("Plan:\n| 日付 | 予定 | 費用 |\n|:---|:---:|---:|\n| 11/28 | 京都 | 12,000 |\n| 11/29 | 嵐山 \\| 竹林 |\n\nafter")
+    #expect(b == [.paragraph("Plan:"),
+                  .table(header: ["日付", "予定", "費用"], align: [.left, .center, .right],
+                         rows: [["11/28", "京都", "12,000"], ["11/29", "嵐山 | 竹林", ""]]),
+                  .paragraph("after")])
+    // A header without its separator yet (still streaming) stays text.
+    #expect(MarkdownBlock.parse("| a | b |") == [.paragraph("| a | b |")])
+}

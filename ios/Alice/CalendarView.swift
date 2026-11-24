@@ -4,46 +4,53 @@ import SwiftUI
 struct CalendarView: View {
     @Bindable var google: GoogleStore
     @State private var selected = Calendar.current.startOfDay(for: .now)
-    @State private var weekStart = CalendarView.startOfWeek(.now)
-    @State private var month = CalendarView.startOfMonth(.now)
+    /// Week shown in the top row of the scroller.
+    @State private var topWeek: Date?
     @AppStorage("calendar.mode") private var mode = "week"
     @State private var adding = false
     @State private var detail: CalendarEvent?
     @State private var confirmDelete: CalendarEvent?
+
+    /// About three years either way; rows are created lazily.
+    private let weeks: [Date] = {
+        let cal = Calendar.current
+        let now = GoogleStore.startOfWeek(.now)
+        return (-156...156).compactMap { cal.date(byAdding: .day, value: 7 * $0, to: now) }
+    }()
+
+    private var rows: Int { mode == "month" ? 6 : 1 }
+    private static let rowHeight: CGFloat = 50
 
     var body: some View {
         NavigationStack {
             GoogleGate(google: google, group: "calendar", title: "Calendar") {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        Picker("View", selection: $mode.animation(.snappy)) {
-                            Text("Week").tag("week")
-                            Text("Month").tag("month")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.top, 4)
-                        if mode == "month" { monthGrid } else { weekStrip }
+                        calendarCard
                         dayHeader
                         dayEvents
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 30)
                 }
-                .refreshable { await load() }
+                .refreshable { await load(force: true) }
                 .background(PastelBackground())
-                .task(id: "\(mode)|\(weekStart)|\(month)") { await load() }
-            }
-            .navigationTitle((mode == "month" ? month : weekStart).formatted(.dateTime.year().month(.wide)))
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Today") {
-                        withAnimation(.snappy) {
-                            selected = Calendar.current.startOfDay(for: .now)
-                            weekStart = Self.startOfWeek(.now)
-                            month = Self.startOfMonth(.now)
-                        }
-                    }
+                .task(id: "\(mode)|\(topWeek?.timeIntervalSince1970 ?? 0)") {
+                    // Wait for scrolling to settle before loading.
+                    try? await Task.sleep(for: .milliseconds(150))
+                    await load(force: false)
                 }
+            }
+            .navigationTitle(focusMonth.formatted(.dateTime.year().month(.wide)))
+            .onAppear {
+                #if DEBUG
+                if let m = ProcessInfo.processInfo.environment["ALICE_DEV_CALENDAR"] { mode = m }
+                #endif
+                // Month view starts at the month's first week, week view at this week.
+                if topWeek == nil { topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(selected) : selected) }
+            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { modeMenu }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }
                 }
@@ -57,50 +64,107 @@ struct CalendarView: View {
         }
     }
 
-    // MARK: month grid
+    // MARK: mode
 
-    private var monthGrid: some View {
-        let cal = Calendar.current
-        let start = Self.startOfWeek(month)
-        let days = (0..<42).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-        let symbols = (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-        return VStack(spacing: 8) {
-            HStack {
-                Button { shiftMonth(-1) } label: { Image(systemName: "chevron.left") }
-                Spacer()
-                Text(month.formatted(.dateTime.month(.wide))).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button { shiftMonth(1) } label: { Image(systemName: "chevron.right") }
+    private var modeMenu: some View {
+        Menu {
+            Picker("View", selection: Binding(get: { mode }, set: { setMode($0) })) {
+                Label("Week", systemImage: "rectangle.split.1x2").tag("week")
+                Label("Month", systemImage: "calendar").tag("month")
             }
-            .tint(Palette.lavender)
+            Divider()
+            Button("Jump to today", systemImage: "sun.max") { jumpToToday() }
+        } label: {
+            HStack(spacing: 4) {
+                Text(mode == "month" ? "Month" : "Week")
+                Image(systemName: "chevron.down").font(.caption2.bold())
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Palette.lavender)
+        }
+    }
+
+    private func setMode(_ m: String) {
+        withAnimation(.snappy) {
+            mode = m
+            let anchor = m == "month" ? Self.startOfMonth(selected) : selected
+            topWeek = GoogleStore.startOfWeek(anchor)
+        }
+    }
+
+    private func jumpToToday() {
+        withAnimation(.snappy) {
+            selected = Calendar.current.startOfDay(for: .now)
+            topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(.now) : .now)
+        }
+    }
+
+    /// The month the visible rows mostly show.
+    private var focusMonth: Date {
+        let cal = Calendar.current
+        let top = topWeek ?? GoogleStore.startOfWeek(selected)
+        if mode != "month" { return Self.startOfMonth(cal.date(byAdding: .day, value: 3, to: top) ?? top) }
+        return Self.startOfMonth(cal.date(byAdding: .day, value: 17, to: top) ?? top)
+    }
+
+    // MARK: calendar card
+
+    private var calendarCard: some View {
+        let cal = Calendar.current
+        let head = weeks.first ?? .now
+        return VStack(spacing: 6) {
             HStack(spacing: 0) {
-                ForEach(symbols, id: \.self) { d in
-                    Text(d.formatted(.dateTime.weekday(.narrow))).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                ForEach(0..<7, id: \.self) { i in
+                    Text((cal.date(byAdding: .day, value: i, to: head) ?? head).formatted(.dateTime.weekday(.narrow)))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                 }
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
-                ForEach(days, id: \.self) { d in monthCell(d) }
+            // Scrolls vertically inside the card, snapping to whole weeks.
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    ForEach(weeks, id: \.self) { w in
+                        weekRow(w).frame(height: Self.rowHeight).id(w)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $topWeek, anchor: .top)
+            .frame(height: Self.rowHeight * CGFloat(rows))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .onChange(of: topWeek) { old, new in
+                // In week view the selection follows the week (same weekday).
+                guard mode == "week", let old, let new, old != new else { return }
+                let offset = cal.dateComponents([.day], from: old, to: selected).day ?? 0
+                if (0..<7).contains(offset) { selected = cal.date(byAdding: .day, value: offset, to: new) ?? new }
             }
         }
         .card(padding: 12)
-        .padding(.top, 4)
-        .gesture(DragGesture(minimumDistance: 30).onEnded { v in
-            if v.translation.width < -40 { shiftMonth(1) } else if v.translation.width > 40 { shiftMonth(-1) }
-        })
+        .padding(.top, 8)
+        .animation(.snappy, value: mode)
     }
 
-    private func monthCell(_ d: Date) -> some View {
+    private func weekRow(_ w: Date) -> some View {
         let cal = Calendar.current
-        let inMonth = cal.isDate(d, equalTo: month, toGranularity: .month)
+        return HStack(spacing: 4) {
+            ForEach(0..<7, id: \.self) { i in
+                dayCell(cal.date(byAdding: .day, value: i, to: w) ?? w)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func dayCell(_ d: Date) -> some View {
+        let cal = Calendar.current
         let isSel = cal.isDate(d, inSameDayAs: selected)
         let isToday = cal.isDateInToday(d)
+        // Month view fades days outside the month in focus.
+        let faded = mode == "month" && !cal.isDate(d, equalTo: focusMonth, toGranularity: .month)
         let events = google.events(on: d)
         return Button {
-            withAnimation(.snappy) {
-                selected = d
-                weekStart = Self.startOfWeek(d)
-                if !inMonth { month = Self.startOfMonth(d) }
-            }
+            withAnimation(.snappy) { selected = d }
         } label: {
             VStack(spacing: 3) {
                 Text(d.formatted(.dateTime.day()))
@@ -112,84 +176,14 @@ struct CalendarView: View {
                 }
                 .frame(height: 4)
             }
-            .frame(maxWidth: .infinity, minHeight: 40)
-            .foregroundStyle(isSel ? .white : (isToday ? Palette.lavender : (inMonth ? .primary : .secondary)))
-            .opacity(inMonth || isSel ? 1 : 0.45)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(isSel ? .white : (isToday ? Palette.lavender : .primary))
+            .opacity(faded && !isSel ? 0.35 : 1)
             .background {
                 if isSel {
                     RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent).shadow(color: Palette.pink.opacity(0.35), radius: 5, y: 2)
                 } else if isToday {
                     RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.lavender.opacity(0.6), lineWidth: 1.5)
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isSel)
-    }
-
-    private func shiftMonth(_ n: Int) {
-        let cal = Calendar.current
-        guard let m = cal.date(byAdding: .month, value: n, to: month) else { return }
-        withAnimation(.snappy) {
-            month = m
-            // Keep the same day of month where possible.
-            let day = min(cal.component(.day, from: selected), cal.range(of: .day, in: .month, for: m)?.count ?? 28)
-            selected = cal.date(bySetting: .day, value: day, of: m) ?? m
-            weekStart = Self.startOfWeek(selected)
-        }
-    }
-
-    // MARK: week strip
-
-    private var weekStrip: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Button { shiftWeek(-1) } label: { Image(systemName: "chevron.left") }
-                Spacer()
-                Text(weekLabel).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button { shiftWeek(1) } label: { Image(systemName: "chevron.right") }
-            }
-            .tint(Palette.lavender)
-            HStack(spacing: 6) {
-                ForEach(days, id: \.self) { d in dayPill(d) }
-            }
-        }
-        .card(padding: 12)
-        .padding(.top, 8)
-        .gesture(DragGesture(minimumDistance: 30).onEnded { v in
-            if v.translation.width < -40 { shiftWeek(1) } else if v.translation.width > 40 { shiftWeek(-1) }
-        })
-    }
-
-    private func dayPill(_ d: Date) -> some View {
-        let cal = Calendar.current
-        let isSel = cal.isDate(d, inSameDayAs: selected)
-        let isToday = cal.isDateInToday(d)
-        let count = google.events(on: d).count
-        return Button {
-            withAnimation(.snappy) {
-                selected = d
-                month = Self.startOfMonth(d)
-            }
-        } label: {
-            VStack(spacing: 4) {
-                Text(d.formatted(.dateTime.weekday(.narrow))).font(.caption2.weight(.semibold)).opacity(0.7)
-                Text(d.formatted(.dateTime.day())).font(.system(.headline, design: .rounded).weight(isToday ? .heavy : .semibold))
-                HStack(spacing: 2) {
-                    ForEach(0..<min(count, 3), id: \.self) { _ in Circle().frame(width: 4, height: 4) }
-                }
-                .frame(height: 4)
-                .foregroundStyle(isSel ? .white : Palette.pink)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .foregroundStyle(isSel ? .white : (isToday ? Palette.lavender : .primary))
-            .background {
-                if isSel {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.accent).shadow(color: Palette.pink.opacity(0.4), radius: 6, y: 3)
-                } else if isToday {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.lavender.opacity(0.6), lineWidth: 1.5)
                 }
             }
         }
@@ -229,27 +223,12 @@ struct CalendarView: View {
 
     // MARK: data
 
-    private var days: [Date] {
-        (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
-    }
-
-    private var weekLabel: String {
-        guard let last = days.last else { return "" }
-        return "\(weekStart.formatted(.dateTime.month(.abbreviated).day())) – \(last.formatted(.dateTime.month(.abbreviated).day()))"
-    }
-
-    private func shiftWeek(_ n: Int) {
+    /// Visible rows plus a week either side.
+    private func load(force: Bool) async {
         let cal = Calendar.current
-        guard let w = cal.date(byAdding: .day, value: 7 * n, to: weekStart) else { return }
-        withAnimation(.snappy) {
-            weekStart = w
-            selected = cal.date(byAdding: .day, value: 7 * n, to: selected) ?? w
-            month = Self.startOfMonth(selected)
-        }
-    }
-
-    private func load() async {
-        if mode == "month" { await google.loadMonth(month) } else { await google.loadWeek(weekStart) }
+        let top = topWeek ?? GoogleStore.startOfWeek(selected)
+        guard let from = cal.date(byAdding: .day, value: -7, to: top), let to = cal.date(byAdding: .day, value: 7 * (rows + 1), to: top) else { return }
+        await google.loadRange(from: from, to: to, force: force)
     }
 
     static func startOfWeek(_ d: Date) -> Date { GoogleStore.startOfWeek(d) }

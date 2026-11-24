@@ -223,6 +223,7 @@ public final class GoogleStore {
     public private(set) var eventsById: [String: CalendarEvent] = [:]
     /// Week starts whose events are loaded.
     public private(set) var loadedWeeks: Set<Date> = []
+    private var rangeLoadedAt: Date?
     public private(set) var inbox: [MailSummary] = []
     public private(set) var inboxLoaded = false
     public private(set) var nextPage: String?
@@ -260,7 +261,11 @@ public final class GoogleStore {
         await loadStatus()
         guard let s = status, s.ready else { return }
         let week = Self.startOfWeek(.now)
-        async let cal: Void = s.enabled("calendar") ? loadWeek(week) : ()
+        // This month's grid plus a week either side covers both calendar views.
+        let cal0 = Calendar.current
+        let from = cal0.date(byAdding: .day, value: -7, to: Self.startOfWeek(cal0.dateInterval(of: .month, for: .now)?.start ?? week)) ?? week
+        let to = cal0.date(byAdding: .day, value: 49, to: from) ?? week
+        async let cal: Void = s.enabled("calendar") ? loadRange(from: from, to: to) : ()
         async let mail: Void = s.enabled("gmail") ? loadInbox() : ()
         async let tasks: Void = s.enabled("tasks") ? loadTasks() : ()
         _ = await (cal, mail, tasks)
@@ -273,22 +278,17 @@ public final class GoogleStore {
         return cal.dateInterval(of: .weekOfYear, for: d)?.start ?? cal.startOfDay(for: d)
     }
 
-    /// Load a week plus its neighbours in one request, so swiping is instant.
-    public func loadWeek(_ weekStart: Date) async {
+    /// Load events in a range. Unless forced, ranges already loaded are only
+    /// refreshed when the last load is older than a minute.
+    public func loadRange(from: Date, to: Date, force: Bool = false) async {
         let cal = Calendar.current
-        guard let from = cal.date(byAdding: .day, value: -7, to: weekStart), let to = cal.date(byAdding: .day, value: 14, to: weekStart) else { return }
-        await loadRange(from: from, to: to)
-    }
-
-    /// Load the 6-week grid shown for a month.
-    public func loadMonth(_ monthStart: Date) async {
-        let from = Self.startOfWeek(monthStart)
-        guard let to = Calendar.current.date(byAdding: .day, value: 42, to: from) else { return }
-        await loadRange(from: from, to: to)
-    }
-
-    private func loadRange(from: Date, to: Date) async {
-        let cal = Calendar.current
+        var weeks: [Date] = []
+        var w = Self.startOfWeek(from)
+        while w < to {
+            weeks.append(w)
+            w = cal.date(byAdding: .day, value: 7, to: w) ?? to
+        }
+        if !force, weeks.allSatisfy({ loadedWeeks.contains($0) }), let at = rangeLoadedAt, Date().timeIntervalSince(at) < 60 { return }
         await run("events", load: true) {
             let list = try await client.events(from: from, to: to)
             // Replace what was known for this range.
@@ -297,11 +297,8 @@ public final class GoogleStore {
                 return s < from || s >= to
             }
             for e in list { eventsById[e.id] = e }
-            var w = Self.startOfWeek(from)
-            while w < to {
-                loadedWeeks.insert(w)
-                w = cal.date(byAdding: .day, value: 7, to: w) ?? to
-            }
+            for w in weeks { loadedWeeks.insert(w) }
+            rangeLoadedAt = Date()
         }
     }
 

@@ -80,12 +80,29 @@ struct TasksView: View {
     }
 
     private var addBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(Palette.accent)
+        let empty = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
+        return HStack(spacing: 10) {
+            Button {
+                if empty { adding = true } else { add() }
+            } label: {
+                Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(Palette.accent)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Add task")
             TextField("Add a task", text: $newTitle)
                 .focused($adding)
                 .submitLabel(.done)
                 .onSubmit(add)
+            if !empty {
+                Button("Add", action: add)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Palette.accent, in: Capsule())
+                    .buttonStyle(.borderless)
+                    .transition(.scale.combined(with: .opacity))
+            }
             Menu {
                 Button("Today") { due = Calendar.current.startOfDay(for: .now) }
                 Button("Tomorrow") { due = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: .now)) }
@@ -100,6 +117,7 @@ struct TasksView: View {
             }
         }
         .card(padding: 12)
+        .animation(.snappy, value: empty)
     }
 
     private func add() {

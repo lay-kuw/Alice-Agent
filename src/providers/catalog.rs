@@ -6,17 +6,19 @@
 
 use crate::app::App;
 use crate::config::{ProviderConfig, ProviderKind};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub model: String,
     pub name: String,
     pub description: String,
     /// Reasoning efforts the model accepts (`provider/model#effort`).
+    #[serde(default)]
     pub efforts: Vec<String>,
+    #[serde(default)]
     pub default_effort: Option<String>,
     /// What the provider uses when no model is given (Codex "default").
     #[serde(default)]
@@ -129,6 +131,11 @@ pub async fn refresh(app: &App) -> Vec<Value> {
         for (id, _, list) in &found {
             d.insert(id.clone(), (Instant::now(), list.clone()));
         }
+        // Names and efforts are there right after a restart (not secret).
+        let snapshot: std::collections::BTreeMap<&String, &Vec<ModelInfo>> = d.iter().map(|(k, (_, l))| (k, l)).collect();
+        if let Ok(s) = serde_json::to_vec_pretty(&snapshot) {
+            let _ = crate::config::write_atomic(&cache_file(app), &s, 0o600);
+        }
     }
     let _ = app.update_config(|c| {
         let default = c.agent.default_model.clone();
@@ -149,7 +156,24 @@ pub async fn refresh(app: &App) -> Vec<Value> {
         }
         Ok(())
     });
+    // Open pages reload their model pickers.
+    app.emit(json!({ "type": "models.updated" }));
     report
+}
+
+fn cache_file(app: &App) -> std::path::PathBuf {
+    app.paths.home.join("models.json")
+}
+
+/// Load the last discovered catalog (marked stale, so it is refreshed soon).
+pub fn load_cached(app: &App) {
+    let Ok(bytes) = std::fs::read(cache_file(app)) else { return };
+    let Ok(map) = serde_json::from_slice::<std::collections::HashMap<String, Vec<ModelInfo>>>(&bytes) else { return };
+    let old = Instant::now().checked_sub(STALE + Duration::from_secs(1)).unwrap_or_else(Instant::now);
+    let mut d = app.models.lock().unwrap_or_else(|e| e.into_inner());
+    for (id, list) in map {
+        d.entry(id).or_insert((old, list));
+    }
 }
 
 /// Refresh in the background when nothing was discovered yet or it is old.

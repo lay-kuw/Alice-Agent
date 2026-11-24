@@ -37,16 +37,14 @@ struct ThreadsView: View {
                 }
             }
             .refreshable { await store.refresh() }
-            .navigationTitle(connectionName)
+            .toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Label(store.connected ? "Connected" : "Reconnecting…", systemImage: store.connected ? "checkmark.circle" : "arrow.triangle.2.circlepath")
                         Button("Switch server", systemImage: "server.rack", action: onDisconnect)
-                    } label: {
-                        Circle().fill(store.connected ? Palette.mint : Palette.peach).frame(width: 10, height: 10)
-                            .shadow(color: (store.connected ? Palette.mint : Palette.peach).opacity(0.8), radius: 4)
-                    }
+                    } label: { ConnectionBadge(connected: store.connected) }
+                    .accessibilityLabel(store.connected ? "Connected to \(connectionName)" : "Reconnecting")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -91,15 +89,37 @@ struct ThreadRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(LinearGradient(colors: [Palette.color(for: thread.id), Palette.color(for: thread.id).opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(thread.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
-                Text(Date(timeIntervalSince1970: Double(thread.updatedAt) / 1000), style: .relative)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            Text(thread.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 0)
             if thread.generating == true { ProgressView().controlSize(.small).tint(Palette.pink) }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+}
+
+/// Connection state as a little heart: it breathes while connected and turns
+/// into a sleepy cloud while reconnecting.
+struct ConnectionBadge: View {
+    let connected: Bool
+    @State private var beat = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(colors: connected ? [Palette.pink, Palette.lavender] : [Palette.peach, Palette.lemon], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 30, height: 30)
+                .shadow(color: (connected ? Palette.pink : Palette.peach).opacity(0.45), radius: beat ? 7 : 3)
+            Image(systemName: connected ? "heart.fill" : "cloud.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .scaleEffect(beat && connected ? 1.12 : 1)
+            if !connected {
+                Text("z").font(.system(size: 9, weight: .heavy, design: .rounded)).foregroundStyle(.white).offset(x: 9, y: -9)
+            }
+        }
+        .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: beat)
+        .onAppear { beat = true }
+        .contentTransition(.symbolEffect(.replace))
     }
 }

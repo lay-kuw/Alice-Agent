@@ -760,6 +760,9 @@ function handleEvent(v) {
   const here = v.thread_id && v.thread_id === S.current;
   switch (v.type) {
     case 'resync': resync(); break;
+    case 'models.updated':
+      loadModels().then(renderHeader).catch(() => {});
+      break;
     case 'thread.created': case 'thread.updated': {
       const i = S.threads.findIndex((x) => x.id === v.thread.id);
       if (i >= 0) S.threads[i] = { ...S.threads[i], ...v.thread }; else S.threads.unshift(v.thread);

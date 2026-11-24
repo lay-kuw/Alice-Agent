@@ -44,7 +44,7 @@
 - ◐ Subscription Provider: codex-cli（公式 JSONL 形式で検証、実ログインでの疎通は未確認）/ gemini-cli（Antigravity CLI への置き換えにより実験的）
 
 ## Phase 6 — iPhone
-- ☐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認）
+- ◐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認・添付・停止・モデル選択）— AliceKit は実サーバーとの通しテスト済み、アプリはシミュレータ向けビルド成功。実機/シミュレータでの画面確認は未実施（シミュレータランタイム未導入）
 
 ## Phase 7 — Release
 - ☐ インストールスクリプト・launchd / systemd

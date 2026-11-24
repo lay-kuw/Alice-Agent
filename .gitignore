@@ -3,3 +3,5 @@
 *.swp
 /ios/build
 /ios/**/xcuserdata
+/ios/AliceKit/.build
+/ios/AliceKit/.swiftpm

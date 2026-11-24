@@ -36,7 +36,7 @@
 - ☑ 権限ゲート（disabled / ask / allow）・承認 API
 - ☑ File System（ルート制限・シンボリックリンク対策）
 - ☑ Web Search（Brave / SearXNG）・URL Fetch・本文抽出（SSRF 対策込み。Brave/SearXNG は実キーでの疎通未確認）
-- ☐ Google（OAuth 2.0 PKCE, Gmail / Calendar / Drive / Docs / Sheets）
+- ☑ Google（OAuth 2.0 PKCE, Gmail / Calendar / Drive / Docs / Sheets）— 偽 Google API で検証。実アカウントでの疎通は未確認
 
 ## Phase 5 — Channels
 - ☑ Telegram（long polling, allowlist, コマンド, 承認ボタン）— 偽 Bot API で検証。実 Bot での疎通は未確認

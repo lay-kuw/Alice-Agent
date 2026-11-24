@@ -90,6 +90,18 @@ async fn chat(State(st): State<Arc<FakeLlm>>, Json(req): Json<Value>) -> axum::r
             );
         }
     }
+    // "calljson {"name": ..., "arguments": {...}}" requests any tool once.
+    if let (Some(spec), false) = (last_user.strip_prefix("calljson "), has_tool_result) {
+        let v: Value = serde_json::from_str(spec).unwrap();
+        return sse(
+            vec![
+                json!({ "choices": [{ "index": 0, "delta": { "tool_calls": [{ "index": 0, "id": "call_j", "type": "function",
+                    "function": { "name": v["name"], "arguments": v["arguments"].to_string() } }] } }] }),
+                json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }] }),
+            ],
+            0,
+        );
+    }
     let tool_text = msgs[last_user_idx..].iter().filter(|m| m["role"] == "tool").filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("|");
     let mem: Vec<&str> = system
         .split("<memories>")

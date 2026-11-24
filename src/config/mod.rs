@@ -305,9 +305,12 @@ pub struct WebConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GoogleConfig {
+    /// OAuth client ID of the user's own "Desktop app" client.
     pub client_id: String,
     /// Enabled service groups: gmail, calendar, drive, docs, sheets
     pub services: Vec<String>,
+    /// Test override: all Google endpoints under one base URL.
+    pub api_base: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

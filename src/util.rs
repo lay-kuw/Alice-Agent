@@ -152,3 +152,57 @@ mod b64_tests {
         assert_eq!(super::b64_encode(b"foobar"), "Zm9vYmFy");
     }
 }
+
+/// URL-safe base64 without padding (PKCE, Gmail raw messages).
+pub fn b64url_encode(data: &[u8]) -> String {
+    b64_encode(data).trim_end_matches('=').replace('+', "-").replace('/', "_")
+}
+
+/// Decode standard or URL-safe base64 (padding optional, whitespace ignored).
+pub fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0;
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b'\n' | b'\r' | b' ' => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Percent-encode everything except unreserved characters.
+pub fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod b64_decode_tests {
+    #[test]
+    fn roundtrip() {
+        for s in ["", "f", "fo", "foo", "日本語テキスト", "\u{0}\u{ff}"] {
+            assert_eq!(super::b64_decode(&super::b64_encode(s.as_bytes())).unwrap(), s.as_bytes());
+            assert_eq!(super::b64_decode(&super::b64url_encode(s.as_bytes())).unwrap(), s.as_bytes());
+        }
+        assert_eq!(super::urlencode("a b/ü"), "a%20b%2F%C3%BC");
+    }
+}

@@ -81,6 +81,10 @@ pub fn router(app: AppRef) -> Router {
         .route("/config", get(get_config).patch(patch_config))
         .route("/tools", get(list_tools).patch(patch_tools))
         .route("/logs", get(logs))
+        .route("/google", get(google_status))
+        .route("/google/login", post(google_login))
+        .route("/google/finish", post(google_finish))
+        .route("/google/logout", post(google_logout))
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         .route("/health", get(health))
         .route("/login", post(login))
@@ -91,6 +95,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/", get(web_index))
         .route("/app.js", get(web_js))
         .route("/style.css", get(web_css))
+        .route("/oauth/google/callback", get(google_callback))
         .layer(middleware::from_fn(security_headers))
         .with_state(app)
 }
@@ -873,6 +878,83 @@ async fn patch_tools(State(app): State<AppRef>, Json(b): Json<serde_json::Map<St
     .map_err(bad)?;
     let cfg = app.config();
     Ok(Json(json!({ "tools": tools::list_json(&cfg, &app) })))
+}
+
+// ---------------------------------------------------------------- google
+
+use crate::tools::google;
+
+async fn google_status(State(app): State<AppRef>) -> Json<Value> {
+    let cfg = app.config();
+    Json(json!({
+        "connected": google::connected(&app),
+        "client_id_set": !cfg.tools.google.client_id.is_empty(),
+        "client_secret_set": app.secrets().get("google.client_secret").is_some(),
+        "services": cfg.tools.google.services,
+        "available_services": google::SERVICES,
+        "scopes": google::scopes(&cfg.tools.google.services),
+    }))
+}
+
+#[derive(Deserialize, Default)]
+struct GoogleLogin {
+    redirect_uri: Option<String>,
+}
+
+async fn google_login(State(app): State<AppRef>, body: Option<Json<GoogleLogin>>) -> ApiResult<Json<Value>> {
+    let cfg = app.config();
+    let redirect = body
+        .and_then(|b| b.0.redirect_uri)
+        .filter(|r| r.starts_with("http://127.0.0.1:") || r.starts_with("http://localhost:"))
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}/oauth/google/callback", cfg.server.port));
+    let u = google::login_url(&cfg, &redirect).map_err(bad)?;
+    Ok(Json(json!({ "auth_url": u, "redirect_uri": redirect })))
+}
+
+#[derive(Deserialize)]
+struct GoogleFinish {
+    url: String,
+}
+
+/// For headless servers: paste the URL the browser was redirected to.
+async fn google_finish(State(app): State<AppRef>, Json(b): Json<GoogleFinish>) -> ApiResult<Json<Value>> {
+    let (code, state) = google::parse_redirect(b.url.trim()).ok_or_else(|| bad("could not find code and state in that URL"))?;
+    google::finish_login(&app, &code, &state).await.map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(json!({ "connected": true })))
+}
+
+async fn google_logout(State(app): State<AppRef>) -> ApiResult<Json<Value>> {
+    google::logout(&app).await.map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
+    Ok(Json(json!({ "connected": false })))
+}
+
+#[derive(Deserialize)]
+struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+/// OAuth loopback redirect target. Unauthenticated, protected by `state`.
+async fn google_callback(State(app): State<AppRef>, Query(q): Query<CallbackQuery>) -> Response {
+    let msg = match (q.code, q.state, q.error) {
+        (_, _, Some(e)) => format!("Google returned an error: {e}"),
+        (Some(code), Some(state), None) => match google::finish_login(&app, &code, &state).await {
+            Ok(()) => {
+                app.emit(json!({ "type": "config.updated" }));
+                "Google account connected. You can close this tab.".to_string()
+            }
+            Err(e) => format!("Could not connect: {e}"),
+        },
+        _ => "Missing code or state.".to_string(),
+    };
+    let html = format!(
+        "<!doctype html><meta charset=utf-8><title>Alice</title><p>{}</p>",
+        msg.replace('&', "&amp;").replace('<', "&lt;")
+    );
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
 }
 
 /// Bind and serve until shutdown.

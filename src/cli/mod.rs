@@ -58,6 +58,8 @@ pub enum Cmd {
     Gateway { args: Vec<String> },
     /// Profiles: `alice profile` (list), `alice profile <name>` (create/switch), `use <name>`, `delete <name>`
     Profile { args: Vec<String> },
+    /// Google account: status, setup, login, logout
+    Google { args: Vec<String> },
     /// Auto-start service: install, uninstall, status
     Service { args: Vec<String> },
     /// Show the API token and connection info for Web / iPhone (`--rotate` to replace it)
@@ -101,6 +103,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Token { rotate }) => token_cmd(&paths, rotate).await,
         Some(Cmd::Profile { args }) => profile::cmd(&paths, args).await,
         Some(Cmd::Service { args }) => service_cmd(&paths, args),
+        Some(Cmd::Google { args }) => google_cmd(&paths, args).await,
         Some(Cmd::Serve) => unreachable!(),
     }
 }
@@ -288,6 +291,75 @@ async fn token_cmd(paths: &Paths, rotate: bool) -> CliResult<()> {
     println!("Server URL: {url}");
     println!("API token:  {}", s.get("server.token").unwrap_or(""));
     Ok(())
+}
+
+async fn google_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    match a.as_slice() {
+        [] | ["status"] => {
+            let c = remote(paths).await?;
+            let v = c.get("/google").await?;
+            println!("connected: {}", v["connected"]);
+            println!("client: id {}, secret {}", if v["client_id_set"] == true { "set" } else { "missing" }, if v["client_secret_set"] == true { "set" } else { "missing" });
+            println!("services: {}", v["services"]);
+            Ok(())
+        }
+        ["setup"] => {
+            println!("Create an OAuth client of type \"Desktop app\" in Google Cloud Console (APIs & Services → Credentials),");
+            println!("and enable the Gmail, Calendar, Drive, Docs and Sheets APIs you want to use.");
+            println!("Note: while the consent screen is in \"Testing\", Google expires the login after 7 days.");
+            let c = remote(paths).await?;
+            let cur = serde_json::from_value::<Config>(c.get("/config").await?).map_err(|e| e.to_string())?;
+            let id = ask("Client ID", &cur.tools.google.client_id);
+            let secret = ask_secret("Client secret (input hidden; Enter to keep)");
+            let default_services = if cur.tools.google.services.is_empty() { "gmail,calendar,drive,docs,sheets".to_string() } else { cur.tools.google.services.join(",") };
+            let services: Vec<String> = ask("Services (gmail,calendar,drive,docs,sheets)", &default_services)
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| crate::tools::google::SERVICES.contains(&s.as_str()))
+                .collect();
+            c.patch("/config", &json!({ "tools.google.client_id": id, "tools.google.services": services })).await?;
+            if !secret.is_empty() {
+                c.put("/secrets/google.client_secret", &json!({ "value": secret })).await?;
+            }
+            println!("Saved. Now run `alice google login`.");
+            Ok(())
+        }
+        ["login"] => {
+            let c = remote(paths).await?;
+            let v = c.post("/google/login", &json!({})).await?;
+            let url = v["auth_url"].as_str().unwrap_or("");
+            println!("Open this URL in a browser on this machine and approve access:\n\n{url}\n");
+            let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+            let _ = std::process::Command::new(opener).arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+            println!("Waiting… If the browser is on another machine, its final page will fail to load;");
+            println!("copy that page's full URL from the address bar and paste it here (or just wait).");
+            let mut input = chat::Input::new();
+            for _ in 0..600 {
+                tokio::select! {
+                    line = input.line("") => {
+                        let line = line.unwrap_or_default();
+                        if line.contains("code=") {
+                            c.post("/google/finish", &json!({ "url": line })).await?;
+                        }
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                }
+                if c.get("/google").await?["connected"] == true {
+                    println!("Google account connected.");
+                    return Ok(());
+                }
+            }
+            Err("timed out waiting for Google login".into())
+        }
+        ["logout"] => {
+            let c = remote(paths).await?;
+            c.post("/google/logout", &json!({})).await?;
+            println!("Disconnected and revoked Google access.");
+            Ok(())
+        }
+        _ => Err("usage: alice google [status | setup | login | logout]".into()),
+    }
 }
 
 fn service_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
@@ -685,16 +757,7 @@ async fn memory_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     }
 }
 
-pub fn urlencode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
+pub use crate::util::urlencode;
 
 // ---------------------------------------------------------------- config / tools
 

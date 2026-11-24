@@ -609,6 +609,36 @@ function gatewayForm(c, name, label, help) {
       } }, 'Remove') : null));
 }
 
+async function googleForm(c) {
+  const g = await api('GET', '/google');
+  const id = el('input', { type: 'text', value: c.tools.google.client_id, placeholder: 'OAuth client ID (Desktop app)' });
+  const secret = el('input', { type: 'password', placeholder: g.client_secret_set ? 'Client secret is set — enter to replace' : 'Client secret' });
+  const boxes = g.available_services.map((sv) => {
+    const b = el('input', { type: 'checkbox' }); b.checked = g.services.includes(sv); b.dataset.svc = sv;
+    return b;
+  });
+  const save = async () => {
+    await api('PATCH', '/config', { 'tools.google.client_id': id.value.trim(), 'tools.google.services': boxes.filter((b) => b.checked).map((b) => b.dataset.svc) });
+    if (secret.value) await api('PUT', '/secrets/google.client_secret', { value: secret.value });
+  };
+  return el('div', {},
+    el('p', { class: 'small muted' }, 'Use your own OAuth client ("Desktop app") from Google Cloud Console. Only scopes for the checked services are requested. Sending mail, creating/deleting events and editing documents ask before running by default.'),
+    field('Client ID', id), field('Client secret', secret),
+    el('div', { class: 'row' }, ...boxes.map((b) => el('label', { class: 'row' }, b, b.dataset.svc))),
+    el('p', { class: 'small' }, g.connected ? '✓ Connected' : 'Not connected'),
+    el('div', { class: 'row' },
+      el('button', { onclick: async () => { try { await save(); toast('Saved'); showTab('tools'); } catch (e) { toast(e.message); } } }, 'Save'),
+      el('button', { class: 'primary', onclick: async () => {
+        try {
+          await save();
+          const r = await api('POST', '/google/login', {});
+          window.open(r.auth_url, '_blank', 'noopener');
+          toast('Approve access in the new tab. This works when the browser runs on the server machine; otherwise use `alice google login`.');
+        } catch (e) { toast(e.message); }
+      } }, g.connected ? 'Reconnect' : 'Connect'),
+      g.connected ? el('button', { class: 'danger', onclick: async () => { await api('POST', '/google/logout', {}); showTab('tools'); } }, 'Disconnect') : null));
+}
+
 function webSearchForm(c) {
   const prov = el('select', {}, el('option', { value: '' }, 'disabled'), el('option', { value: 'brave' }, 'Brave Search API'), el('option', { value: 'searxng' }, 'SearXNG (self-hosted)'));
   prov.value = c.tools.web.search_provider;
@@ -766,7 +796,7 @@ const TABS = {
       el('h3', {}, 'Web search'),
       webSearchForm(c),
       el('h3', {}, 'Google account'),
-      el('p', { class: 'muted' }, 'Not available yet (roadmap Phase 4).'),
+      await googleForm(c),
     ];
   },
 

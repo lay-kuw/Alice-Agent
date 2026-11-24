@@ -12,7 +12,7 @@
         │ agent   : turn loop (context build → provider stream → tools)    │
         │ memory  : extract / search / delete / rebuild                    │
         │ providers: openai(-compatible) / anthropic / gemini / codex-cli  │
-        │ tools   : fs / web / google  + permission gate                   │
+        │ skills  : manager + tool registry + gate (native / MCP / text)   │
         │ channels: telegram (long-poll) / discord (gateway) ─ 内部クライアント │
         │ storage : SQLite (rusqlite, bundled, FTS5, WAL)                  │
         └───────────────────────────────────────────────────────────────────┘
@@ -50,7 +50,9 @@ src/
 ├── memory/          抽出・検索・削除・再構築
 ├── providers/       共通型 + openai.rs / anthropic.rs / gemini.rs / cli.rs(codex, gemini-cli)
 ├── agent/           ターン実行・コンテキスト構築・ツールループ・承認待ち
-├── tools/           ツール定義・実行・権限ゲート
+├── skills/          スキル（manifest・検出・Tool Registry・Tool Gate・認証・http/command ハンドラ）
+├── mcp.rs           `alice mcp`（stdio MCP 中継。Codex 用）
+├── tools/           内蔵スキルの実装（fs / web / google）
 ├── server/          ルーター・認証・ハンドラ・SSE・埋め込み Web
 ├── channels/        telegram.rs / discord.rs
 └── cli/             HTTP クライアント・各コマンド・ストリーミング Markdown 表示
@@ -82,8 +84,8 @@ pub async fn stream(provider: &ProviderConfig, secret: Option<&str>, req, on_del
 | ollama | ✓ | モデル依存 | モデル依存 | テキスト化 | – | なし |
 | anthropic | ✓ | ✓ | ✓ | テキスト化 / PDF | ✓ (adaptive) | API Key |
 | gemini | ✓ | ✓ | ✓ | テキスト化 | ✓ | API Key |
-| codex-cli | 行単位 | ✗（Alice ツール不可） | ✓ (`-i`) | ✗ | Codex 内部 | ChatGPT ログイン (公式 CLI) |
-| gemini-cli | 行単位 | ✗ | ✗ | ✗ | – | Google ログイン (実験的) |
+| codex-cli | 行単位 | MCP（`alice mcp`）。安全確認に失敗したらテキスト方式 | ✗ | ✗ | Codex 内部 | Alice 専用の ChatGPT ログイン (公式 CLI, `~/.alice/codex`) |
+| gemini-cli | 行単位 | テキスト方式（```alice-tool```） | ✗ | ✗ | – | Google ログイン (実験的) |
 
 Context Window はモデル設定 (`context_tokens`) で管理し、履歴の切り詰めに使う。
 
@@ -136,10 +138,14 @@ start_turn(thread, user_text, client)
 - プラットフォーム層は `Surface` トレイト（send / edit / delete / typing）だけを実装。Telegram は long polling、Discord は Gateway WebSocket + REST。
 - 設定変更（`config.updated`）を検知して gateway を自動再起動。
 
-## 10. Google 連携
+## 10. スキル（Google Workspace ほか）
 
-- ユーザー自身の OAuth クライアント（Desktop app）。PKCE (S256) + `state`、ループバック `http://127.0.0.1:<port>/oauth/google/callback`。ブラウザが別マシンの場合はリダイレクト URL を CLI に貼り付けて完了。
-- スコープは有効なサービス分のみ。リフレッシュトークンは `secrets.toml`、アクセストークンはメモリ。
+詳細は [SKILLS.md](SKILLS.md)。
+
+- ファイル・Web・Google Workspace は内蔵スキル。外部スキルは `~/.alice/skills/<id>/`（`skill.toml` + `SKILL.md`）。
+- すべてのツール呼び出しは `skills::gate::invoke` を通る（権限 → 承認 → 実行 → 秘密情報の除去 → `tool_runs` に記録）。
+- 経路は 3 つ：ネイティブ Tool Calling（API モデル）、MCP（Codex: `alice mcp` + ターントークン）、テキスト方式（その他の CLI）。
+- OAuth は汎用実装（PKCE + `state` 使い捨て + ループバック `/oauth/callback`）。ブラウザが別マシンなら、リダイレクト URL を CLI に貼り付けて完了。
 
 ## 11. iPhone アプリ
 

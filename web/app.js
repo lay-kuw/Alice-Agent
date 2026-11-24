@@ -23,7 +23,7 @@ const I18N = {
     allow: '許可する', deny: '拒否', 'approval.q': 'を実行してもいいですか？', 'approval.from': '{c} からの要求',
     'approval.other': '承認待ち: {t}（別のスレッド）', error: 'エラー',
     'settings.title': '設定', 'tab.general': '一般', 'tab.soul': '人格 (SOUL)', 'tab.models': 'モデル', 'tab.channels': 'チャンネル',
-    'tab.tools': 'ツール', 'tab.memory': '記憶', 'tab.system': 'システム', loading: '読み込み中…', save: '保存', saved: '保存しました',
+    'tab.tools': 'スキル', 'tab.memory': '記憶', 'tab.system': 'システム', loading: '読み込み中…', save: '保存', saved: '保存しました',
     'g.agent': 'エージェント', 'g.name': '名前', 'g.lang': '返答の言語（例: ja, en）', 'g.theme': 'テーマ', 'theme.system': '自動', 'theme.light': 'ライト', 'theme.dark': 'ダーク',
     'g.server': 'サーバー（上級者向け）', 'g.bind': '待ち受けアドレス（127.0.0.1 = このマシンのみ）', 'g.port': 'ポート', 'g.public': '公開 URL（Tailscale / リバースプロキシ）',
     'g.restart': '保存しました。アドレス・ポートの変更は再起動後に反映されます（alice restart）。', signout: 'サインアウト',
@@ -34,8 +34,8 @@ const I18N = {
     'm.removeq': 'プロバイダー {p} と API キーを削除しますか？', 'm.key': 'API キー', 'm.keySet': '設定済み — 変更する場合のみ入力', 'm.saveKey': 'キーを保存',
     'm.none': 'まだプロバイダーがありません。', 'm.add': 'プロバイダーを追加', 'm.kind': '種類', 'm.id': 'ID（例: openai）', 'm.base': 'ベース URL（任意。openai-compatible は必須）',
     'm.models': 'モデル名（カンマ区切り）', 'm.addBtn': '追加', 'm.added': '追加しました',
-    'm.sub': 'ChatGPT / Gemini のサブスクは公式 CLI（codex-cli / gemini-cli）経由のみ。テキスト専用で、Alice のツールは使えません。',
-    'm.cliLogin': 'ログインはサーバーで実行: alice model login {p}', 'm.caps': 'ツール: {t}・画像: {i}・ストリーミング: {s}',
+    'm.sub': 'ChatGPT / Gemini のサブスクは公式 CLI（codex-cli / gemini-cli）経由で使います。Codex は Alice 専用のログイン（alice model login codex-cli）で、スキルは内蔵 MCP サーバー経由で使えます。',
+    'm.cliLogin': 'ログインはサーバーで実行: alice model login {p}（いつもの Codex とは別のログインです）', 'm.caps': 'ツール: {t}・画像: {i}・ストリーミング: {s}',
     'c.iphone': 'iPhone アプリ', 'c.iphone.sub': '同じサーバーに接続して、スレッドと記憶を共有します。',
     'c.ios1': 'アプリを開いて「サーバーを追加」', 'c.ios2': 'この URL を入力', 'c.ios3': 'API トークンを入力',
     'c.ios3.hint': 'セキュリティのため、ここには表示しません。サーバーで `alice token` を実行してください。',
@@ -75,6 +75,13 @@ const I18N = {
     'u.title': '使用状況', 'u.left': '残り {p}%', 'u.reset': '{t} にリセット', 'u.none': 'サブスク（codex-cli）のプロバイダーがありません。',
     'u.credits': 'リセット権: {n} 回', 'u.tokens': 'Alice が使ったトークン', 'u.day': '24 時間', 'u.month': '30 日', 'u.model': 'モデル', 'u.in': '入力', 'u.out': '出力', 'u.replies': '回答',
     'u.win.5h': '5 時間枠', 'u.win.weekly': '週間枠', 'u.checking': '確認中…',
+    'sk.intro': 'スキルは Alice の機能拡張です。~/.alice/skills/ にフォルダを置くと自動で見つかります（外部スキルは有効化するまで無効）。どのモデルから使っても、権限と承認はここの設定どおりに動きます。',
+    'sk.dir': 'スキルフォルダ: {d}', 'sk.rescan': '再検出', 'sk.invalid': '読み込めません', 'sk.enabled': '有効',
+    'sk.st.ready': '利用OK', 'sk.st.disabled': 'オフ', 'sk.st.needs_setup': '要設定', 'sk.st.missing_dependency': '依存不足',
+    'sk.builtin': '内蔵', 'sk.user': '追加スキル', 'sk.net': 'ネットワーク', 'sk.files': 'ファイル', 'sk.none': 'なし', 'sk.yes': 'あり', 'sk.no': 'なし',
+    'sk.confirm': '「{n}」を有効にしますか？ このスキルは次の権限を宣言しています:', 'sk.cmd': '※ このスキルはフォルダ内のプログラムを実行します',
+    'sk.advanced': '詳細設定', 'sk.saveSettings': '設定を保存', 'sk.account': 'アカウント',
+    'sys.runs': 'ツール実行ログ', 'run.none': 'まだ実行されていません。',
   },
   en: {
     'login.hint': 'Enter the API token shown by `alice token` on the server.', 'login.submit': 'Sign in', 'login.invalid': 'Invalid token',
@@ -84,7 +91,7 @@ const I18N = {
     deleted: 'This thread was deleted', stopped: '(stopped)', copy: 'Copy', copied: 'Copied',
     allow: 'Allow', deny: 'Deny', 'approval.q': '— allow?', 'approval.from': 'requested from {c}', 'approval.other': 'Approval needed: {t} (another thread)', error: 'Error',
     'settings.title': 'Settings', 'tab.general': 'General', 'tab.soul': 'Personality', 'tab.models': 'Models', 'tab.channels': 'Channels',
-    'tab.tools': 'Tools', 'tab.memory': 'Memory', 'tab.system': 'System', loading: 'Loading…', save: 'Save', saved: 'Saved',
+    'tab.tools': 'Skills', 'tab.memory': 'Memory', 'tab.system': 'System', loading: 'Loading…', save: 'Save', saved: 'Saved',
     'g.agent': 'Agent', 'g.name': 'Name', 'g.lang': 'Reply language (e.g. ja, en)', 'g.theme': 'Theme', 'theme.system': 'Auto', 'theme.light': 'Light', 'theme.dark': 'Dark',
     'g.server': 'Server (advanced)', 'g.bind': 'Bind address (127.0.0.1 = this machine only)', 'g.port': 'Port', 'g.public': 'Public URL (Tailscale / reverse proxy)',
     'g.restart': 'Saved. Address/port changes apply after `alice restart`.', signout: 'Sign out',
@@ -95,7 +102,7 @@ const I18N = {
     'm.removeq': 'Remove provider {p} and its API key?', 'm.key': 'API key', 'm.keySet': 'Set — enter only to replace', 'm.saveKey': 'Save key',
     'm.none': 'No providers yet.', 'm.add': 'Add provider', 'm.kind': 'Type', 'm.id': 'ID (e.g. openai)', 'm.base': 'Base URL (optional; required for openai-compatible)',
     'm.models': 'Model names, comma separated', 'm.addBtn': 'Add', 'm.added': 'Provider added',
-    'm.sub': "ChatGPT / Gemini subscriptions work only through the vendors' official CLIs (codex-cli / gemini-cli). Text only; Alice tools are not available.",
+    'm.sub': "ChatGPT / Gemini subscriptions work through the vendors' official CLIs (codex-cli / gemini-cli). Codex uses Alice's own login (alice model login codex-cli) and reaches skills through Alice's built-in MCP server.",
     'm.cliLogin': 'Log in on the server: alice model login {p}', 'm.caps': 'tools: {t} · images: {i} · streaming: {s}',
     'c.iphone': 'iPhone app', 'c.iphone.sub': 'Connects to this server and shares threads and memory.',
     'c.ios1': 'Open the app and tap “Add server”', 'c.ios2': 'Enter this URL', 'c.ios3': 'Enter the API token',
@@ -136,6 +143,13 @@ const I18N = {
     'u.title': 'Usage', 'u.left': '{p}% left', 'u.reset': 'resets {t}', 'u.none': 'No subscription (codex-cli) providers.',
     'u.credits': 'Reset credits: {n}', 'u.tokens': 'Tokens used by Alice', 'u.day': '24 hours', 'u.month': '30 days', 'u.model': 'Model', 'u.in': 'In', 'u.out': 'Out', 'u.replies': 'Replies',
     'u.win.5h': '5-hour window', 'u.win.weekly': 'Weekly window', 'u.checking': 'Checking…',
+    'sk.intro': 'Skills extend Alice. Folders in ~/.alice/skills/ are found automatically (external skills stay off until you enable them). Whatever model calls a tool, these permissions and approvals apply.',
+    'sk.dir': 'Skills folder: {d}', 'sk.rescan': 'Rescan', 'sk.invalid': 'Cannot load', 'sk.enabled': 'Enabled',
+    'sk.st.ready': 'Ready', 'sk.st.disabled': 'Off', 'sk.st.needs_setup': 'Needs setup', 'sk.st.missing_dependency': 'Missing dependency',
+    'sk.builtin': 'Built-in', 'sk.user': 'Added', 'sk.net': 'Network', 'sk.files': 'Files', 'sk.none': 'none', 'sk.yes': 'yes', 'sk.no': 'no',
+    'sk.confirm': 'Enable “{n}”? It declares these permissions:', 'sk.cmd': 'Note: this skill runs programs from its folder',
+    'sk.advanced': 'Advanced', 'sk.saveSettings': 'Save settings', 'sk.account': 'Account',
+    'sys.runs': 'Tool runs', 'run.none': 'Nothing has run yet.',
   },
 };
 let LANG = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
@@ -877,34 +891,88 @@ function channelPanel(c, st, name, icon, steps) {
       } }, t('c.remove')) : null));
 }
 
-async function googlePanel(c) {
-  const g = await api('GET', '/google');
-  const id = el('input', { type: 'text', value: c.tools.google.client_id, placeholder: '….apps.googleusercontent.com' });
-  const secret = el('input', { type: 'password', placeholder: g.client_secret_set ? t('m.keySet') : t('t.csecret') });
-  const boxes = g.available_services.map((sv) => {
-    const sw = toggle(g.services.includes(sv), sv);
-    sw.input.dataset.svc = sv;
-    return sw;
-  });
-  const save = async () => {
-    await api('PATCH', '/config', { 'tools.google.client_id': id.value.trim(), 'tools.google.services': boxes.filter((b) => b.input.checked).map((b) => b.input.dataset.svc) });
-    if (secret.value) await api('PUT', '/secrets/google.client_secret', { value: secret.value });
+function skillPanel(s, extra) {
+  const kind = { ready: 'ok', disabled: '', needs_setup: 'warn', missing_dependency: 'ng' }[s.status] ?? '';
+  const sw = toggle(s.enabled, t('sk.enabled'));
+  sw.input.addEventListener('change', () => guard(async () => {
+    if (sw.input.checked && s.source !== 'builtin') {
+      const p = s.permissions;
+      const lines = [t('sk.confirm', { n: s.name }), `${t('sk.net')}: ${p.network.length ? p.network.join(', ') : t('sk.none')}`, `${t('sk.files')}: ${p.files ? t('sk.yes') : t('sk.no')}`];
+      if (s.tools.some((x) => x.handler === 'command')) lines.push(t('sk.cmd'));
+      if (!confirm(lines.join('\n'))) { sw.input.checked = false; return; }
+    }
+    await api('PATCH', '/skills/' + s.id, { enabled: sw.input.checked });
+    showTab('tools');
+  }));
+  const status = badge(kind, t('sk.st.' + s.status) + (s.detail ? ` · ${s.detail}` : ''));
+  const src = badge('', s.source === 'builtin' ? t('sk.builtin') : t('sk.user'));
+  const body = el('div', { class: 'skill-body' + (s.enabled ? '' : ' hidden') });
+  // Declared permissions.
+  const p = s.permissions;
+  body.append(el('p', { class: 'hint' }, `🔐 ${t('sk.net')}: ${p.network.length ? p.network.join(', ') : t('sk.none')} · ${t('sk.files')}: ${p.files ? t('sk.yes') : t('sk.no')}${p.description ? ' — ' + p.description : ''}`));
+  if (extra) body.append(extra);
+  // Settings.
+  const inputs = [];
+  const fieldFor = (x) => {
+    const inp = el('input', { type: x.secret ? 'password' : 'text', autocomplete: 'off', placeholder: x.secret && x.set ? t('m.keySet') : '' });
+    if (!x.secret) inp.value = x.value || '';
+    inputs.push([x, inp]);
+    return field(x.label || x.key, inp);
   };
-  return el('div', { class: 'panel' },
-    el('div', { class: 'spread' }, el('h4', {}, 'Google ', g.connected ? badge('ok', t('t.connected')) : badge('', t('t.notConnected')))),
-    el('p', { class: 'hint' }, t('t.gNote')),
-    field(t('t.cid'), id), field(t('t.csecret'), secret),
-    el('div', { class: 'row' }, ...boxes.map((b) => b.node)),
-    el('div', { class: 'row' }, el('br')),
-    el('div', { class: 'row' },
-      el('button', { onclick: () => guard(async () => { await save(); toast(t('saved')); showTab('tools'); }) }, t('save')),
-      el('button', { class: 'primary', onclick: () => guard(async () => {
-        await save();
-        const r = await api('POST', '/google/login', {});
+  const basic = s.settings.filter((x) => !x.advanced), adv = s.settings.filter((x) => x.advanced);
+  if (s.settings.length) {
+    body.append(...basic.map(fieldFor));
+    if (adv.length) body.append(el('details', { class: 'adv' }, el('summary', {}, t('sk.advanced')), ...adv.map(fieldFor)));
+    body.append(el('button', { onclick: () => guard(async () => {
+      const settings = {};
+      for (const [x, inp] of inputs) if (!x.secret || inp.value) settings[x.key] = inp.value;
+      await api('PATCH', '/skills/' + s.id, { settings });
+      toast(t('saved')); showTab('tools');
+    }) }, t('sk.saveSettings')));
+  }
+  // Groups.
+  if (s.groups.length) {
+    const boxes = s.groups.map((g) => { const b = toggle(g.enabled, g.label || g.id); b.input.dataset.g = g.id; return b; });
+    for (const b of boxes) b.input.addEventListener('change', () => guard(async () => {
+      await api('PATCH', '/skills/' + s.id, { groups: boxes.filter((x) => x.input.checked).map((x) => x.input.dataset.g) });
+      showTab('tools');
+    }));
+    body.append(el('div', { class: 'row groups' }, ...boxes.map((b) => b.node)));
+  }
+  // Auth.
+  if (s.auth) {
+    const a = s.auth;
+    const row = el('div', { class: 'row' }, el('strong', {}, a.label || t('sk.account')), a.connected ? badge('ok', t('t.connected')) : badge('warn', t('t.notConnected')));
+    if (a.type === 'token') {
+      const tok = el('input', { type: 'password', placeholder: a.connected ? t('m.keySet') : a.label, autocomplete: 'off' });
+      row.append(tok, el('button', { class: 'primary', onclick: () => guard(async () => {
+        await api('POST', `/skills/${s.id}/login`, { token: tok.value }); toast(t('saved')); showTab('tools');
+      }) }, t('t.connect')));
+    } else if (a.type === 'oauth2') {
+      row.append(el('button', { class: 'primary', onclick: () => guard(async () => {
+        const r = await api('POST', `/skills/${s.id}/login`, {});
         window.open(r.auth_url, '_blank', 'noopener');
         toast(t('t.gToast'));
-      }) }, g.connected ? t('t.reconnect') : t('t.connect')),
-      g.connected ? el('button', { class: 'ghost danger', onclick: () => guard(async () => { await api('POST', '/google/logout', {}); showTab('tools'); }) }, t('t.disconnect')) : null));
+      }) }, a.connected ? t('t.reconnect') : t('t.connect')));
+    }
+    if (a.connected) row.append(el('button', { class: 'ghost danger', onclick: () => guard(async () => { await api('POST', `/skills/${s.id}/logout`); showTab('tools'); }) }, t('t.disconnect')));
+    body.append(row);
+  }
+  // Tools with permissions.
+  body.append(el('div', { class: 'list' }, ...s.tools.map((tool) => {
+    const sel = el('select', {}, ...['disabled', 'ask', 'allow'].map((x) => el('option', { value: x }, t('t.' + x))));
+    sel.value = tool.permission;
+    sel.addEventListener('change', () => guard(async () => { await api('PATCH', '/tools', { [tool.name]: sel.value }); toast(`${tool.name}: ${t('t.' + sel.value)}`); }));
+    return el('div', { class: 'item' },
+      el('div', { class: 'grow' }, el('strong', {}, tool.name, tool.risk === 'write' ? ' ✎' : ''),
+        el('div', { class: 'small muted' }, tool.description + (tool.available || !s.enabled ? '' : ` (${tool.reason})`))),
+      el('div', {}, sel));
+  })));
+  return el('div', { class: 'panel' },
+    el('div', { class: 'spread' },
+      el('div', {}, el('h4', {}, s.name, ' ', status, ' ', src), el('div', { class: 'sub' }, `${s.description}${s.version ? ' · v' + s.version : ''}`)),
+      sw.node),
+    body);
 }
 
 function webPanel(c) {
@@ -1063,33 +1131,26 @@ const TABS = {
   },
 
   async tools() {
-    const [v, c] = await Promise.all([api('GET', '/tools'), api('GET', '/config')]);
-    const groups = { fs: '📁 ' + t('t.fs'), web: '🔎 ' + t('t.web'), google: 'Google' };
-    const lists = {};
-    for (const tool of v.tools) {
-      const sel = el('select', {}, ...['disabled', 'ask', 'allow'].map((p) => el('option', { value: p }, t('t.' + p))));
-      sel.value = tool.permission;
-      sel.addEventListener('change', () => guard(async () => { await api('PATCH', '/tools', { [tool.name]: sel.value }); toast(`${tool.name}: ${t('t.' + sel.value)}`); }));
-      (lists[tool.group] ||= []).push(el('div', { class: 'item' },
-        el('div', { class: 'grow' }, el('strong', {}, tool.name), el('div', { class: 'small muted' }, tool.description + (tool.available ? '' : ' ' + t('t.notcfg')))),
-        el('div', {}, sel)));
-    }
+    const [sk, v, c] = await Promise.all([api('GET', '/skills'), api('GET', '/tools'), api('GET', '/config')]);
     const ws = el('input', { type: 'text', value: c.tools.fs.workspace || '', placeholder: '~/.alice/workspace' });
     const roots = el('textarea', { rows: 3, placeholder: '~/Documents' });
     roots.value = (c.tools.fs.roots || []).join('\n');
-    return [
-      el('h3', {}, t('t.perm')),
-      ...Object.entries(lists).map(([g, items]) => el('div', {}, el('p', { class: 'small muted' }, groups[g] || g), el('div', { class: 'list' }, items))),
-      el('p', { class: 'hint' }, t('t.permNote')),
-      el('h3', {}, t('t.fs')),
-      el('div', { class: 'panel' }, field(t('t.ws'), ws, t('t.wsHint') + ' ' + t('t.effective') + v.workspace),
+    const extras = {
+      files: el('div', {}, field(t('t.ws'), ws, t('t.wsHint') + ' ' + t('t.effective') + v.workspace),
         field(t('t.extra'), roots, t('t.effective') + v.fs_roots.join(', ')),
-        el('button', { class: 'primary', onclick: () => guard(async () => {
+        el('button', { onclick: () => guard(async () => {
           await api('PATCH', '/config', { 'tools.fs.workspace': ws.value.trim(), 'tools.fs.roots': roots.value.split('\n').map((s) => s.trim()).filter(Boolean) });
           toast(t('saved')); showTab('tools');
         }) }, t('t.saveDirs'))),
-      webPanel(c),
-      await googlePanel(c),
+      web: webPanel(c),
+    };
+    return [
+      el('div', { class: 'spread' }, el('p', { class: 'hint' }, t('sk.intro')),
+        el('button', { class: 'ghost', onclick: () => guard(async () => { await api('POST', '/skills/rescan'); showTab('tools'); }) }, t('sk.rescan'))),
+      el('p', { class: 'hint' }, t('sk.dir', { d: sk.dir })),
+      ...sk.skills.map((s) => skillPanel(s, extras[s.id])),
+      ...sk.invalid.map((i) => el('div', { class: 'panel' }, el('h4', {}, i.folder, ' ', badge('ng', t('sk.invalid'))), el('p', { class: 'hint' }, i.error))),
+      el('p', { class: 'hint' }, t('t.permNote')),
     ];
   },
 
@@ -1128,7 +1189,7 @@ const TABS = {
   },
 
   async system() {
-    const [s, logs] = await Promise.all([api('GET', '/status'), api('GET', '/logs?lines=200')]);
+    const [s, logs, runs] = await Promise.all([api('GET', '/status'), api('GET', '/logs?lines=200'), api('GET', '/tool-runs?limit=50')]);
     const up = s.uptime_secs;
     const stat = (n, label) => el('div', {}, el('b', {}, n), label);
     return [
@@ -1137,6 +1198,12 @@ const TABS = {
         stat((s.rss_kb / 1024).toFixed(1) + ' MB', t('st.mem')), stat(s.cpu_percent + '%', t('st.cpu')),
         stat(fmtBytes(s.db_bytes), t('st.db')), stat(s.counts.threads, t('st.threads')), stat(s.counts.messages, t('st.messages'))),
       el('p', { class: 'hint' }, `${s.profile} · ${s.os}/${s.arch} · ${s.bind} · ${s.home}`),
+      el('h3', {}, t('sys.runs')),
+      runs.runs.length ? el('table', { class: 'usage' }, ...runs.runs.map((r) => el('tr', {},
+        el('td', {}, fmtTime(r.ts)), el('td', {}, r.tool), el('td', {}, r.source),
+        el('td', {}, badge(r.status === 'ok' ? 'ok' : ['error', 'denied', 'unavailable'].includes(r.status) ? 'ng' : 'warn', r.status)),
+        el('td', {}, r.duration_ms + 'ms'), el('td', { class: 'small muted' }, r.error || r.thread_title || ''))))
+        : el('p', { class: 'muted small' }, t('run.none')),
       el('h3', {}, t('sys.logs')), el('pre', { class: 'log' }, logs.lines || '—'),
       el('button', { onclick: () => showTab('system') }, t('refresh')),
     ];

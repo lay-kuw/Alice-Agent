@@ -284,3 +284,8 @@ details.adv > summary { cursor: pointer; color: var(--muted); font-size: 13px; m
   .tabs button { white-space: nowrap; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+.skill-body { margin-top: 12px; display: grid; gap: 10px; }
+.skill-body .list { margin-bottom: 0; }
+.skill-body .panel { margin-bottom: 0; background: transparent; }
+.groups { gap: 16px; }
+.skill-body > button { justify-self: start; }

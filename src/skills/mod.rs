@@ -279,7 +279,7 @@ impl Catalog {
     }
 }
 
-type Fingerprint = Vec<(String, Option<SystemTime>, Option<SystemTime>)>;
+pub type Fingerprint = Vec<(String, Option<SystemTime>, Option<SystemTime>)>;
 
 fn fingerprint(dir: &Path) -> Fingerprint {
     let mtime = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();

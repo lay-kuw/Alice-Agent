@@ -48,7 +48,7 @@ pub struct App {
     /// Live gateway state for the settings UI: name -> {state, detail}.
     pub channel_status: Mutex<HashMap<&'static str, Value>>,
     pub started: Instant,
-    pub skill_cache: Mutex<Option<(Vec<(String, Option<std::time::SystemTime>, Option<std::time::SystemTime>)>, Arc<crate::skills::Catalog>)>>,
+    pub skill_cache: Mutex<Option<(crate::skills::Fingerprint, Arc<crate::skills::Catalog>)>>,
     pub auth: crate::skills::auth::AuthState,
     pub bridges: Mutex<HashMap<String, Arc<Bridge>>>,
 }

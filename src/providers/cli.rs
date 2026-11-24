@@ -161,8 +161,16 @@ pub async fn codex_safe(exe: &str) -> std::result::Result<(), String> {
     let r = match tokio::time::timeout(std::time::Duration::from_secs(30), out).await {
         Ok(Ok(o)) if o.status.success() => match serde_json::from_slice::<Value>(&o.stdout) {
             Ok(v) => {
-                let bad: Vec<String> = codex_tool_names(&v).into_iter().filter(|n| !tool_allowed(n)).collect();
-                if bad.is_empty() { Ok(()) } else { Err(format!("Codex exposes tools outside Alice's control: {}", bad.join(", "))) }
+                let names = codex_tool_names(&v);
+                let bad: Vec<String> = names.iter().filter(|n| !tool_allowed(n)).cloned().collect();
+                if names.is_empty() {
+                    // Fail closed: an unreadable list is not a safe list.
+                    Err("Codex returned no tool list".into())
+                } else if bad.is_empty() {
+                    Ok(())
+                } else {
+                    Err(format!("Codex exposes tools outside Alice's control: {}", bad.join(", ")))
+                }
             }
             Err(e) => Err(format!("cannot read Codex tool list: {e}")),
         },

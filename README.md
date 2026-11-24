@@ -8,7 +8,7 @@
 - プロファイルごとに独立した Alice（モデル・設定・記憶・gateway）
 - Docker / Node.js / Redis / 外部 DB 不要。SQLite のみ
 
-設計: [SPEC](docs/SPEC.md) / [ARCHITECTURE](docs/ARCHITECTURE.md) / [SECURITY](docs/SECURITY.md) / [BENCHMARK](docs/BENCHMARK.md) / [ROADMAP](docs/ROADMAP.md)
+設計: [SPEC](docs/SPEC.md) / [ARCHITECTURE](docs/ARCHITECTURE.md) / [SKILLS](docs/SKILLS.md) / [SECURITY](docs/SECURITY.md) / [BENCHMARK](docs/BENCHMARK.md) / [ROADMAP](docs/ROADMAP.md)
 
 ## インストール
 
@@ -45,7 +45,8 @@ Web GUI: `http://127.0.0.1:7878/` を開き、`alice token` で表示される�
 | `alice memory [list\|search "語"\|show <id>\|status\|clear]` | Memory 管理（出典の確認は `show`） |
 | `alice tool [list\|enable <tool> [ask\|allow]\|disable <tool>]` | ツール権限 |
 | `alice gateway [list\|setup [telegram\|discord]\|delete <id>]` | Telegram / Discord |
-| `alice google [setup\|login\|logout\|status]` | Google アカウント連携 |
+| `alice skill [list\|info\|enable\|disable\|setup\|login\|logout\|log]` | スキル（機能拡張）の管理・認証・実行ログ |
+| `alice google [setup\|login\|logout\|status]` | google-workspace スキルの短縮形 |
 | `alice profile [list\|<name>\|use <name>\|delete <name>]` | プロファイル |
 | `alice config [get\|set <key> <value>\|secret <name>]` | 設定・秘密情報 |
 | `alice service [install\|uninstall\|status]` | 自動起動（launchd / systemd） |
@@ -68,10 +69,11 @@ alice profile default    # default に戻す
 ## 連携
 
 - **Telegram / Discord**: `alice gateway setup`。許可したユーザー ID 以外は無視します。Telegram は `/new /threads /model /delete /stop /status`、Discord は DM またはメンションで同じコマンドが使えます。
-- **Google**: Google Cloud で「デスクトップ アプリ」の OAuth クライアントを作成 → `alice google setup` → `alice google login`。有効にしたサービスのスコープだけを要求します。
+- **スキル**: Google Workspace・ファイル・Web は内蔵スキル。`~/.alice/skills/<id>/` にフォルダ（`skill.toml` + `SKILL.md`）を置けば、Alice 本体を変えずに機能を追加できます（例: `skills/examples/github`）。詳しくは [SKILLS](docs/SKILLS.md)。
+- **Google**: Google Cloud で「デスクトップ アプリ」の OAuth クライアントを作成 → `alice skill setup google-workspace` → `alice skill login google-workspace`。有効にしたサービスのスコープだけを要求します。
 - **作業フォルダ**: `alice config set tools.fs.workspace ~/AliceWork`（または Web の「設定 → ツール」）。相対パスはここに解決され、ほかのフォルダは `tools.fs.roots` で追加できます。
 - **Web 検索**: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key`（または SearXNG）。
-- **ChatGPT サブスク**: `alice model add` → `codex-cli`（公式 Codex CLI のログインを利用。テキスト専用）。
+- **ChatGPT サブスク**: `alice model add` → `codex-cli` → `alice model login codex-cli`（Alice 専用のログイン。普段の `~/.codex` は使いません）。スキルは内蔵 MCP サーバー経由で使え、承認は Alice の画面で行います。
 
 ## iPhone アプリ
 
@@ -79,7 +81,7 @@ alice profile default    # default に戻す
 
 ## 人格（SOUL.md）
 
-`~/.alice/SOUL.md`（プロファイルごと）が Alice に渡すシステムプロンプトのすべてです。既定の内容（役割・言語・性格・話し方・仕事の進め方・安全のための約束）もこのファイルに書かれていて、書き換えればすべて上書きできます。Alice が自動で足すのは現在時刻、作業フォルダ、話題に関係する記憶（最大 8 件）だけです。`{{name}}` はエージェント名に置き換わります。
+`~/.alice/SOUL.md`（プロファイルごと）が Alice に渡すシステムプロンプトのすべてです。既定の内容（役割・言語・性格・話し方・仕事の進め方・安全のための約束）もこのファイルに書かれていて、書き換えればすべて上書きできます。Alice が自動で足すのは現在時刻、作業フォルダ、使えるスキルの一覧（1 行ずつ）、話題に関係する記憶（最大 8 件）だけです。`{{name}}` はエージェント名に置き換わります。
 
 `alice soul` か Web の「設定 → 人格」で編集でき、次の返答から反映されます。会話をすべて削除しても残り、AI 自身は書き換えられません。
 
@@ -93,6 +95,8 @@ alice profile default    # default に戻す
 ├── alice.db        会話・Memory（SQLite, FTS5）
 ├── attachments/    添付ファイル（スレッド単位）
 ├── workspace/      ファイルツールの既定の作業フォルダ（tools.fs.workspace で変更可）
+├── skills/         追加スキル（<id>/skill.toml + SKILL.md）
+├── codex/          Alice 専用の Codex 設定・ログイン
 ├── logs/           ログ（会話本文・秘密情報は出力しない）
 └── profiles/<name>/ 他のプロファイル（同じ構成）
 ```

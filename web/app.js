@@ -581,6 +581,34 @@ function applyTheme(mode) {
   else delete document.documentElement.dataset.theme;
 }
 
+function gatewayForm(c, name, label, help) {
+  const g = c.channels[name];
+  const enabled = el('input', { type: 'checkbox' }); enabled.checked = g.enabled;
+  const ids = el('input', { type: 'text', value: g.allowed_user_ids.join(', '), placeholder: 'allowed user IDs, comma separated' });
+  const secret = `${name}.bot_token`;
+  const token = el('input', { type: 'password', placeholder: c.secrets_set.includes(secret) ? 'Bot token is set — enter to replace' : 'Bot token' });
+  const save = async () => {
+    try {
+      const list = ids.value.split(',').map((s) => s.trim()).filter(Boolean);
+      if (enabled.checked && !list.length) throw new Error('Add at least one allowed user ID');
+      if (token.value) await api('PUT', '/secrets/' + secret, { value: token.value });
+      await api('PATCH', '/config', {
+        [`channels.${name}.enabled`]: enabled.checked,
+        [`channels.${name}.allowed_user_ids`]: name === 'telegram' ? list.map(Number) : list,
+      });
+      toast(`${label} saved`); showTab('channels');
+    } catch (e) { toast(e.message); }
+  };
+  return el('div', {}, el('h3', {}, label), el('p', { class: 'small muted' }, help),
+    el('label', { class: 'row' }, enabled, 'Enabled'), field('Bot token', token), field('Allowed user IDs', ids),
+    el('div', { class: 'row' }, el('button', { class: 'primary', onclick: save }, 'Save'),
+      c.secrets_set.includes(secret) ? el('button', { class: 'danger', onclick: async () => {
+        if (!confirm(`Remove the ${label} token and disable the gateway?`)) return;
+        await api('PATCH', '/config', { [`channels.${name}.enabled`]: false });
+        await api('DELETE', '/secrets/' + secret); showTab('channels');
+      } }, 'Remove') : null));
+}
+
 function webSearchForm(c) {
   const prov = el('select', {}, el('option', { value: '' }, 'disabled'), el('option', { value: 'brave' }, 'Brave Search API'), el('option', { value: 'searxng' }, 'SearXNG (self-hosted)'));
   prov.value = c.tools.web.search_provider;
@@ -701,8 +729,9 @@ const TABS = {
       el('h3', {}, 'iPhone app'),
       field('Server URL', el('input', { type: 'text', value: url, readonly: true })),
       el('p', { class: 'small muted' }, 'Sign in with the API token. For security the token is not shown here; run `alice token` on the server machine. For access outside your network use Tailscale or an HTTPS reverse proxy.'),
-      el('h3', {}, 'Telegram / Discord'),
-      el('p', { class: 'muted' }, 'Not available yet (roadmap Phase 5).'),
+      gatewayForm(c, 'telegram', 'Telegram', 'Create a bot with @BotFather. Find your numeric user ID with @userinfobot.'),
+      gatewayForm(c, 'discord', 'Discord', 'Create an application + bot in the Discord Developer Portal and invite it. Copy your user ID with Developer Mode. Works in DMs, and in servers when the bot is mentioned.'),
+      el('p', { class: 'small muted' }, 'Only the allowed user IDs can talk to Alice; everyone else is ignored. When a thread is deleted, Alice also tries to delete its messages on these platforms (Telegram allows this only within 48 hours).'),
     ];
   },
 

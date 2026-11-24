@@ -123,12 +123,15 @@ async fn run(
                 _ => {}
             },
             _ => match ty {
-                "message" if v["role"] == "assistant" => {
-                    let t = v["content"].as_str().unwrap_or("");
+                // Field names are not formally documented; accept common shapes.
+                "message" if v["role"] == "assistant" || v["role"] == "model" => {
+                    let t = v["content"].as_str().or(v["text"].as_str()).unwrap_or("");
                     out.text.push_str(t);
                     on_delta(t);
                 }
-                "error" => error = Some(v["message"].as_str().unwrap_or("gemini failed").to_string()),
+                "error" if v["severity"] != "warning" => {
+                    error = Some(v["message"].as_str().or(v.pointer("/error/message").and_then(|m| m.as_str())).unwrap_or("gemini failed").to_string())
+                }
                 "result" => {
                     if let Some(s) = v.pointer("/stats/input_tokens").and_then(|n| n.as_u64()) {
                         out.usage.input_tokens = s;

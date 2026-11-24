@@ -322,6 +322,8 @@ pub struct ChannelsConfig {
 pub struct TelegramConfig {
     pub enabled: bool,
     pub allowed_user_ids: Vec<i64>,
+    /// Override for tests / self-hosted Bot API servers; empty = api.telegram.org.
+    pub api_base: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -329,6 +331,8 @@ pub struct TelegramConfig {
 pub struct DiscordConfig {
     pub enabled: bool,
     pub allowed_user_ids: Vec<String>,
+    /// Override for tests; empty = https://discord.com/api/v10.
+    pub api_base: String,
 }
 
 impl Config {

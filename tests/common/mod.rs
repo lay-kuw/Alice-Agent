@@ -151,10 +151,20 @@ pub fn write_config(paths: &Paths, llm_url: &str) {
 
 impl Harness {
     pub async fn new() -> Harness {
+        Self::with(|_, _| {}).await
+    }
+
+    /// Start with a customised config / secrets.
+    pub async fn with(f: impl FnOnce(&mut Config, &mut Secrets)) -> Harness {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::at(dir.path().join("alice"));
         let (llm, llm_url) = fake_llm().await;
         write_config(&paths, &llm_url);
+        let mut cfg = Config::load(&paths).unwrap();
+        let mut sec = Secrets::load(&paths).unwrap();
+        f(&mut cfg, &mut sec);
+        cfg.save(&paths).unwrap();
+        sec.save(&paths).unwrap();
         Self::start(dir, paths, llm, llm_url).await
     }
 

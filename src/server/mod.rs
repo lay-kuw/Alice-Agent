@@ -373,21 +373,22 @@ async fn update_thread(State(app): State<AppRef>, Path(id): Path<String>, Json(b
 pub fn delete_thread_now(app: &App, id: &str) -> Result<bool, rusqlite::Error> {
     app.cancel_generation(id);
     app.drop_approvals(Some(id));
-    let existed = {
+    let (existed, external) = {
         let mut c = app.db.lock();
+        let external = crate::channels::external_messages(&c, Some(id));
         let existed = memory::delete_thread(&mut c, id)?;
         if existed {
             storage::optimize_fts(&c)?;
             storage::checkpoint(&c)?;
         }
-        existed
+        (existed, external)
     };
     let dir = app.paths.attachments().join(id);
     if dir.starts_with(app.paths.attachments()) && id.chars().all(|c| c.is_ascii_alphanumeric()) {
         let _ = std::fs::remove_dir_all(dir);
     }
     if existed {
-        app.emit(json!({ "type": "thread.deleted", "thread_id": id }));
+        app.emit(json!({ "type": "thread.deleted", "thread_id": id, "external": external }));
     }
     Ok(existed)
 }
@@ -398,16 +399,18 @@ pub fn delete_all_now(app: &App) -> Result<(), rusqlite::Error> {
         app.cancel_generation(id);
     }
     app.drop_approvals(None);
-    {
+    let external = {
         let mut c = app.db.lock();
+        let external = crate::channels::external_messages(&c, None);
         memory::delete_all(&mut c)?;
-    }
+        external
+    };
     if let Ok(rd) = std::fs::read_dir(app.paths.attachments()) {
         for e in rd.flatten() {
             let _ = std::fs::remove_dir_all(e.path());
         }
     }
-    app.emit(json!({ "type": "threads.cleared" }));
+    app.emit(json!({ "type": "threads.cleared", "external": external }));
     Ok(())
 }
 
@@ -731,6 +734,7 @@ async fn set_secret(State(app): State<AppRef>, Path(name): Path<String>, Json(b)
         return Err(bad("unknown secret name"));
     }
     app.update_secrets(|s| s.set(&name, b.value.trim())).map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -739,6 +743,7 @@ async fn delete_secret(State(app): State<AppRef>, Path(name): Path<String>) -> A
         return Err(bad("unknown secret name"));
     }
     app.update_secrets(|s| s.set(&name, "")).map_err(bad)?;
+    app.emit(json!({ "type": "config.updated" }));
     Ok(Json(json!({ "ok": true })))
 }
 

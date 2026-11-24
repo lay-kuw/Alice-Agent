@@ -7,6 +7,9 @@
 - サーバー待機時メモリ (RSS): 約 11–13MB
 - リリースバイナリ: 8.5MB（Web GUI 埋め込み済み）
 
+## プロファイル
+- ☑ `alice profile <name>` で独立インスタンス（設定・秘密情報・DB・gateway・ポート・サービス）
+
 ## Phase 1 — Core
 - ☑ Rust プロジェクト・設定・秘密情報・パス
 - ☑ SQLite スキーマ・マイグレーション
@@ -36,9 +39,9 @@
 - ☐ Google（OAuth 2.0 PKCE, Gmail / Calendar / Drive / Docs / Sheets）
 
 ## Phase 5 — Channels
-- ☐ Telegram（long polling, allowlist, コマンド, 承認ボタン）
-- ☐ Discord（Gateway, allowlist, コマンド, 承認）
-- ☐ Subscription Provider: codex-cli / gemini-cli（実験的）
+- ☑ Telegram（long polling, allowlist, コマンド, 承認ボタン）— 偽 Bot API で検証。実 Bot での疎通は未確認
+- ☑ Discord（Gateway, allowlist, コマンド, 承認）— 偽 Gateway/REST で検証。実 Bot での疎通は未確認
+- ◐ Subscription Provider: codex-cli（公式 JSONL 形式で検証、実ログインでの疎通は未確認）/ gemini-cli（Antigravity CLI への置き換えにより実験的）
 
 ## Phase 6 — iPhone
 - ☐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認）

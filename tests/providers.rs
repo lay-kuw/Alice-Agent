@@ -142,3 +142,46 @@ async fn http_errors_are_reported_without_secrets() {
     let e = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap_err();
     assert!(e.0.contains("no API key"));
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_cli_provider_uses_official_cli_output() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("codex");
+    // Fake `codex`: records its arguments and stdin, prints documented JSONL events.
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" > {d}/args\ncat > {d}/stdin\n\
+echo '{{\"type\":\"thread.started\",\"thread_id\":\"t\"}}'\n\
+echo '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"i1\",\"type\":\"reasoning\",\"text\":\"thinking\"}}}}'\n\
+echo '{{\"type\":\"item.completed\",\"item\":{{\"id\":\"i2\",\"type\":\"agent_message\",\"text\":\"Hello from Codex\"}}}}'\n\
+echo '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":10,\"cached_input_tokens\":0,\"output_tokens\":4,\"reasoning_output_tokens\":0}}}}'\n",
+        d = dir.path().display()
+    );
+    std::fs::write(&exe, script).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let p = ProviderConfig { id: "c".into(), kind: ProviderKind::CodexCli, base_url: exe.display().to_string(), models: vec![], context_tokens: 0 };
+    let req = ChatRequest {
+        model: "default",
+        system: "be nice".into(),
+        messages: vec![ChatMessage::user("first"), ChatMessage::assistant("answer"), ChatMessage::user("second")],
+        tools: vec![],
+        max_tokens: 100,
+    };
+    let mut text = String::new();
+    let mut on = |d: &str| text.push_str(d);
+    let c = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap();
+    assert_eq!(c.text, "Hello from Codex");
+    assert_eq!(c.usage.output_tokens, 4);
+    let args = std::fs::read_to_string(dir.path().join("args")).unwrap();
+    for a in ["exec", "--json", "--ephemeral", "--sandbox read-only", "--skip-git-repo-check"] {
+        assert!(args.contains(a), "{args}");
+    }
+    let stdin = std::fs::read_to_string(dir.path().join("stdin")).unwrap();
+    assert!(stdin.contains("be nice") && stdin.contains("[User]\nfirst") && stdin.contains("[Assistant]\nanswer") && stdin.contains("second"));
+
+    // A failing CLI reports its error.
+    std::fs::write(&exe, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"turn.failed\",\"error\":{\"message\":\"not logged in\"}}'\nexit 1\n").unwrap();
+    let e = providers::stream(&reqwest::Client::new(), &p, None, &req, &mut on).await.unwrap_err();
+    assert_eq!(e.0, "not logged in");
+}

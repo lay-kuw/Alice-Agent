@@ -24,16 +24,18 @@ struct CalendarView: View {
     var body: some View {
         NavigationStack {
             GoogleGate(google: google, group: "calendar", title: "Calendar") {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        calendarCard
-                        dayHeader
-                        dayEvents
+                // The calendar stays put; only the day's events scroll, so the
+                // calendar's own scrolling never drags the page.
+                VStack(alignment: .leading, spacing: 12) {
+                    calendarCard
+                    dayHeader
+                    ScrollView {
+                        dayEvents.padding(.bottom, 30)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 30)
+                    .scrollIndicators(.hidden)
+                    .refreshable { await load(force: true) }
                 }
-                .refreshable { await load(force: true) }
+                .padding(.horizontal)
                 .background(PastelBackground())
                 .task(id: "\(mode)|\(topWeek?.timeIntervalSince1970 ?? 0)") {
                     // Wait for scrolling to settle before loading.
@@ -130,9 +132,10 @@ struct CalendarView: View {
         return VStack(spacing: 6) {
             HStack(spacing: 0) {
                 ForEach(0..<7, id: \.self) { i in
-                    Text((cal.date(byAdding: .day, value: i, to: head) ?? head).formatted(.dateTime.weekday(.narrow)))
+                    let d = cal.date(byAdding: .day, value: i, to: head) ?? head
+                    Text(d.formatted(.dateTime.weekday(.narrow)))
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Palette.weekday(d) ?? .secondary)
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -201,7 +204,12 @@ struct CalendarView: View {
                 .font(.system(.title2, design: .rounded).weight(.bold))
             Text(selected.formatted(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
             Spacer()
-            if google.loading.contains("events") { ProgressView().controlSize(.small).opacity(google.loadedWeeks.contains(Self.startOfWeek(selected)) ? 0.4 : 1) }
+        }
+        // An overlay, so the spinner never changes the header's height.
+        .overlay(alignment: .trailing) {
+            if google.loading.contains("events") && !google.loadedWeeks.contains(Self.startOfWeek(selected)) {
+                ProgressView().controlSize(.small)
+            }
         }
     }
 
@@ -212,7 +220,7 @@ struct CalendarView: View {
                 SoftEmpty(title: "Nothing planned", systemImage: "sun.haze", message: "A free day ☕️")
                     .card()
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     ForEach(list) { e in
                         EventRow(event: e)
                             .onTapGesture { detail = e }
@@ -223,7 +231,7 @@ struct CalendarView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 160, alignment: .top)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .top)
         .contentShape(Rectangle())
         // Swipe sideways over the day to go to the previous or next day.
         .simultaneousGesture(
@@ -288,7 +296,7 @@ struct WeekRow: View, @MainActor Equatable {
                 .frame(height: 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .foregroundStyle(c.selected ? .white : (c.today ? Palette.lavender : .primary))
+            .foregroundStyle(c.selected ? .white : (c.today ? Palette.lavender : (Palette.weekday(c.date) ?? .primary)))
             .opacity(c.faded && !c.selected ? 0.35 : 1)
             .background {
                 if c.selected {
@@ -303,32 +311,38 @@ struct WeekRow: View, @MainActor Equatable {
     }
 }
 
+/// One event as a compact row: time on the left, title and place on the right.
 struct EventRow: View {
     let event: CalendarEvent
 
     var body: some View {
         let color = Palette.event((event.id, event.colorId))
-        HStack(spacing: 12) {
-            Capsule().fill(LinearGradient(colors: [color, color.opacity(0.6)], startPoint: .top, endPoint: .bottom)).frame(width: 5)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.displayTitle).font(.body.weight(.semibold)).lineLimit(2)
-                HStack(spacing: 6) {
-                    if event.allDay {
-                        Chip(text: String(localized: "All day"), systemImage: "sun.max", color: color)
-                    } else if let s = event.startDate {
-                        Image(systemName: "clock").font(.caption)
-                        Text("\(Fmt.time(s)) – \(event.endDate.map(Fmt.time) ?? "")").font(.subheadline)
+        HStack(spacing: 10) {
+            Capsule().fill(color).frame(width: 4)
+            Group {
+                if event.allDay {
+                    Text("All day").font(.caption.weight(.semibold)).foregroundStyle(color)
+                } else if let s = event.startDate {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(Fmt.time(s)).font(.subheadline.weight(.semibold).monospacedDigit())
+                        if let e = event.endDate { Text(Fmt.time(e)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
                     }
                 }
-                .foregroundStyle(.secondary)
+            }
+            .frame(width: 48, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
                 if let loc = event.location, !loc.isEmpty {
-                    Label(loc, systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(loc).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(padding: 12)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(.regularMaterial.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(Rectangle())
     }
 }
 
@@ -372,7 +386,6 @@ struct NewEventSheet: View {
     @State private var allDay = false
     @State private var start: Date
     @State private var end: Date
-    @State private var location = ""
     @State private var notes = ""
 
     init(google: GoogleStore, day: Date) {
@@ -390,7 +403,6 @@ struct NewEventSheet: View {
             Form {
                 Section {
                     TextField("Title", text: $title).font(.title3.weight(.semibold))
-                    TextField("Location", text: $location)
                 }
                 Section {
                     Toggle("All day", isOn: $allDay.animation()).tint(Palette.pink)
@@ -417,7 +429,7 @@ struct NewEventSheet: View {
                     } else {
                         Button("Add") {
                             Task {
-                                if await google.addEvent(summary: title, start: start, end: end, allDay: allDay, location: location, notes: notes) { dismiss() }
+                                if await google.addEvent(summary: title, start: start, end: end, allDay: allDay, location: "", notes: notes) { dismiss() }
                             }
                         }
                         .bold()

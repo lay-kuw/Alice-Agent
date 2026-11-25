@@ -11,9 +11,6 @@ struct MailView: View {
         NavigationStack {
             GoogleGate(google: google, group: "gmail", title: "Gmail") {
                 List {
-                    if let email = google.status?.email {
-                        Text(email).font(.caption).foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    }
                     ForEach(google.inbox) { m in
                         NavigationLink(value: m) { MailRow(mail: m) }
                             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 12))

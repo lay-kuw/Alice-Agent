@@ -3,7 +3,8 @@ import SwiftUI
 
 struct TasksView: View {
     @Bindable var google: GoogleStore
-    @State private var listId: String?
+    /// The list shown, or nil for every list grouped by list.
+    @AppStorage("tasks.list") private var listId = ""
     @State private var showCompleted = false
     @State private var adding = false
 
@@ -11,31 +12,42 @@ struct TasksView: View {
         NavigationStack {
             GoogleGate(google: google, group: "tasks", title: "Tasks") {
                 List {
-                    if google.lists.count > 1 { listChips.listRowBackground(Color.clear).listRowSeparator(.hidden) }
-                    if let list = current {
-                        let open = list.tasks.filter { !$0.completed }
-                        let done = list.tasks.filter(\.completed)
-                        if open.isEmpty && google.tasksLoaded {
-                            SoftEmpty(title: "All done!", systemImage: "checkmark.seal", message: "Enjoy your free time 🌷")
-                                .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    if !google.lists.isEmpty { listChips.listRowBackground(Color.clear).listRowSeparator(.hidden) }
+                    let lists = shown
+                    let open = lists.flatMap { l in l.tasks.filter { !$0.completed }.map { (l, $0) } }
+                    let done = lists.flatMap { l in l.tasks.filter(\.completed).map { (l, $0) } }
+                    if open.isEmpty && google.tasksLoaded {
+                        SoftEmpty(title: "All done!", systemImage: "checkmark.seal", message: "Enjoy your free time 🌷")
+                            .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    }
+                    ForEach(lists) { l in
+                        let items = l.tasks.filter { !$0.completed }
+                        if lists.count > 1 && !items.isEmpty {
+                            // Group header in the All view.
+                            Text(l.title)
+                                .font(.footnote.weight(.bold))
+                                .foregroundStyle(Palette.lavender)
+                                .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 0, trailing: 16))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
                         }
-                        ForEach(open) { t in row(t, list: list.id) }
-                        if !done.isEmpty {
-                            Button {
-                                withAnimation(.snappy) { showCompleted.toggle() }
-                            } label: {
-                                HStack {
-                                    Text("Completed (\(done.count))").font(.subheadline.weight(.semibold))
-                                    Image(systemName: "chevron.right").font(.caption.bold()).rotationEffect(.degrees(showCompleted ? 90 : 0))
-                                }
-                                .foregroundStyle(.secondary)
+                        ForEach(items) { t in row(t, list: l.id) }
+                    }
+                    if !done.isEmpty {
+                        Button {
+                            withAnimation(.snappy) { showCompleted.toggle() }
+                        } label: {
+                            HStack {
+                                Text("Completed (\(done.count))").font(.subheadline.weight(.semibold))
+                                Image(systemName: "chevron.right").font(.caption.bold()).rotationEffect(.degrees(showCompleted ? 90 : 0))
                             }
-                            .buttonStyle(.plain)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .padding(.top, 8)
-                            if showCompleted { ForEach(done) { t in row(t, list: list.id) } }
+                            .foregroundStyle(.secondary)
                         }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .padding(.top, 8)
+                        if showCompleted { ForEach(done, id: \.1.id) { l, t in row(t, list: l.id) } }
                     }
                 }
                 .listStyle(.plain)
@@ -44,12 +56,12 @@ struct TasksView: View {
                 .refreshable { await google.loadTasks() }
                 .task { if !google.tasksLoaded { await google.loadTasks() } }
             }
-            .navigationTitle(current?.title ?? String(localized: "Tasks"))
+            .navigationTitle("Tasks")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }
                         .accessibilityLabel("New task")
-                        .disabled(current == nil)
+                        .disabled(google.lists.isEmpty)
                 }
             }
             #if DEBUG
@@ -58,37 +70,47 @@ struct TasksView: View {
             }
             #endif
             .sheet(isPresented: $adding) {
-                NewTaskSheet(google: google, listId: current?.id ?? "")
+                // New tasks go to the list in view (the first list in the All view).
+                NewTaskSheet(google: google, listId: selected?.id ?? google.lists.first?.id ?? "")
             }
             .googleErrors(google)
         }
     }
 
-    private var current: TaskList? {
-        google.lists.first { $0.id == listId } ?? google.lists.first
-    }
+    /// The chosen list; nil means All.
+    private var selected: TaskList? { google.lists.first { $0.id == listId } }
+
+    private var shown: [TaskList] { selected.map { [$0] } ?? google.lists }
 
     private var listChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                chip(String(localized: "All"), id: "", count: google.lists.reduce(0) { $0 + $1.tasks.filter { !$0.completed }.count })
                 ForEach(google.lists) { l in
-                    let sel = l.id == current?.id
-                    Button {
-                        withAnimation(.snappy) { listId = l.id }
-                    } label: {
-                        Text(l.title)
-                            .font(.subheadline.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .foregroundStyle(sel ? .white : .primary)
-                            .background {
-                                if sel { Capsule().fill(Palette.accent) } else { Capsule().fill(.ultraThinMaterial) }
-                            }
-                    }
-                    .buttonStyle(.plain)
+                    chip(l.title, id: l.id, count: l.tasks.filter { !$0.completed }.count)
                 }
             }
         }
+    }
+
+    private func chip(_ title: String, id: String, count: Int) -> some View {
+        let sel = (selected?.id ?? "") == id
+        return Button {
+            withAnimation(.snappy) { listId = id }
+        } label: {
+            HStack(spacing: 5) {
+                Text(title)
+                if count > 0 { Text("\(count)").font(.caption.weight(.bold)).opacity(0.7) }
+            }
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .foregroundStyle(sel ? .white : .primary)
+            .background {
+                if sel { Capsule().fill(Palette.accent) } else { Capsule().fill(.ultraThinMaterial) }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func row(_ t: TaskItem, list: String) -> some View {
@@ -118,7 +140,7 @@ struct NewTaskSheet: View {
                     TextField("Title", text: $title, axis: .vertical)
                         .font(.title3.weight(.semibold))
                         .focused($focused)
-                    if google.lists.count > 1 {
+                    if !google.lists.isEmpty {
                         Picker("List", selection: $listId) {
                             ForEach(google.lists) { Text($0.title).tag($0.id) }
                         }

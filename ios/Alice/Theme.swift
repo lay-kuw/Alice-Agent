@@ -10,6 +10,17 @@ enum Palette {
     static let lemon = Color(red: 0.98, green: 0.86, blue: 0.48)
 
     static let all = [lavender, pink, mint, peach, sky, lemon]
+    static let sunday = Color(red: 0.93, green: 0.45, blue: 0.50)
+    static let saturday = Color(red: 0.40, green: 0.60, blue: 0.93)
+
+    /// Soft red for Sundays, soft blue for Saturdays, nil for weekdays.
+    static func weekday(_ d: Date) -> Color? {
+        switch Calendar.current.component(.weekday, from: d) {
+        case 1: sunday
+        case 7: saturday
+        default: nil
+        }
+    }
     static let accent = LinearGradient(colors: [lavender, pink], startPoint: .topLeading, endPoint: .bottomTrailing)
 
     /// A stable color for any string (sender, event id).

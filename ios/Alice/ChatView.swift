@@ -118,21 +118,19 @@ struct ChatView: View {
                 }
             }
         } label: {
-            // Just an icon; the gauge shows the reasoning level. Names are in the menu.
-            Image(systemName: Self.effortIcon(effort ?? info?.defaultEffort))
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Palette.accent)
+            ModelBadge(level: Self.effortLevel(effort ?? info?.defaultEffort), seed: base)
         }
         .accessibilityLabel("Model: \(info?.name ?? base)\(effort.map { " · \($0)" } ?? "")")
     }
 
-    private static func effortIcon(_ effort: String?) -> String {
+    /// Reasoning depth as 0–4 dots (0: the model has no levels).
+    private static func effortLevel(_ effort: String?) -> Int {
         switch effort {
-        case "minimal", "low": "gauge.with.dots.needle.33percent"
-        case "medium": "gauge.with.dots.needle.50percent"
-        case "high": "gauge.with.dots.needle.67percent"
-        case .some: "gauge.with.dots.needle.100percent"
-        case nil: "sparkles"
+        case nil: 0
+        case "minimal", "low": 1
+        case "medium": 2
+        case "high": 3
+        default: 4
         }
     }
 
@@ -400,5 +398,31 @@ struct TableBlock: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .gridColumnAlignment(a == .right ? .trailing : a == .center ? .center : .leading)
+    }
+}
+
+/// The model button: a little pastel bubble with a sparkle, and dots below
+/// for how deeply it thinks.
+struct ModelBadge: View {
+    let level: Int
+    let seed: String
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(.white)
+                .frame(width: 24, height: 24)
+                .background(LinearGradient(colors: [Palette.color(for: seed), Palette.pink], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
+                .symbolEffect(.bounce, value: seed)
+            if level > 0 {
+                HStack(spacing: 2) {
+                    ForEach(0..<4, id: \.self) { i in
+                        Circle().fill(i < level ? Palette.pink : Palette.lavender.opacity(0.3)).frame(width: 3.5, height: 3.5)
+                    }
+                }
+            }
+        }
+        .animation(.snappy, value: level)
     }
 }

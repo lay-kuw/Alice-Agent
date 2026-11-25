@@ -11,6 +11,8 @@ struct ThreadsView: View {
     @State private var renaming: ChatThread?
     @State private var newTitle = ""
     @State private var confirmDelete: ChatThread?
+    /// Changed when a chat opens, so a row left swiped open closes again.
+    @State private var listID = UUID()
 
     var body: some View {
         NavigationStack {
@@ -30,6 +32,8 @@ struct ThreadsView: View {
                 }
             }
             .listStyle(.plain)
+            .id(listID)
+            .onChange(of: showChat) { _, open in if open { listID = UUID() } }
             .pastel()
             .overlay {
                 if store.threads.isEmpty {

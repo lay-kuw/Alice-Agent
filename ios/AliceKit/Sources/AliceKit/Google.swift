@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 // MARK: - Models
 
@@ -147,12 +150,19 @@ extension AliceClient {
     }
 
     @discardableResult
-    public func createEvent(summary: String, start: String, end: String, location: String?, notes: String?) async throws -> CalendarEvent {
+    public func createEvent(summary: String, start: String, end: String, location: String?, notes: String?, colorId: String? = nil) async throws -> CalendarEvent {
         struct R: Decodable { let event: CalendarEvent }
         var body: [String: Any] = ["summary": summary, "start": start, "end": end, "time_zone": TimeZone.current.identifier]
+        if let colorId { body["color_id"] = colorId }
         if let location, !location.isEmpty { body["location"] = location }
         if let notes, !notes.isEmpty { body["description"] = notes }
         return try Self.decoder.decode(R.self, from: try await send("POST", "/google/calendar/events", json: body)).event
+    }
+
+    /// nil goes back to the calendar's own color.
+    public func setEventColor(_ id: String, colorId: String?) async throws -> CalendarEvent {
+        struct R: Decodable { let event: CalendarEvent }
+        return try Self.decoder.decode(R.self, from: try await send("PATCH", "/google/calendar/events/\(escape(id))", json: ["color_id": colorId ?? ""])).event
     }
 
     public func deleteEvent(_ id: String) async throws {
@@ -229,17 +239,17 @@ public final class GoogleStore {
     public let client: AliceClient
     public private(set) var status: GoogleStatus?
     /// Every event loaded so far, by id.
-    public private(set) var eventsById: [String: CalendarEvent] = [:] { didSet { reindex() } }
+    public private(set) var eventsById: [String: CalendarEvent] = [:] { didSet { reindex(); snapshotSoon() } }
     /// Events by local start of day (an event spanning days is on each), sorted.
     public private(set) var eventsByDay: [Date: [CalendarEvent]] = [:]
     /// Week starts whose events are loaded.
     public private(set) var loadedWeeks: Set<Date> = []
     private var rangeLoadedAt: Date?
-    public private(set) var inbox: [MailSummary] = []
+    public private(set) var inbox: [MailSummary] = [] { didSet { snapshotSoon() } }
     public private(set) var inboxLoaded = false
     public private(set) var nextPage: String?
     public private(set) var bodies: [String: MailMessage] = [:]
-    public private(set) var lists: [TaskList] = []
+    public private(set) var lists: [TaskList] = [] { didSet { snapshotSoon() } }
     public private(set) var tasksLoaded = false
     public private(set) var loading: Set<String> = []
     /// Failed actions (save, send, delete): shown as an alert.
@@ -247,8 +257,75 @@ public final class GoogleStore {
     /// Failed loads: shown as a small banner; what is on screen stays.
     public var loadError: String?
 
-    public init(client: AliceClient) {
+    /// Write snapshots for the widgets (off in tests and previews).
+    public var feedsWidgets = false
+    private var snapshotTask: Task<Void, Never>?
+    private var lastSnapshot: WidgetSnapshot?
+
+    public init(client: AliceClient, feedsWidgets: Bool = false) {
         self.client = client
+        self.feedsWidgets = feedsWidgets
+    }
+
+    /// Coalesce bursts of changes into one write.
+    private func snapshotSoon() {
+        guard feedsWidgets else { return }
+        snapshotTask?.cancel()
+        snapshotTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.writeSnapshot()
+        }
+    }
+
+    /// The widget data as of now: the next seven days of events, open tasks, unread count.
+    public func snapshot(now: Date = .now) -> WidgetSnapshot {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: now)
+        var seen = Set<String>()
+        var list: [WidgetSnapshot.Event] = []
+        for i in 0..<7 {
+            guard let d = cal.date(byAdding: .day, value: i, to: today) else { continue }
+            for e in events(on: d) where seen.insert(e.id).inserted {
+                guard let s = e.startDate else { continue }
+                var end = e.endDate ?? s
+                if e.allDay, end <= s { end = cal.date(byAdding: .day, value: 1, to: s) ?? s }
+                list.append(.init(id: e.id, title: e.displayTitle, start: s, end: end, allDay: e.allDay, colorId: e.colorId, location: e.location))
+            }
+        }
+        let tasks = lists.flatMap { l in
+            l.tasks.filter { !$0.completed && !$0.id.hasPrefix("new-") }.map { WidgetSnapshot.Task(id: $0.id, title: $0.title, due: $0.dueDate, list: l.title) }
+        }
+        .enumerated()
+        .sorted { a, b in
+            // Soonest due first; undated after, in list order.
+            switch (a.element.due, b.element.due) {
+            case let (x?, y?): return x == y ? a.offset < b.offset : x < y
+            case (.some, nil): return true
+            case (nil, .some): return false
+            default: return a.offset < b.offset
+            }
+        }
+        .map(\.element)
+        return WidgetSnapshot(updated: now, events: list, tasks: Array(tasks.prefix(20)), unread: inboxLoaded ? inbox.filter(\.unread).count : nil)
+    }
+
+    public func writeSnapshot() {
+        var s = snapshot()
+        // Keep what this run has not loaded (e.g. tasks turned off or not fetched yet).
+        if let old = lastSnapshot ?? WidgetSnapshot.load() {
+            if !tasksLoaded { s.tasks = old.tasks }
+            if s.unread == nil { s.unread = old.unread }
+            if eventsById.isEmpty { s.events = old.events.filter { $0.end > .now } }
+        }
+        var cmp = s
+        cmp.updated = lastSnapshot?.updated ?? s.updated
+        guard cmp != lastSnapshot else { return }
+        lastSnapshot = s
+        guard s.save() else { return }
+        #if canImport(WidgetKit)
+        WidgetCenter.shared.reloadAllTimelines()
+        #endif
     }
 
     /// Runs `body`, tracking `key` in `loading`; false when it failed.
@@ -344,20 +421,33 @@ public final class GoogleStore {
         }
     }
 
-    public func addEvent(summary: String, start: Date, end: Date, allDay: Bool, location: String, notes: String) async -> Bool {
+    public func addEvent(summary: String, start: Date, end: Date, allDay: Bool, location: String, notes: String, colorId: String? = nil) async -> Bool {
         var ok = false
         await run("save") {
             let e: CalendarEvent
             if allDay {
                 let next = Calendar.current.date(byAdding: .day, value: 1, to: end) ?? end
-                e = try await client.createEvent(summary: summary, start: GoogleDate.day(start), end: GoogleDate.day(next), location: location, notes: notes)
+                e = try await client.createEvent(summary: summary, start: GoogleDate.day(start), end: GoogleDate.day(next), location: location, notes: notes, colorId: colorId)
             } else {
-                e = try await client.createEvent(summary: summary, start: GoogleDate.rfc3339(start), end: GoogleDate.rfc3339(end), location: location, notes: notes)
+                e = try await client.createEvent(summary: summary, start: GoogleDate.rfc3339(start), end: GoogleDate.rfc3339(end), location: location, notes: notes, colorId: colorId)
             }
             eventsById[e.id] = e
             ok = true
         }
         return ok
+    }
+
+    /// Change an event's color tag at once; undone if the server says no.
+    public func setColor(_ e: CalendarEvent, _ colorId: String?) async {
+        guard var cur = eventsById[e.id] else { return }
+        let before = cur
+        cur.colorId = colorId
+        eventsById[e.id] = cur
+        let ok = await run("save") {
+            let saved = try await client.setEventColor(e.id, colorId: colorId)
+            eventsById[e.id] = saved
+        }
+        if !ok { eventsById[e.id] = before }
     }
 
     public func deleteEvent(_ e: CalendarEvent) async {

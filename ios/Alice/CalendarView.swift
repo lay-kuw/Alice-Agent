@@ -62,7 +62,7 @@ struct CalendarView: View {
                 }
             }
             .sheet(isPresented: $adding) { NewEventSheet(google: google, day: selected) }
-            .sheet(item: $detail) { EventDetailSheet(event: $0) }
+            .sheet(item: $detail) { EventDetailSheet(google: google, event: $0) }
             .confirmationDialog("Delete “\(confirmDelete?.displayTitle ?? "")”?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), titleVisibility: .visible) {
                 Button("Delete", role: .destructive) { if let e = confirmDelete { Task { await google.deleteEvent(e) } } }
             }
@@ -352,8 +352,17 @@ struct EventRow: View {
 }
 
 struct EventDetailSheet: View {
-    let event: CalendarEvent
+    @Bindable var google: GoogleStore
+    /// As opened; the live copy (with a changed color) comes from the store.
+    let opened: CalendarEvent
     @Environment(\.openURL) private var openURL
+
+    init(google: GoogleStore, event: CalendarEvent) {
+        self.google = google
+        opened = event
+    }
+
+    private var event: CalendarEvent { google.eventsById[opened.id] ?? opened }
 
     var body: some View {
         NavigationStack {
@@ -368,6 +377,8 @@ struct EventDetailSheet: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .card()
+                    ColorTagPicker(selection: Binding(get: { event.colorId }, set: { c in Task { await google.setColor(event, c) } }), fallback: Palette.event((event.id, nil)))
+                        .card(padding: 12)
                     if let d = event.description, !d.isEmpty {
                         Text(d).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).card()
                     }
@@ -392,6 +403,7 @@ struct NewEventSheet: View {
     @State private var start: Date
     @State private var end: Date
     @State private var notes = ""
+    @State private var colorId: String?
 
     init(google: GoogleStore, day: Date) {
         self.google = google
@@ -414,6 +426,10 @@ struct NewEventSheet: View {
                     DatePicker("Starts", selection: $start, displayedComponents: allDay ? .date : [.date, .hourAndMinute])
                     DatePicker("Ends", selection: $end, in: start..., displayedComponents: allDay ? .date : [.date, .hourAndMinute])
                 }
+                Section("Color") {
+                    ColorTagPicker(selection: $colorId, fallback: Palette.lavender)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
+                }
                 Section("Notes") {
                     TextField("Notes", text: $notes, axis: .vertical).lineLimit(3...8)
                 }
@@ -434,7 +450,7 @@ struct NewEventSheet: View {
                     } else {
                         Button("Add") {
                             Task {
-                                if await google.addEvent(summary: title, start: start, end: end, allDay: allDay, location: "", notes: notes) { dismiss() }
+                                if await google.addEvent(summary: title, start: start, end: end, allDay: allDay, location: "", notes: notes, colorId: colorId) { dismiss() }
                             }
                         }
                         .bold()
@@ -444,5 +460,47 @@ struct NewEventSheet: View {
             }
             .googleErrors(google)
         }
+    }
+}
+
+/// Google Calendar's color tags as a row of dots; the first dot is "no tag"
+/// (the calendar's own color).
+struct ColorTagPicker: View {
+    @Binding var selection: String?
+    /// Shown for "no tag".
+    let fallback: Color
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                dot(nil, color: fallback, name: "Default")
+                ForEach(EventColor.tags) { t in dot(t.id, color: Palette.tag(t), name: t.name) }
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 2)
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+    }
+
+    private func dot(_ id: String?, color: Color, name: String) -> some View {
+        let on = selection == id
+        return Button { withAnimation(.snappy) { selection = id } } label: {
+            ZStack {
+                Circle().fill(color).frame(width: 28, height: 28)
+                if id == nil {
+                    // "No tag": a soft ring instead of a solid dot.
+                    Circle().fill(.background).frame(width: 14, height: 14)
+                }
+                if on {
+                    Circle().strokeBorder(.white, lineWidth: 2.5).frame(width: 28, height: 28)
+                    Circle().strokeBorder(color, lineWidth: 2).frame(width: 36, height: 36)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .scaleEffect(on ? 1.05 : 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

@@ -1,3 +1,4 @@
+import AliceKit
 import SwiftUI
 
 /// Alice's pastel palette (matches the TUI and Web accents).
@@ -29,20 +30,13 @@ enum Palette {
         return all[Int(h % UInt32(all.count))]
     }
 
-    /// Google Calendar colorId -> a softened tone.
+    /// Google Calendar colorId -> a softened tone; events without one get a stable pastel.
     static func event(_ e: (id: String, colorId: String?)) -> Color {
-        switch e.colorId {
-        case "1", "9": return lavender
-        case "2", "10": return mint
-        case "3": return Color(red: 0.80, green: 0.62, blue: 0.95)
-        case "4", "11": return pink
-        case "5": return lemon
-        case "6": return peach
-        case "7": return sky
-        case "8": return Color(white: 0.75)
-        default: return color(for: e.id)
-        }
+        if let t = EventColor.tag(e.colorId) { return tag(t) }
+        return color(for: e.id)
     }
+
+    static func tag(_ t: EventColor.Tag) -> Color { Color(red: t.rgb.0, green: t.rgb.1, blue: t.rgb.2) }
 }
 
 /// Soft gradient behind every Google screen.

@@ -169,6 +169,15 @@ struct FakeApp {
     modified: Mutex<Vec<(String, Value)>>,
 }
 
+async fn app_event_write(State(st): State<Arc<FakeApp>>, Json(v): Json<Value>) -> Json<Value> {
+    st.modified.lock().unwrap().push(("event".into(), v.clone()));
+    let mut e = v;
+    e["id"] = json!("e9");
+    e["start"] = json!({ "dateTime": "2026-11-26T10:00:00+09:00" });
+    e["end"] = json!({ "dateTime": "2026-11-26T11:00:00+09:00" });
+    Json(e)
+}
+
 async fn app_modify(State(st): State<Arc<FakeApp>>, axum::extract::Path(id): axum::extract::Path<String>, Json(v): Json<Value>) -> Json<Value> {
     st.modified.lock().unwrap().push((id.clone(), v));
     Json(json!({ "id": id }))
@@ -232,7 +241,8 @@ async fn app_api_for_calendar_mail_and_tasks() {
     let fake = Arc::new(FakeApp::default());
     let router = Router::new()
         .route("/oauth/token", post(app_token))
-        .route("/calendar/calendars/primary/events", get(app_events))
+        .route("/calendar/calendars/primary/events", get(app_events).post(app_event_write))
+        .route("/calendar/calendars/primary/events/{id}", axum::routing::patch(app_event_write))
         .route("/gmail/users/me/messages", get(app_mail_list))
         .route("/gmail/users/me/messages/send", post(app_send))
         .route("/gmail/users/me/messages/{id}", get(app_mail_get))
@@ -272,6 +282,19 @@ async fn app_api_for_calendar_mail_and_tasks() {
     assert_eq!(ev[0]["all_day"], false);
     assert_eq!(ev[1]["all_day"], true);
     assert_eq!(ev[1]["start"], "2026-11-28");
+    // Color tags: on create and changed later; out of range is refused.
+    let v = h.post("/google/calendar/events", json!({ "summary": "Yoga", "start": "2026-11-26T10:00:00+09:00", "end": "2026-11-26T11:00:00+09:00", "color_id": "2" })).await;
+    assert_eq!(v["event"]["color_id"], "2");
+    let (code, v) = h.req(reqwest::Method::PATCH, "/google/calendar/events/e9", Some(json!({ "color_id": "11" }))).await;
+    assert_eq!((code, v["event"]["color_id"].clone()), (200, json!("11")));
+    h.req(reqwest::Method::PATCH, "/google/calendar/events/e9", Some(json!({ "color_id": "" }))).await;
+    let (code, _) = h.req(reqwest::Method::PATCH, "/google/calendar/events/e9", Some(json!({ "color_id": "12" }))).await;
+    assert_ne!(code, 200);
+    let w: Vec<Value> = fake.modified.lock().unwrap().drain(..).map(|(_, v)| v).collect();
+    assert_eq!(w[0]["colorId"], "2");
+    assert_eq!(w[1], json!({ "colorId": "11" }));
+    assert_eq!(w[2], json!({ "colorId": null }));
+    assert_eq!(w.len(), 3);
 
     // Mail: list with unread flags, read, reply in thread.
     let v = h.get("/google/mail").await;

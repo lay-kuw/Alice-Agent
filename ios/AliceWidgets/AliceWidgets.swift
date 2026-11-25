@@ -1,0 +1,357 @@
+import AliceKit
+import SwiftUI
+import WidgetKit
+
+// Widgets read the snapshot the app writes into the App Group; they make no
+// network calls and hold no server token.
+
+@main
+struct AliceWidgets: WidgetBundle {
+    var body: some Widget {
+        TodayWidget()
+        TasksWidget()
+    }
+}
+
+// MARK: - Timeline
+
+struct Entry: TimelineEntry {
+    let date: Date
+    let snapshot: WidgetSnapshot?
+}
+
+struct Provider: TimelineProvider {
+    func placeholder(in context: Context) -> Entry { Entry(date: .now, snapshot: .sample) }
+
+    func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) {
+        completion(Entry(date: .now, snapshot: context.isPreview ? (WidgetSnapshot.load() ?? .sample) : WidgetSnapshot.load()))
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> Void) {
+        let snap = WidgetSnapshot.load()
+        let now = Date.now
+        let cal = Calendar.current
+        let midnight = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: now)) ?? now.addingTimeInterval(86_400)
+        // A new entry whenever an event ends, and at midnight; the app reloads
+        // the timeline whenever its data changes.
+        let times = [now] + (snap?.changes(after: now, until: midnight) ?? []) + [midnight]
+        completion(Timeline(entries: times.map { Entry(date: $0, snapshot: snap) }, policy: .atEnd))
+    }
+}
+
+// MARK: - Look
+
+enum Tone {
+    static let lavender = Color(red: 0.72, green: 0.65, blue: 0.96)
+    static let pink = Color(red: 0.97, green: 0.62, blue: 0.78)
+    static let accent = LinearGradient(colors: [lavender, pink], startPoint: .topLeading, endPoint: .bottomTrailing)
+
+    static func event(_ e: WidgetSnapshot.Event) -> Color {
+        if let t = EventColor.tag(e.colorId) { return Color(red: t.rgb.0, green: t.rgb.1, blue: t.rgb.2) }
+        let all = EventColor.tags
+        let h = e.id.unicodeScalars.reduce(UInt32(5381)) { ($0 &* 33) &+ $1.value }
+        let t = all[Int(h % UInt32(all.count))]
+        return Color(red: t.rgb.0, green: t.rgb.1, blue: t.rgb.2)
+    }
+
+    static func weekday(_ d: Date) -> Color? {
+        switch Calendar.current.component(.weekday, from: d) {
+        case 1: Color(red: 0.93, green: 0.45, blue: 0.50)
+        case 7: Color(red: 0.40, green: 0.60, blue: 0.93)
+        default: nil
+        }
+    }
+}
+
+struct PastelWidgetBackground: View {
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        if scheme == .dark {
+            LinearGradient(colors: [Color(red: 0.13, green: 0.11, blue: 0.19), Color(red: 0.10, green: 0.08, blue: 0.14)], startPoint: .top, endPoint: .bottom)
+        } else {
+            LinearGradient(colors: [Color(red: 0.97, green: 0.95, blue: 1.0), Color(red: 1.0, green: 0.95, blue: 0.98)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+    }
+}
+
+struct SetupHint: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "sparkles").font(.title2).foregroundStyle(Tone.accent)
+            Text("Open Alice to show your day here").font(.caption).multilineTextAlignment(.center).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private func time(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
+
+// MARK: - Today
+
+struct TodayWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "alice.today", provider: Provider()) { entry in
+            TodayView(entry: entry)
+                .containerBackground(for: .widget) { PastelWidgetBackground() }
+                .widgetURL(URL(string: "alice://calendar"))
+        }
+        .configurationDisplayName("Today")
+        .description("Your next events from Google Calendar.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryRectangular, .accessoryInline])
+    }
+}
+
+/// Upcoming events from `now`, with a label on the first event of each later
+/// day. `lines` caps events plus labels, so the list always fits.
+private func upcoming(_ s: WidgetSnapshot, now: Date, lines: Int) -> [(label: String?, event: WidgetSnapshot.Event)] {
+    let cal = Calendar.current
+    var out: [(String?, WidgetSnapshot.Event)] = []
+    var used = 0
+    var seen = Set<String>()
+    for i in 0..<7 {
+        guard let d = cal.date(byAdding: .day, value: i, to: cal.startOfDay(for: now)) else { continue }
+        var first = true
+        for e in s.events(on: d, after: now) where seen.insert(e.id).inserted {
+            let label: String? = first && i > 0 ? (i == 1 ? String(localized: "Tomorrow") : d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())) : nil
+            let cost = label == nil ? 1 : 2
+            if used + cost > lines { return out }
+            out.append((label, e))
+            used += cost
+            first = false
+        }
+    }
+    return out
+}
+
+struct TodayView: View {
+    let entry: Entry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        if let s = entry.snapshot {
+            switch family {
+            case .accessoryInline: inline(s)
+            case .accessoryRectangular: rectangular(s)
+            case .systemSmall: small(s)
+            case .systemLarge: large(s)
+            default: medium(s)
+            }
+        } else if family == .accessoryInline {
+            Text("Alice")
+        } else {
+            SetupHint()
+        }
+    }
+
+    private var dateBadge: some View {
+        VStack(alignment: .leading, spacing: -2) {
+            Text(entry.date.formatted(.dateTime.weekday(.wide)).uppercased())
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Tone.weekday(entry.date) ?? Tone.pink)
+            Text(entry.date.formatted(.dateTime.day()))
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundStyle(Tone.accent)
+        }
+    }
+
+    private func row(_ e: WidgetSnapshot.Event, compact: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Capsule().fill(Tone.event(e)).frame(width: 3.5)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(e.title).font(.system(size: compact ? 12 : 13, weight: .semibold)).lineLimit(1)
+                Text(e.allDay ? String(localized: "All day") : "\(time(e.start)) – \(time(e.end))")
+                    .font(.system(size: compact ? 10 : 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func empty(_ text: LocalizedStringKey = "Nothing planned ☕️") -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary)
+    }
+
+    private func small(_ s: WidgetSnapshot) -> some View {
+        let items = upcoming(s, now: entry.date, lines: 2)
+        return VStack(alignment: .leading, spacing: 5) {
+            dateBadge
+            if items.isEmpty { empty() }
+            ForEach(items, id: \.event.id) { item in
+                // Later days are labeled, so tomorrow never looks like today.
+                if let l = item.label {
+                    Text(l).font(.system(size: 10, weight: .bold)).foregroundStyle(Tone.lavender)
+                }
+                row(item.event, compact: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func medium(_ s: WidgetSnapshot) -> some View {
+        let items = upcoming(s, now: entry.date, lines: 6)
+        return HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading) {
+                dateBadge
+                Spacer(minLength: 0)
+                Text(entry.date.formatted(.dateTime.month(.wide))).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if items.isEmpty { empty() }
+                list(items)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func large(_ s: WidgetSnapshot) -> some View {
+        let items = upcoming(s, now: entry.date, lines: 13)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .lastTextBaseline) {
+                dateBadge
+                Text(entry.date.formatted(.dateTime.month(.wide).year())).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+            }
+            if items.isEmpty { empty() }
+            list(items)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// One line per event: time, then title.
+    @ViewBuilder private func list(_ items: [(label: String?, event: WidgetSnapshot.Event)]) -> some View {
+        ForEach(items, id: \.event.id) { item in
+            if let l = item.label {
+                Text(l).font(.system(size: 10, weight: .bold)).foregroundStyle(Tone.lavender).frame(height: 15, alignment: .bottom)
+            }
+            HStack(spacing: 6) {
+                Capsule().fill(Tone.event(item.event)).frame(width: 3.5, height: 14)
+                Text(item.event.allDay ? String(localized: "All day") : time(item.event.start))
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .leading)
+                Text(item.event.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 17)
+        }
+    }
+
+    private func rectangular(_ s: WidgetSnapshot) -> some View {
+        let items = upcoming(s, now: entry.date, lines: 2)
+        return VStack(alignment: .leading, spacing: 1) {
+            if let first = items.first?.event {
+                Text(first.allDay ? String(localized: "All day") : time(first.start)).font(.caption2.weight(.bold))
+                Text(first.title).font(.headline).lineLimit(1)
+                if let next = items.dropFirst().first?.event {
+                    Text("\(next.allDay ? "" : time(next.start) + " ")\(next.title)").font(.caption2).lineLimit(1).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Nothing planned").font(.headline)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .widgetAccentable()
+    }
+
+    private func inline(_ s: WidgetSnapshot) -> some View {
+        if let e = upcoming(s, now: entry.date, lines: 1).first?.event {
+            return Text("\(e.allDay ? "" : time(e.start) + " ")\(e.title)")
+        }
+        return Text("Nothing planned")
+    }
+}
+
+// MARK: - Tasks
+
+struct TasksWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "alice.tasks", provider: Provider()) { entry in
+            TasksWidgetView(entry: entry)
+                .containerBackground(for: .widget) { PastelWidgetBackground() }
+                .widgetURL(URL(string: "alice://tasks"))
+        }
+        .configurationDisplayName("Tasks")
+        .description("Your open Google Tasks, soonest first.")
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
+    }
+}
+
+struct TasksWidgetView: View {
+    let entry: Entry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        if let s = entry.snapshot {
+            switch family {
+            case .accessoryRectangular:
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(s.tasks.count) tasks").font(.caption2.weight(.bold))
+                    ForEach(s.tasks.prefix(2)) { Text($0.title).font(.caption).lineLimit(1) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .widgetAccentable()
+            default:
+                let n = family == .systemSmall ? 4 : 5
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Image(systemName: "checklist").foregroundStyle(Tone.accent)
+                        Text("Tasks").font(.system(.subheadline, design: .rounded).weight(.bold))
+                        Spacer()
+                        Text("\(s.tasks.count)").font(.system(.title3, design: .rounded).weight(.bold)).foregroundStyle(Tone.accent)
+                    }
+                    if s.tasks.isEmpty {
+                        Text("All done! 🌷").font(.caption).foregroundStyle(.secondary)
+                    }
+                    ForEach(s.tasks.prefix(n)) { t in
+                        HStack(spacing: 6) {
+                            Circle().strokeBorder(Tone.lavender, lineWidth: 1.5).frame(width: 11, height: 11)
+                            Text(t.title).font(.system(size: 12.5)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            if family != .systemSmall, let d = t.due { due(d) }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        } else if family == .accessoryRectangular {
+            Text("Alice")
+        } else {
+            SetupHint()
+        }
+    }
+
+    private func due(_ d: Date) -> some View {
+        let cal = Calendar.current
+        let late = d < cal.startOfDay(for: entry.date)
+        let label = cal.isDateInToday(d) ? String(localized: "Today") : cal.isDateInTomorrow(d) ? String(localized: "Tomorrow") : d.formatted(.dateTime.month(.abbreviated).day())
+        return Text(label)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(late ? .red : Tone.lavender)
+    }
+}
+
+// MARK: - Sample (widget gallery)
+
+extension WidgetSnapshot {
+    static var sample: WidgetSnapshot {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        func at(_ h: Double) -> Date { today.addingTimeInterval(h * 3600) }
+        return WidgetSnapshot(
+            events: [
+                .init(id: "s1", title: "Lunch with Yuki", start: at(12.5), end: at(13.5), allDay: false, colorId: "6", location: nil),
+                .init(id: "s2", title: "Yoga", start: at(19), end: at(20), allDay: false, colorId: "2", location: nil),
+                .init(id: "s3", title: "Design review", start: at(39), end: at(40), allDay: false, colorId: "7", location: nil),
+            ],
+            tasks: [
+                .init(id: "t1", title: "Pack for Kyoto", due: today, list: "Tasks"),
+                .init(id: "t2", title: "Birthday present", due: at(48), list: "Tasks"),
+                .init(id: "t3", title: "Milk, eggs, strawberries", due: nil, list: "Tasks"),
+            ],
+            unread: 2)
+    }
+}

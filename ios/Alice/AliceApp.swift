@@ -1,5 +1,7 @@
 import AliceKit
+import BackgroundTasks
 import SwiftUI
+import WidgetKit
 
 @main
 struct AliceApp: App {
@@ -7,6 +9,40 @@ struct AliceApp: App {
         WindowGroup {
             RootView()
         }
+        .backgroundTask(.appRefresh(WidgetRefresh.id)) { await WidgetRefresh.run() }
+    }
+}
+
+/// Keeps the widgets' snapshot fresh while the app is closed. iOS decides when
+/// this runs (roughly every half hour to few hours, depending on use).
+enum WidgetRefresh {
+    static let id = "local.alice.refresh"
+    private static let lastKey = "alice.lastConnection"
+
+    static func schedule() {
+        let r = BGAppRefreshTaskRequest(identifier: id)
+        r.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
+        try? BGTaskScheduler.shared.submit(r)
+    }
+
+    static func remember(_ c: Connection?) {
+        UserDefaults.standard.set(c?.url, forKey: lastKey)
+    }
+
+    @MainActor
+    static func run() async {
+        schedule()
+        let url = UserDefaults.standard.string(forKey: lastKey)
+        guard let c = ConnectionStore.load().first(where: { $0.url == url }), let base = URL(string: c.url) else { return }
+        let g = GoogleStore(client: AliceClient(baseURL: base, token: c.token), feedsWidgets: true)
+        await g.prefetch()
+        g.writeSnapshot()
+    }
+
+    /// Widgets show nothing once the app is disconnected.
+    static func clear() {
+        WidgetSnapshot.clear()
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
@@ -39,7 +75,11 @@ struct RootView: View {
         }
         .onChange(of: phase) { _, p in
             // Keep no stream open in the background; resync on return.
-            if p == .background { store?.stopEvents() }
+            if p == .background {
+                store?.stopEvents()
+                google?.writeSnapshot()
+                WidgetRefresh.schedule()
+            }
             if p == .active {
                 store?.start()
                 if let google { Task { await google.prefetch() } }
@@ -52,7 +92,8 @@ struct RootView: View {
         let s = ChatStore(client: AliceClient(baseURL: url, token: c.token))
         s.start()
         store = s
-        google = GoogleStore(client: s.client)
+        google = GoogleStore(client: s.client, feedsWidgets: true)
+        if c.name != "Dev" { WidgetRefresh.remember(c) }
         active = c
     }
 
@@ -61,6 +102,8 @@ struct RootView: View {
         store = nil
         google = nil
         active = nil
+        WidgetRefresh.remember(nil)
+        WidgetRefresh.clear()
     }
 }
 
@@ -93,5 +136,9 @@ struct MainTabs: View {
         #endif
         // Load every tab in the background so switching is instant.
         .task { await google.prefetch() }
+        // Widget taps open their tab (alice://calendar, alice://tasks).
+        .onOpenURL { url in
+            if let t = url.host(), ["chat", "calendar", "mail", "tasks"].contains(t) { tab = t }
+        }
     }
 }

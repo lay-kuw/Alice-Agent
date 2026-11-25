@@ -33,7 +33,7 @@ pub fn routes() -> Router<AppRef> {
     Router::new()
         .route("/google", get(status))
         .route("/google/calendar/events", get(events).post(create_event))
-        .route("/google/calendar/events/{id}", axum::routing::delete(delete_event))
+        .route("/google/calendar/events/{id}", axum::routing::delete(delete_event).patch(update_event))
         .route("/google/mail", get(mail))
         .route("/google/mail/send", post(send_mail))
         .route("/google/mail/{id}", get(mail_one))
@@ -181,6 +181,19 @@ async fn create_event(State(app): State<AppRef>, Json(b): Json<Value>) -> ApiRes
     let e = g::calendar_create(&G::new(&app, &s), &b).await.map_err(upstream("calendar create"))?;
     invalidate("cal:");
     log("calendar event created");
+    Ok(Json(json!({ "event": e })))
+}
+
+#[derive(Deserialize)]
+struct EventPatch {
+    color_id: Option<String>,
+}
+
+async fn update_event(State(app): State<AppRef>, Path(id): Path<String>, Json(b): Json<EventPatch>) -> ApiResult<Json<Value>> {
+    let s = ready(&app, "calendar")?;
+    let e = g::calendar_set_color(&G::new(&app, &s), &id, b.color_id.as_deref().unwrap_or("")).await.map_err(upstream("calendar update"))?;
+    invalidate("cal:");
+    log("calendar event updated");
     Ok(Json(json!({ "event": e })))
 }
 

@@ -107,3 +107,21 @@ func liveServer() async throws {
     // A header without its separator yet (still streaming) stays text.
     #expect(MarkdownBlock.parse("| a | b |") == [.paragraph("| a | b |")])
 }
+
+@Test func widgetSnapshotLists() throws {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+    let day = cal.date(from: DateComponents(year: 2026, month: 11, day: 25))!
+    func at(_ h: Int) -> Date { cal.date(byAdding: .hour, value: h, to: day)! }
+    let s = WidgetSnapshot(events: [
+        .init(id: "trip", title: "Trip", start: cal.date(byAdding: .day, value: -1, to: day)!, end: cal.date(byAdding: .day, value: 2, to: day)!, allDay: true, colorId: "3", location: nil),
+        .init(id: "a", title: "Dentist", start: at(10), end: at(11), allDay: false, colorId: nil, location: nil),
+        .init(id: "b", title: "Yoga", start: at(19), end: at(20), allDay: false, colorId: "2", location: nil),
+        .init(id: "c", title: "Tomorrow", start: at(34), end: at(35), allDay: false, colorId: nil, location: nil),
+    ])
+    // At noon the dentist is over; the trip (all day) and yoga remain.
+    #expect(s.events(on: day, after: at(12), calendar: cal).map(\.id) == ["trip", "b"])
+    #expect(s.events(on: day, after: at(9), calendar: cal).map(\.id) == ["trip", "a", "b"])
+    #expect(s.changes(after: at(9), until: at(24)) == [at(11), at(20)])
+    #expect(EventColor.tag("11")?.name == "Tomato" && EventColor.tag("12") == nil && EventColor.tags.count == 11)
+}

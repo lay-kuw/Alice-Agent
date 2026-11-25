@@ -191,7 +191,25 @@ pub async fn calendar_create(g: &G<'_>, args: &Value) -> Result<Value, String> {
             ev[f] = json!(v);
         }
     }
+    if let Some(c) = s("color_id") {
+        ev["colorId"] = json!(color_id(c)?);
+    }
     Ok(event_json(&call(g, M::POST, url(g, "calendar", "/calendars/primary/events"), Some(&ev)).await?))
+}
+
+/// Google Calendar event colors are "1".."11".
+fn color_id(c: &str) -> Result<&str, String> {
+    match c.parse::<u8>() {
+        Ok(1..=11) => Ok(c),
+        _ => Err(format!("color_id must be 1-11, got {c:?}")),
+    }
+}
+
+/// Change an event's color tag; an empty `color` goes back to the calendar's color.
+pub async fn calendar_set_color(g: &G<'_>, id: &str, color: &str) -> Result<Value, String> {
+    let c = if color.is_empty() { Value::Null } else { json!(color_id(color)?) };
+    let u = url(g, "calendar", &format!("/calendars/primary/events/{}", urlencode(id)));
+    Ok(event_json(&call(g, M::PATCH, u, Some(&json!({ "colorId": c }))).await?))
 }
 
 pub async fn calendar_delete(g: &G<'_>, id: &str) -> Result<(), String> {

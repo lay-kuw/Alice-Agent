@@ -1,64 +1,98 @@
-//! Scheduled agents: due instructions are posted into their thread and answered.
+//! Scheduled agents: due instructions are answered in their thread, the
+//! instruction itself stays hidden, and "nothing to report" leaves no trace.
 
 mod common;
 
 use common::Harness;
-use serde_json::json;
+use serde_json::{Value, json};
+
+async fn idle(h: &Harness, t: &str) {
+    for _ in 0..200 {
+        if h.get(&format!("/threads/{t}")).await["generating"] == false {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("still generating");
+}
+
+async fn agent(h: &Harness, id: &str) -> Value {
+    h.get("/agents").await["agents"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone()
+}
+
+async fn settle(h: &Harness, id: &str) -> Value {
+    for _ in 0..200 {
+        let a = agent(h, id).await;
+        if a["last_status"] != "running" {
+            return a;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("agent still running");
+}
 
 #[tokio::test]
 async fn due_agents_post_into_their_thread() {
     let h = Harness::new().await;
     let now = alice::util::now_ms();
 
-    // Bad input is refused.
     let (code, _) = h.req(reqwest::Method::POST, "/agents", Some(json!({ "name": "x", "prompt": "hi", "every_min": 1 }))).await;
     assert_eq!(code, 400);
 
-    // A repeating agent without a thread, due a minute ago.
-    let a = h.post("/agents", json!({ "name": "Morning news", "prompt": "summarize the news", "start_at": now - 60_000, "every_min": 60 })).await["agent"].clone();
-    let id = a["id"].as_str().unwrap().to_string();
-    // Created in the past: the first run is the next slot on its grid.
-    assert_eq!(a["next_run"], now - 60_000 + 3_600_000);
-
-    // A one-off into an existing thread, due now.
+    // Interval mode runs as soon as possible.
     let t = h.new_thread().await;
-    let once = h.post("/agents", json!({ "name": "Remind", "prompt": "remind me to stretch", "thread_id": t, "start_at": now - 1000 })).await["agent"].clone();
-    assert_eq!(once["next_run"], now - 1000);
+    let a = h.post("/agents", json!({ "name": "Stretch", "prompt": "remind me to stretch", "thread_id": t, "every_min": 60 })).await["agent"].clone();
+    let id = a["id"].as_str().unwrap().to_string();
+    assert!(a["next_run"].as_i64().unwrap() <= alice::util::now_ms());
 
-    let mut ev = h.events(Some(&t)).await;
+    let now = alice::util::now_ms().max(now);
     assert_eq!(alice::schedule::tick(&h.app, now), 1);
-    let reply = ev.until_turn_done().await;
-    assert!(reply["content"].as_str().unwrap().contains("remind me to stretch"), "{reply}");
-    let msgs = h.get(&format!("/threads/{t}/messages")).await;
-    let user = msgs["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap().clone();
-    assert_eq!((user["content"].as_str(), user["client"].as_str()), (Some("remind me to stretch"), Some("agent")));
+    idle(&h, &t).await;
+    let a = settle(&h, &id).await;
+    assert_eq!(a["last_status"], "ok");
+    assert_eq!(a["next_run"].as_i64().unwrap(), a["start_at"].as_i64().unwrap() + 3_600_000);
 
-    // The one-off is done; nothing is due any more.
-    let list = h.get("/agents").await;
-    let o = list["agents"].as_array().unwrap().iter().find(|x| x["name"] == "Remind").unwrap().clone();
-    assert!(o["next_run"].is_null() && o["last_status"] == "ok", "{o}");
-    assert_eq!(alice::schedule::tick(&h.app, now + 1000), 0);
+    // The reply is there; the instruction is a user message from "agent" (clients hide it).
+    let msgs = h.get(&format!("/threads/{t}/messages")).await["messages"].as_array().unwrap().clone();
+    let user = msgs.iter().find(|m| m["role"] == "user").unwrap();
+    assert_eq!(user["client"], "agent");
+    assert!(user["content"].as_str().unwrap().starts_with("remind me to stretch"));
+    let reply = msgs.iter().find(|m| m["role"] == "assistant").unwrap();
+    assert!(reply["content"].as_str().unwrap().contains("remind me to stretch"));
 
-    // At its slot the repeating agent makes its own thread and keeps it.
-    assert_eq!(alice::schedule::tick(&h.app, now - 60_000 + 3_600_000), 1);
-    let a = h.get("/agents").await["agents"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone();
-    let tid = a["thread_id"].as_str().unwrap().to_string();
-    assert_eq!(a["thread_title"], "Morning news");
-    assert_eq!(a["next_run"], now - 60_000 + 2 * 3_600_000);
+    // Nothing to report in an existing chat: the run is removed, earlier messages stay.
+    let q = h.post("/agents", json!({ "name": "Mail check", "prompt": "quietrun check mail", "thread_id": t, "every_min": 30 })).await["agent"].clone();
+    let qid = q["id"].as_str().unwrap().to_string();
+    assert_eq!(alice::schedule::tick(&h.app, alice::util::now_ms()), 1);
+    idle(&h, &t).await;
+    assert_eq!(settle(&h, &qid).await["last_status"], "quiet");
+    let after = h.get(&format!("/threads/{t}/messages")).await["messages"].as_array().unwrap().clone();
+    assert_eq!(after.len(), msgs.len(), "{after:?}");
 
-    // Run now leaves the schedule alone (wait for the first run to finish first).
-    for _ in 0..100 {
-        if h.get(&format!("/threads/{tid}")).await["generating"] == false {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // Nothing to report in a chat made for the run: the chat goes away too.
+    let n = h.post("/agents", json!({ "name": "Quiet one", "prompt": "quietrun news", "every_min": 30 })).await["agent"].clone();
+    let nid = n["id"].as_str().unwrap().to_string();
+    let threads_before = h.get("/threads").await["threads"].as_array().unwrap().len();
+    alice::schedule::tick(&h.app, alice::util::now_ms());
+    let made = agent(&h, &nid).await["thread_id"].as_str().map(str::to_string);
+    if let Some(m) = made {
+        idle(&h, &m).await;
     }
-    let r = h.post(&format!("/agents/{id}/run"), json!({})).await;
-    assert_eq!(r["thread_id"], tid);
-    let a2 = h.get("/agents").await["agents"].as_array().unwrap().iter().find(|x| x["id"] == id).unwrap().clone();
-    assert_eq!(a2["next_run"], a["next_run"]);
+    assert_eq!(settle(&h, &nid).await["last_status"], "quiet");
+    assert_eq!(h.get("/threads").await["threads"].as_array().unwrap().len(), threads_before);
+    assert!(agent(&h, &nid).await["thread_id"].is_null());
 
-    // Edit and delete.
+    // Daily times mode.
+    let d = h.post("/agents", json!({ "name": "Daily", "prompt": "news", "times": ["17:00", "12:00"] })).await["agent"].clone();
+    assert_eq!(d["times"], json!(["12:00", "17:00"]));
+    assert!(d["next_run"].as_i64().unwrap() > alice::util::now_ms() - 1000);
+
+    // Run now leaves the schedule alone; edit and delete.
+    let before = agent(&h, &id).await["next_run"].clone();
+    let r = h.post(&format!("/agents/{id}/run"), json!({})).await;
+    assert_eq!(r["thread_id"], t);
+    idle(&h, &t).await;
+    assert_eq!(settle(&h, &id).await["next_run"], before);
     let (code, v) = h.req(reqwest::Method::PATCH, &format!("/agents/{id}"), Some(json!({ "enabled": false }))).await;
     assert_eq!((code, v["agent"]["enabled"].as_bool()), (200, Some(false)));
     assert_eq!(h.delete(&format!("/agents/{id}"), None).await, 204);

@@ -501,7 +501,15 @@ function argSummary(a) {
   return Object.entries(a).map(([k, v]) => `${k}=${String(typeof v === 'string' ? v : JSON.stringify(v)).slice(0, 60)}`).join(' ').slice(0, 160);
 }
 
+/// A scheduled agent's "nothing to report" (removed by the server right after).
+const quiet = (m) => m.client === 'agent' && /^\s*NO_UPDATE\W{0,8}$/.test(m.content || '');
+
 function msgEl(m) {
+  // A scheduled agent's instruction is not shown: Alice speaks up on her own.
+  if (m.role === 'user' && m.client === 'agent') return null;
+  // ...nor "nothing to report", even while it is still streaming in.
+  const head = (m.content || '').trim();
+  if (m.role === 'assistant' && m.client === 'agent' && (quiet(m) || (m.status === 'streaming' && head && 'NO_UPDATE'.startsWith(head)))) return null;
   if (m.role === 'user') {
     return el('div', { class: 'msg user', id: 'msg-' + m.id }, el('div', { class: 'bubble' }, m.content, el('div', {}, attachmentsFor(m.id).map(attEl))));
   }
@@ -548,6 +556,7 @@ function rerenderMessage(id) {
       const old = $('msg-' + mid);
       const fresh = m && msgEl(m);
       if (old && fresh) old.replaceWith(fresh);
+      else if (old) old.remove();
       else if (fresh) { box.append(fresh); $('empty').classList.add('hidden'); }
     }
     rafPending = new Set();

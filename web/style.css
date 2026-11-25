@@ -495,3 +495,8 @@ button.small { font-size: 12.5px; padding: 4px 10px; }
   .rail button svg { width: 22px; height: 22px; }
   .ag-intro, .ag-list { padding-left: 12px; padding-right: 12px; }
 }
+
+.times { display: grid; gap: 6px; }
+.time-row { display: flex; gap: 6px; align-items: center; }
+.time-row input { max-width: 180px; }
+.form > .seg { justify-self: start; }

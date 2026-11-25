@@ -12,6 +12,8 @@ public struct AgentJob: Codable, Identifiable, Hashable, Sendable {
     /// Unix ms.
     public var startAt: Int64
     public var everyMin: Int64
+    /// Daily times "HH:MM"; when set, `everyMin` is unused.
+    public var times: [String]?
     public var enabled: Bool
     public var nextRun: Int64?
     public var lastRun: Int64?
@@ -43,22 +45,37 @@ public struct AgentJob: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// What the app sends to create or change an agent.
+/// What the app sends to create or change an agent: a repeat (`everyMin`)
+/// or daily `times`, whichever is set.
 public struct AgentFields: Sendable {
     public var name: String
     public var prompt: String
     public var threadId: String?
-    public var start: Date
     public var everyMin: Int64
+    public var times: [String]
     public var enabled: Bool
 
-    public init(name: String, prompt: String, threadId: String?, start: Date, everyMin: Int64, enabled: Bool) {
-        (self.name, self.prompt, self.threadId, self.start, self.everyMin, self.enabled) = (name, prompt, threadId, start, everyMin, enabled)
+    public init(name: String, prompt: String, threadId: String?, everyMin: Int64, times: [String], enabled: Bool) {
+        (self.name, self.prompt, self.threadId, self.everyMin, self.times, self.enabled) = (name, prompt, threadId, everyMin, times, enabled)
     }
 
     var json: [String: Any] {
-        ["name": name, "prompt": prompt, "thread_id": threadId ?? NSNull(), "start_at": Int64(start.timeIntervalSince1970 * 1000),
-         "every_min": everyMin, "enabled": enabled]
+        var j: [String: Any] = ["name": name, "prompt": prompt, "thread_id": threadId ?? NSNull(), "times": times, "enabled": enabled]
+        if times.isEmpty { j["every_min"] = everyMin }
+        return j
+    }
+}
+
+/// A scheduled agent's "nothing to report" (the server removes it right after).
+public enum AgentReply {
+    public static let silent = "NO_UPDATE"
+
+    public static func isQuiet(_ m: Message) -> Bool {
+        guard m.client == "agent", m.role == "assistant" else { return false }
+        let t = m.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return false }
+        // While streaming, any start of the marker is hidden too.
+        return (t.hasPrefix(silent) && t.count <= silent.count + 8) || (m.isStreaming && silent.hasPrefix(t))
     }
 }
 

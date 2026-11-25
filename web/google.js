@@ -7,11 +7,13 @@
 Object.assign(I18N.ja, {
   'v.agents': 'エージェント', 'ag.intro': '時間と繰り返しを決めて、Alice に自動でお願いできます。結果は指定したチャットに届きます。',
   'ag.new': '新しいエージェント', 'ag.edit': 'エージェントを編集', 'ag.name': '名前', 'ag.prompt': 'お願いすること',
-  'ag.promptHint': '例: 今日の予定と未読メールをまとめて、気をつけることを 3 つ教えて', 'ag.start': '開始日時', 'ag.repeat': '繰り返し',
+  'ag.promptHint': '例: 新しいメールがあれば要約して教えて。なければ何もせず終了して', 'ag.start': '開始日時', 'ag.repeat': '繰り返し',
   'ag.once': '1 回だけ', 'ag.min': '分ごと', 'ag.hour': '時間ごと', 'ag.day': '日ごと', 'ag.week': '週ごと', 'ag.every': '間隔',
   'ag.to': '送り先のチャット', 'ag.newThread': '新しいチャット（最初の実行で作成）', 'ag.newChat': '新しいチャット', 'ag.on': '有効', 'ag.run': '今すぐ実行', 'ag.ran': '実行しました',
   'ag.next': '次回 {t}', 'ag.done': '実行済み', 'ag.off': '停止中', 'ag.last': '前回 {t}', 'ag.none': 'まだエージェントがいません 🌙',
   'ag.everyN': '{n}{u}', 'ag.u.min': '分ごと', 'ag.u.hour': '時間ごと', 'ag.u.day': '日ごと', 'ag.u.week': '週ごと',
+  'ag.mode.every': '繰り返し', 'ag.mode.times': '時刻指定', 'ag.addTime': '＋ 時刻を追加', 'ag.timesEach': '毎日 {t}',
+  'ag.st.running': '実行中…', 'ag.st.quiet': '報告なし', 'ag.st.stopped': '中止', 'ag.st.busy': '待機中', 'ag.st.error': 'エラー',
   'ag.from': '{t} から', 'ag.daily': '毎日 {t}', 'ag.weekly': '毎週 {d} {t}', 'ag.at': '{t} に 1 回', 'ag.minEvery': '繰り返しは {n} 分以上にしてください',
   'nt.on': '通知オン', 'nt.off': '通知オフ', 'nt.denied': 'ブラウザで通知がブロックされています', 'nt.insecure': '通知は HTTPS か localhost で開いたときだけ使えます',
   'v.chat': 'チャット', 'v.calendar': 'カレンダー', 'v.mail': 'メール', 'v.tasks': 'タスク',
@@ -30,11 +32,13 @@ Object.assign(I18N.ja, {
 Object.assign(I18N.en, {
   'v.agents': 'Agents', 'ag.intro': 'Pick a time and how often, and Alice does it on her own. Results arrive in the chat you choose.',
   'ag.new': 'New agent', 'ag.edit': 'Edit agent', 'ag.name': 'Name', 'ag.prompt': 'What to do',
-  'ag.promptHint': "e.g. Summarize today's events and unread mail, and tell me three things to watch out for", 'ag.start': 'Starts', 'ag.repeat': 'Repeat',
+  'ag.promptHint': 'e.g. If there is new mail, summarize it for me. If not, do nothing', 'ag.start': 'Starts', 'ag.repeat': 'Repeat',
   'ag.once': 'Once', 'ag.min': 'Minutes', 'ag.hour': 'Hours', 'ag.day': 'Days', 'ag.week': 'Weeks', 'ag.every': 'Every',
   'ag.to': 'Send to chat', 'ag.newThread': 'New chat (made on the first run)', 'ag.newChat': 'New chat', 'ag.on': 'Enabled', 'ag.run': 'Run now', 'ag.ran': 'Started',
   'ag.next': 'Next {t}', 'ag.done': 'Done', 'ag.off': 'Paused', 'ag.last': 'Last {t}', 'ag.none': 'No agents yet 🌙',
   'ag.everyN': 'Every {n} {u}', 'ag.u.min': 'min', 'ag.u.hour': 'h', 'ag.u.day': 'days', 'ag.u.week': 'weeks',
+  'ag.mode.every': 'Repeat', 'ag.mode.times': 'Set times', 'ag.addTime': '＋ Add a time', 'ag.timesEach': 'Every day at {t}',
+  'ag.st.running': 'Running…', 'ag.st.quiet': 'Nothing to report', 'ag.st.stopped': 'Stopped', 'ag.st.busy': 'Waiting', 'ag.st.error': 'Error',
   'ag.from': 'from {t}', 'ag.daily': 'Every day at {t}', 'ag.weekly': 'Every {d} at {t}', 'ag.at': 'Once at {t}', 'ag.minEvery': 'Repeat at least every {n} minutes',
   'nt.on': 'Notifications on', 'nt.off': 'Notifications off', 'nt.denied': 'Notifications are blocked in this browser', 'nt.insecure': 'Notifications need HTTPS or localhost',
   'v.chat': 'Chat', 'v.calendar': 'Calendar', 'v.mail': 'Mail', 'v.tasks': 'Tasks',
@@ -690,12 +694,13 @@ const UNITS = [['week', 10080], ['day', 1440], ['hour', 60], ['min', 1]];
 const splitEvery = (m) => { for (const [u, n] of UNITS) if (m % n === 0) return [u, m / n]; return ['min', m]; };
 
 function scheduleText(a) {
+  if (a.times && a.times.length) return t('ag.timesEach', { t: a.times.join('・') });
   if (!a.every_min) return t('ag.at', { t: fmtWhen(a.start_at) });
   const [u, n] = splitEvery(a.every_min);
   const s = new Date(a.start_at);
   if (u === 'day' && n === 1) return t('ag.daily', { t: hm(s) });
   if (u === 'week' && n === 1) return t('ag.weekly', { d: s.toLocaleDateString(locale(), { weekday: 'long' }), t: hm(s) });
-  return t('ag.everyN', { n, u: t('ag.u.' + u) }) + ' · ' + t('ag.from', { t: fmtWhen(a.start_at) });
+  return t('ag.everyN', { n, u: t('ag.u.' + u) });
 }
 
 function renderAgents(box) {
@@ -721,11 +726,17 @@ function agentCard(a) {
       el('span', { class: 'chipbtn ag-state' }, state),
       a.thread_id ? el('button', { class: 'ghost small', onclick: () => { setView('chat'); openThread(a.thread_id); } }, '→ ', to) : el('span', { class: 'muted small' }, '→ ', to),
       el('span', { class: 'grow' }),
-      a.last_run ? el('small', { class: 'muted', title: a.last_status || '' }, t('ag.last', { t: fmtWhen(a.last_run) }), a.last_status && a.last_status !== 'ok' ? ' ⚠︎' : '') : null,
+      a.last_run ? el('small', { class: 'muted', title: a.last_status || '' }, t('ag.last', { t: fmtWhen(a.last_run) }), statusText(a.last_status)) : null,
       el('button', { class: 'ghost small', onclick: () => runAgent(a) }, '▶ ', t('ag.run')),
       el('button', { class: 'ghost icon more-btn on', title: t('more'), onclick: (ev) => { ev.stopPropagation(); popMenu(ev.clientX, ev.clientY, [[t('edit'), () => agentSheet(a)], [t('delete'), () => deleteAgent(a), true]]); } }, icon('more'))));
   card.addEventListener('dblclick', () => agentSheet(a));
   return card;
+}
+
+function statusText(s) {
+  if (!s || s === 'ok') return '';
+  const k = s.startsWith('error') ? 'error' : s;
+  return ' · ' + (I18N[LANG]['ag.st.' + k] || I18N.en['ag.st.' + k] ? t('ag.st.' + k) : s) + (k === 'error' ? ' ⚠︎' : '');
 }
 
 async function saveAgent(id, fields) {
@@ -752,32 +763,51 @@ function agentSheet(a) {
   const name = el('input', { type: 'text', value: a ? a.name : '' });
   const prompt = el('textarea', { rows: 5, placeholder: t('ag.promptHint') });
   prompt.value = a ? a.prompt : '';
-  const next = new Date(); next.setMinutes(0, 0, 0); next.setHours(next.getHours() + 1);
-  const start = el('input', { type: 'datetime-local', value: localInput(a ? a.start_at : next.getTime()) });
-  const [u0, n0] = a && a.every_min ? splitEvery(a.every_min) : ['once', 1];
-  const unit = el('select', {}, ...[['once', t('ag.once')], ['min', t('ag.min')], ['hour', t('ag.hour')], ['day', t('ag.day')], ['week', t('ag.week')]].map(([v, l]) => el('option', { value: v }, l)));
+  // Repeat every N units, or every day at set times.
+  let mode = a && a.times && a.times.length ? 'times' : 'every';
+  const [u0, n0] = a && a.every_min ? splitEvery(a.every_min) : ['hour', 1];
+  const unit = el('select', {}, ...[['min', t('ag.min')], ['hour', t('ag.hour')], ['day', t('ag.day')], ['week', t('ag.week')]].map(([v, l]) => el('option', { value: v }, l)));
   unit.value = u0;
   const n = el('input', { type: 'number', min: 1, value: n0 });
-  const every = field(t('ag.every'), n);
-  const sync = () => every.classList.toggle('hidden', unit.value === 'once');
-  unit.addEventListener('change', sync); sync();
+  const everyBox = el('div', { class: 'row' }, field(t('ag.every'), n), field(' ', unit));
+  const times = el('div', { class: 'times' });
+  const addTime = (v) => {
+    const inp = el('input', { type: 'time', value: v });
+    const row = el('div', { class: 'time-row' }, inp, el('button', { class: 'ghost icon', type: 'button', title: t('delete'), onclick: () => row.remove() }, '×'));
+    times.append(row);
+  };
+  for (const v of (a && a.times && a.times.length ? a.times : ['17:00'])) addTime(v);
+  const timesBox = el('div', { class: 'form' }, times, el('button', { class: 'chipbtn', type: 'button', onclick: () => addTime('12:00') }, t('ag.addTime')));
+  const seg = el('div', { class: 'seg' });
+  const drawMode = () => {
+    seg.replaceChildren(...['every', 'times'].map((m) => el('button', { type: 'button', class: mode === m ? 'on' : '', onclick: () => { mode = m; drawMode(); } }, t('ag.mode.' + m))));
+    everyBox.classList.toggle('hidden', mode !== 'every');
+    timesBox.classList.toggle('hidden', mode !== 'times');
+  };
+  drawMode();
   const to = el('select', {}, el('option', { value: '' }, t('ag.newThread')), ...S.threads.map((th) => el('option', { value: th.id }, th.title || t('newTitle'))));
   to.value = (a && a.thread_id) || '';
   const on = toggle(a ? a.enabled : true, t('ag.on'));
   const save = el('button', { class: 'primary', onclick: async () => {
     if (!name.value.trim()) return name.focus();
     if (!prompt.value.trim()) return prompt.focus();
-    const mult = { min: 1, hour: 60, day: 1440, week: 10080 }[unit.value] || 0;
-    const every_min = unit.value === 'once' ? 0 : Math.max(1, Math.round(Number(n.value) || 1)) * mult;
-    if (every_min && every_min < G.minEvery) return toast(t('ag.minEvery', { n: G.minEvery }));
-    const at = start.value ? new Date(start.value).getTime() : Date.now();
+    const fields = { name: name.value.trim(), prompt: prompt.value.trim(), thread_id: to.value || null, enabled: on.input.checked };
+    if (mode === 'times') {
+      fields.times = [...times.querySelectorAll('input')].map((i) => i.value).filter(Boolean);
+      if (!fields.times.length) return addTime('17:00');
+    } else {
+      const mult = { min: 1, hour: 60, day: 1440, week: 10080 }[unit.value] || 60;
+      fields.every_min = Math.max(1, Math.round(Number(n.value) || 1)) * mult;
+      fields.times = [];
+      if (fields.every_min < G.minEvery) return toast(t('ag.minEvery', { n: G.minEvery }));
+    }
     save.disabled = true;
-    const ok = await saveAgent(a && a.id, { name: name.value.trim(), prompt: prompt.value.trim(), start_at: at, every_min, thread_id: to.value || null, enabled: on.input.checked });
+    const ok = await saveAgent(a && a.id, fields);
     save.disabled = false;
     if (ok) closeModal();
   } }, a ? t('save') : t('add'));
   modal(a ? t('ag.edit') : t('ag.new'), el('div', { class: 'form' }, field(t('ag.name'), name), field(t('ag.prompt'), prompt),
-    field(t('ag.start'), start), el('div', { class: 'row' }, field(t('ag.repeat'), unit), every), field(t('ag.to'), to), on.node),
+    seg, everyBox, timesBox, field(t('ag.to'), to), on.node),
   [a ? el('button', { class: 'ghost', onclick: () => { closeModal(); runAgent(a); } }, '▶ ', t('ag.run')) : null, el('span', { class: 'grow' }),
     el('button', { class: 'ghost', onclick: closeModal }, t('cancel')), save]);
   name.focus();
@@ -802,7 +832,7 @@ function notifyButton() {
 
 /// A reply finished in a chat you are not looking at (or the tab is hidden).
 function notifyReply(threadId, m) {
-  if (!notifyOK() || !notifyOn() || Notification.permission !== 'granted' || m.role !== 'assistant') return;
+  if (!notifyOK() || !notifyOn() || Notification.permission !== 'granted' || m.role !== 'assistant' || quiet(m)) return;
   if (!document.hidden && G.view === 'chat' && S.current === threadId) return;
   const th = S.threads.find((x) => x.id === threadId);
   const text = (m.content || '').replace(/[#*_`>|-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);

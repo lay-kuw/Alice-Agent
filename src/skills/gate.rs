@@ -100,8 +100,11 @@ pub async fn invoke(app: &AppRef, call: &Call<'_>, cancel: &CancellationToken) -
     let Some(manifest) = skill.tool(call.name).cloned() else {
         return Outcome::Done("error: tool vanished".into(), false);
     };
+    // A bug in a tool must not take the whole turn down (it would stay
+    // "generating" forever): a panic becomes an error result.
+    let run = std::panic::AssertUnwindSafe(handlers::run(app, &skill, &manifest, call.args));
     let result = tokio::select! {
-        r = handlers::run(app, &skill, &manifest, call.args) => r,
+        r = futures_util::FutureExt::catch_unwind(run) => r.unwrap_or_else(|_| Err("internal error in this tool".into())),
         _ = cancel.cancelled() => {
             record(app, call, skill.id(), "cancelled", started, None);
             return Outcome::Cancelled;

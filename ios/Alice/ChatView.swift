@@ -17,7 +17,7 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(store.messages.filter { $0.role != "tool" }) { m in
+                    ForEach(store.messages.filter { $0.role != "tool" && !($0.role == "user" && $0.client == "agent") && !AgentReply.isQuiet($0) }) { m in
                         MessageRow(message: m, store: store).id(m.id)
                     }
                     ForEach(store.currentApprovals) { a in

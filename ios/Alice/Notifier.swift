@@ -121,7 +121,7 @@ enum Notifier {
     /// A reply finished in a chat that is not on screen (scheduled agents, or
     /// a conversation you left).
     static func reply(in thread: ChatThread, _ m: Message) async {
-        guard enabled(.chat) else { return }
+        guard enabled(.chat), !AgentReply.isQuiet(m) else { return }
         let auth = await center.notificationSettings().authorizationStatus
         guard auth == .authorized || auth == .provisional || auth == .ephemeral else { return }
         let text = Self.snippet(m.content)

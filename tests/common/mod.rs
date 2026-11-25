@@ -87,6 +87,10 @@ async fn chat(State(st): State<Arc<FakeLlm>>, Json(req): Json<Value>) -> axum::r
             );
         }
     }
+    // "quietrun" answers like a scheduled agent with nothing to report.
+    if last_user.contains("quietrun") {
+        return sse(text_chunks("NO_UPDATE"), 0);
+    }
     // "calljson {"name": ..., "arguments": {...}}" requests any tool once.
     if let (Some(spec), false) = (last_user.strip_prefix("calljson "), has_tool_result) {
         let v: Value = serde_json::from_str(spec).unwrap();

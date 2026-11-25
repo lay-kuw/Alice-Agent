@@ -95,8 +95,9 @@ struct AgentRow: View {
                 Text(agent.prompt).font(.footnote).lineLimit(2).foregroundStyle(.primary.opacity(0.8))
                 HStack(spacing: 6) {
                     Chip(text: AgentText.state(agent), systemImage: agent.enabled && agent.nextRun != nil ? "clock" : nil, color: agent.enabled ? Palette.lavender : .secondary)
+                        .fixedSize()
                     Text("→ \(agent.threadTitle ?? String(localized: "New chat"))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    if let s = agent.lastStatus, s != "ok" { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange).help(s) }
+                    if let s = agent.lastStatus { AgentText.status(s) }
                 }
             }
             Spacer(minLength: 0)
@@ -111,16 +112,26 @@ enum AgentText {
     static func when(_ d: Date) -> String { d.formatted(.dateTime.month(.defaultDigits).day().weekday(.abbreviated).hour().minute()) }
 
     static func schedule(_ a: AgentJob) -> String {
+        if let t = a.times, !t.isEmpty { return String(localized: "Every day at \(t.joined(separator: " · "))") }
         let (u, n) = AgentJob.split(a.everyMin)
-        let time = a.start.formatted(date: .omitted, time: .shortened)
         switch u {
         case .once: return String(localized: "Once at \(when(a.start))")
-        case .days where n == 1: return String(localized: "Every day at \(time)")
-        case .weeks where n == 1: return String(localized: "Every \(a.start.formatted(.dateTime.weekday(.wide))) at \(time)")
-        case .days: return String(localized: "Every \(n) days at \(time)")
+        case .days where n == 1: return String(localized: "Every day")
+        case .weeks where n == 1: return String(localized: "Every week")
+        case .days: return String(localized: "Every \(n) days")
         case .weeks: return String(localized: "Every \(n) weeks")
         case .hours: return String(localized: "Every \(n) h")
         case .minutes: return String(localized: "Every \(n) min")
+        }
+    }
+
+    /// How the last run went, when worth saying.
+    @ViewBuilder static func status(_ s: String) -> some View {
+        switch s {
+        case "running": Label("Running", systemImage: "ellipsis").font(.caption2).foregroundStyle(Palette.pink)
+        case "quiet": Label("Nothing to report", systemImage: "moon.zzz").font(.caption2).foregroundStyle(.secondary)
+        case "ok", "busy", "stopped": EmptyView()
+        default: Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange).help(s)
         }
     }
 
@@ -131,16 +142,18 @@ enum AgentText {
     }
 }
 
-/// New agent, or edit one.
+/// New agent, or edit one. Runs either every N units (first run as soon as
+/// possible) or every day at set times.
 struct AgentEditor: View {
     @Bindable var store: ChatStore
     let agent: AgentJob?
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var prompt = ""
-    @State private var start = Self.nextHour()
-    @State private var unit: AgentJob.Unit = .once
+    @State private var useTimes = false
+    @State private var unit: AgentJob.Unit = .hours
     @State private var count: Int64 = 1
+    @State private var times: [Date] = [AgentEditor.time("17:00")]
     @State private var threadId: String = ""
     @State private var enabled = true
     @State private var saving = false
@@ -150,23 +163,41 @@ struct AgentEditor: View {
             Form {
                 Section {
                     TextField("Name", text: $name).font(.title3.weight(.semibold))
-                    TextField("What to do (e.g. summarize today's events and unread mail)", text: $prompt, axis: .vertical)
+                    TextField("What to do (e.g. if there is new mail, summarize it; if not, do nothing)", text: $prompt, axis: .vertical)
                         .lineLimit(3...10)
                 }
                 Section {
-                    DatePicker("Starts", selection: $start).tint(Palette.pink)
-                    Picker("Repeat", selection: $unit) {
-                        Text("Once").tag(AgentJob.Unit.once)
-                        Text("Minutes").tag(AgentJob.Unit.minutes)
-                        Text("Hours").tag(AgentJob.Unit.hours)
-                        Text("Days").tag(AgentJob.Unit.days)
-                        Text("Weeks").tag(AgentJob.Unit.weeks)
+                    Picker("When", selection: $useTimes.animation()) {
+                        Text("Repeat").tag(false)
+                        Text("Set times").tag(true)
                     }
-                    if unit != .once {
+                    .pickerStyle(.segmented)
+                    if useTimes {
+                        ForEach(times.indices, id: \.self) { i in
+                            HStack {
+                                DatePicker("Every day at", selection: $times[i], displayedComponents: .hourAndMinute).tint(Palette.pink)
+                                if times.count > 1 {
+                                    Button { withAnimation { _ = times.remove(at: i) } } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }
+                                        .buttonStyle(.borderless)
+                                }
+                            }
+                        }
+                        Button { withAnimation { times.append(Self.time("12:00")) } } label: { Label("Add a time", systemImage: "plus.circle") }
+                            .disabled(times.count >= 24)
+                    } else {
+                        Picker("Unit", selection: $unit) {
+                            Text("Minutes").tag(AgentJob.Unit.minutes)
+                            Text("Hours").tag(AgentJob.Unit.hours)
+                            Text("Days").tag(AgentJob.Unit.days)
+                            Text("Weeks").tag(AgentJob.Unit.weeks)
+                        }
                         Stepper(value: $count, in: 1...(unit == .minutes ? 1440 : 365)) {
                             Text("Every \(count) \(unitName)")
                         }
+                        if tooOften { Text("Repeat at least every \(store.minEveryMin) minutes").font(.caption).foregroundStyle(.red) }
                     }
+                } footer: {
+                    Text(useTimes ? "Runs every day at these times." : "Runs as soon as you save, then repeats.")
                 }
                 Section {
                     Picker("Send to", selection: $threadId) {
@@ -192,7 +223,7 @@ struct AgentEditor: View {
                     if saving { ProgressView() } else {
                         Button(agent == nil ? "Add" : "Save") { save() }
                             .bold()
-                            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || tooOften)
+                            .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!useTimes && tooOften))
                     }
                 }
             }
@@ -200,8 +231,12 @@ struct AgentEditor: View {
                 guard let a = agent else { return }
                 name = a.name
                 prompt = a.prompt
-                start = a.start
-                (unit, count) = AgentJob.split(a.everyMin)
+                if let t = a.times, !t.isEmpty {
+                    useTimes = true
+                    times = t.map(Self.time)
+                } else if a.everyMin > 0 {
+                    (unit, count) = AgentJob.split(a.everyMin)
+                }
                 threadId = a.threadId ?? ""
                 enabled = a.enabled
             }
@@ -209,8 +244,8 @@ struct AgentEditor: View {
         .presentationDetents([.large])
     }
 
-    private var everyMin: Int64 { unit == .once ? 0 : unit.minutes * count }
-    private var tooOften: Bool { everyMin != 0 && everyMin < store.minEveryMin }
+    private var everyMin: Int64 { unit.minutes * count }
+    private var tooOften: Bool { everyMin < store.minEveryMin }
 
     private var unitName: String {
         switch unit {
@@ -224,17 +259,19 @@ struct AgentEditor: View {
 
     private func save() {
         saving = true
+        let cal = Calendar.current
+        let hhmm = times.map { d in String(format: "%02d:%02d", cal.component(.hour, from: d), cal.component(.minute, from: d)) }
         let f = AgentFields(name: name.trimmingCharacters(in: .whitespaces), prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
-                            threadId: threadId.isEmpty ? nil : threadId, start: start, everyMin: everyMin, enabled: enabled)
+                            threadId: threadId.isEmpty ? nil : threadId, everyMin: everyMin, times: useTimes ? hhmm : [], enabled: enabled)
         Task {
             if await store.saveAgent(id: agent?.id, f) { dismiss() }
             saving = false
         }
     }
 
-    private static func nextHour() -> Date {
-        let cal = Calendar.current
-        let now = Date()
-        return cal.date(byAdding: .hour, value: 1, to: cal.dateInterval(of: .hour, for: now)?.start ?? now) ?? now
+    /// Today at "HH:MM" (only the time is used).
+    static func time(_ s: String) -> Date {
+        let p = s.split(separator: ":").compactMap { Int($0) }
+        return Calendar.current.date(bySettingHour: p.first ?? 0, minute: p.count > 1 ? p[1] : 0, second: 0, of: .now) ?? .now
     }
 }

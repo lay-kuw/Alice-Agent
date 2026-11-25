@@ -161,10 +161,20 @@ pub fn start_turn(app: &AppRef, input: TurnInput) -> Result<TurnStarted, TurnErr
     let app2 = app.clone();
     tokio::spawn(async move {
         let thread_id = user.thread_id.clone();
-        let outcome = run_turn(&app2, &user, assistant, &model, cancel).await;
+        // If the turn panics, close it as failed so the thread is usable (and
+        // stoppable) again instead of "generating" forever.
+        let turn = std::panic::AssertUnwindSafe(run_turn(&app2, &user, assistant, &model, cancel));
+        let outcome = match futures_util::FutureExt::catch_unwind(turn).await {
+            Ok(o) => o,
+            Err(_) => {
+                fail_streaming(&app2, &thread_id, "internal error");
+                Outcome::Failed
+            }
+        };
         app2.active.lock().unwrap_or_else(|e| e.into_inner()).remove(&thread_id);
         app2.drop_approvals(Some(&thread_id));
-        if outcome == Outcome::Completed {
+        // A scheduled agent's instruction is not something the user said.
+        if outcome == Outcome::Completed && user.client != "agent" {
             extract_memories(&app2, &user, &model).await;
         }
     });
@@ -662,6 +672,17 @@ fn finish_cancelled(app: &AppRef, m: &Message, partial: &str) {
     if let Some(msg) = msg {
         app.emit(json!({ "type": "generation.cancelled", "thread_id": m.thread_id, "message_id": m.id }));
         app.emit(json!({ "type": "message.completed", "thread_id": m.thread_id, "message": msg }));
+    }
+}
+
+/// Mark every message still streaming in a thread as failed.
+fn fail_streaming(app: &AppRef, thread_id: &str, err: &str) {
+    let open: Vec<Message> = {
+        let c = app.db.lock();
+        storage::list_messages(&c, thread_id).map(|l| l.into_iter().filter(|m| m.status == "streaming").collect()).unwrap_or_default()
+    };
+    for m in open {
+        fail(app, &m, &m.content, err);
     }
 }
 

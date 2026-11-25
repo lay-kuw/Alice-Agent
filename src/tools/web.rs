@@ -187,7 +187,8 @@ fn decode_entities(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let end = rest[..rest.len().min(12)].find(';');
+        // Look a few bytes ahead for the `;`, never cutting a character in half.
+        let end = crate::util::truncate(rest, 12).find(';');
         let Some(end) = end else {
             out.push('&');
             rest = &rest[1..];
@@ -309,6 +310,13 @@ pub fn extract(html: &str) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn entities_next_to_multibyte_text() {
+        // A bare `&` followed by Japanese once cut a character in half and panicked.
+        assert_eq!(super::decode_entities("A&Bグループ &amp; 会社"), "A&Bグループ & 会社");
+        assert_eq!(super::decode_entities("&ぐぐぐぐ"), "&ぐぐぐぐ");
+    }
+
     use super::*;
 
     #[test]

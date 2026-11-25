@@ -10,6 +10,7 @@ pub mod config;
 pub mod mcp;
 pub mod memory;
 pub mod providers;
+pub mod schedule;
 pub mod server;
 pub mod skills;
 pub mod storage;
@@ -84,6 +85,7 @@ fn migrate_google(paths: &Paths, config: &mut Config, secrets: &mut Secrets) -> 
 pub async fn serve(paths: Paths) -> Result<(), String> {
     let app = build_app(paths)?;
     channels::start(&app);
+    schedule::start(&app);
     providers::catalog::load_cached(&app);
     providers::catalog::refresh_if_stale(&app);
     // Start Codex's app-server now so the first reply does not wait for it.

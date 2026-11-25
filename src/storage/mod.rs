@@ -9,7 +9,11 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_init.sql"), include_str!("../../migrations/0002_tool_runs.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/0001_init.sql"),
+    include_str!("../../migrations/0002_tool_runs.sql"),
+    include_str!("../../migrations/0003_agents.sql"),
+];
 
 #[derive(Clone)]
 pub struct Db {

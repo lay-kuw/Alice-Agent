@@ -97,6 +97,9 @@ pub fn router(app: AppRef) -> Router {
         .route("/skills/{id}/login", post(skill_login))
         .route("/skills/{id}/logout", post(skill_logout))
         .route("/tool-runs", get(tool_runs))
+        .route("/agents", get(list_agents).post(create_agent))
+        .route("/agents/{id}", axum::routing::patch(update_agent).delete(delete_agent))
+        .route("/agents/{id}/run", post(run_agent))
         .merge(google::routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         // Bridge routes authenticate with the per-turn token themselves.
@@ -545,6 +548,39 @@ async fn list_messages(State(app): State<AppRef>, Path(id): Path<String>) -> Api
         })?
         .collect::<Result<_, _>>()?;
     Ok(Json(json!({ "thread_id": id, "messages": msgs, "attachments": atts, "generating": app.is_generating(&id) })))
+}
+
+// ---------------------------------------------------------------- scheduled agents
+
+async fn list_agents(State(app): State<AppRef>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({ "agents": crate::schedule::list(&app.db.lock())?, "min_every_min": crate::schedule::MIN_EVERY_MIN })))
+}
+
+async fn create_agent(State(app): State<AppRef>, Json(f): Json<crate::schedule::Fields>) -> ApiResult<(StatusCode, Json<Value>)> {
+    let a = crate::schedule::save(&app.db.lock(), None, f).map_err(bad)?;
+    app.emit(json!({ "type": "agents.updated" }));
+    Ok((StatusCode::CREATED, Json(json!({ "agent": a }))))
+}
+
+async fn update_agent(State(app): State<AppRef>, Path(id): Path<String>, Json(f): Json<crate::schedule::Fields>) -> ApiResult<Json<Value>> {
+    let a = crate::schedule::save(&app.db.lock(), Some(&id), f).map_err(|e| if e == "not found" { not_found() } else { bad(e) })?;
+    app.emit(json!({ "type": "agents.updated" }));
+    Ok(Json(json!({ "agent": a })))
+}
+
+async fn delete_agent(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    if !crate::schedule::delete(&app.db.lock(), &id)? {
+        return Err(not_found());
+    }
+    app.emit(json!({ "type": "agents.updated" }));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Run an agent now, without moving its schedule.
+async fn run_agent(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let a = crate::schedule::get(&app.db.lock(), &id)?.ok_or_else(not_found)?;
+    let thread_id = crate::schedule::run(&app, &a, crate::util::now_ms(), false).map_err(bad)?;
+    Ok(Json(json!({ "thread_id": thread_id })))
 }
 
 #[derive(Deserialize)]

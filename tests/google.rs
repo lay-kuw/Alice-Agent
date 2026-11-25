@@ -314,6 +314,27 @@ async fn app_api_for_calendar_mail_and_tasks() {
     let m2 = h.get("/google/mail/m2").await;
     assert_eq!(m2["message"]["body"], "Lunch at noon?");
     assert_eq!(m2["message"]["html"], "<p>Lunch at <b>noon</b>?</p>");
+
+    // The Web UI's mail frame: the mail's own HTML under a locked-down CSP.
+    let page = |q: &'static str| {
+        let url = h.url(&format!("/google/mail/m2/html{q}"));
+        let req = h.http.get(url).bearer_auth(&h.token);
+        async move { req.send().await.unwrap() }
+    };
+    let r = page("").await;
+    let csp = r.headers()["content-security-policy"].to_str().unwrap().to_string();
+    assert!(csp.contains("sandbox") && csp.contains("img-src data: cid:;"), "{csp}");
+    assert!(!csp.contains("script-src") && csp.starts_with("default-src 'none'"));
+    assert_eq!(r.headers()["x-frame-options"], "SAMEORIGIN");
+    assert!(r.text().await.unwrap().contains("<p>Lunch at <b>noon</b>?</p>"));
+    let r = page("?images=1").await;
+    assert!(r.headers()["content-security-policy"].to_str().unwrap().contains("img-src data: cid: https: http:"));
+    // Plain-text mail is escaped into a <pre>.
+    let r = h.http.get(h.url("/google/mail/m1/html")).bearer_auth(&h.token).send().await.unwrap();
+    assert!(r.text().await.unwrap().contains("<pre class=\"alice-plain\">Lunch at noon?</pre>"));
+    // Everything else keeps the app's own policy.
+    let r = h.http.get(h.url("/google/mail/m1")).bearer_auth(&h.token).send().await.unwrap();
+    assert_eq!(r.headers()["x-frame-options"], "DENY");
     h.post("/google/mail/send", json!({ "to": "bob@example.com", "subject": "Re: Lunch", "body": "Yes!", "reply_to_id": "m1" })).await;
     let sent = fake.sent.lock().unwrap()[0].clone();
     assert_eq!(sent["threadId"], "th1");

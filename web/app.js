@@ -84,6 +84,7 @@ const I18N = {
     'sk.confirm': '「{n}」を有効にしますか？ このスキルは次の権限を宣言しています:', 'sk.cmd': '※ このスキルはフォルダ内のプログラムを実行します',
     'sk.advanced': '詳細設定', 'sk.saveSettings': '設定を保存', 'sk.account': 'アカウント',
     'sys.runs': 'ツール実行ログ', 'run.none': 'まだ実行されていません。',
+    'conn.on': '接続中', 'conn.off': '再接続しています…',
   },
   en: {
     'login.hint': 'Enter the API token shown by `alice token` on the server.', 'login.submit': 'Sign in', 'login.invalid': 'Invalid token',
@@ -154,6 +155,7 @@ const I18N = {
     'sk.confirm': 'Enable “{n}”? It declares these permissions:', 'sk.cmd': 'Note: this skill runs programs from its folder',
     'sk.advanced': 'Advanced', 'sk.saveSettings': 'Save settings', 'sk.account': 'Account',
     'sys.runs': 'Tool runs', 'run.none': 'Nothing has run yet.',
+    'conn.on': 'Connected', 'conn.off': 'Reconnecting…',
   },
 };
 let LANG = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
@@ -347,8 +349,21 @@ function renderThreads() {
   $('threads').replaceChildren(...S.threads.map((th) =>
     el('div', { class: 'thread' + (th.id === S.current ? ' active' : '') },
       el('button', { class: 'open', title: th.title || t('newTitle'), onclick: () => { openThread(th.id); closeSide(); } },
-        th.generating ? el('span', { class: 'dot' }) : null, el('span', { class: 't' }, th.title || t('newTitle'))),
+        threadIcon(th.id), el('span', { class: 't' }, th.title || t('newTitle')), th.generating ? el('span', { class: 'dot' }) : null),
       el('button', { class: 'more', title: t('more'), 'aria-label': t('more'), 'aria-haspopup': 'menu', onclick: (e) => openThreadMenu(e, th.id) }, '⋯'))));
+}
+
+const PASTELS = ['#b8a6f5', '#f79ec7', '#8cdbbf', '#ffc299', '#91ccfa', '#fadb7a'];
+function pastel(key) {
+  let h = 5381;
+  for (const ch of String(key)) h = ((h * 33) + ch.codePointAt(0)) >>> 0;
+  return PASTELS[h % PASTELS.length];
+}
+/// The same little sparkle tile the iPhone app shows per chat.
+function threadIcon(id) {
+  const i = el('span', { class: 'ticon' }, '✦');
+  i.style.setProperty('--c', pastel(id));
+  return i;
 }
 
 let menuThread = null;
@@ -463,7 +478,7 @@ function renameThread(id, title) {
 }
 function deleteThread(id) {
   if (!id) return toast(t('cmd.noThread'));
-  if (confirm(t('confirm.delete'))) guard(() => api('DELETE', '/threads/' + id));
+  guard(() => api('DELETE', '/threads/' + id));
 }
 $('new-chat').addEventListener('click', () => { newChat(); closeSide(); });
 $('toggle-side').addEventListener('click', () => $('app').classList.toggle('side-open'));
@@ -741,13 +756,26 @@ function connectEvents() {
   const es = new EventSource('/api/events');
   S.es = es;
   let dropped = false;
-  es.onerror = () => { dropped = true; };
+  es.onerror = () => { dropped = true; setConn(false); };
+  es.onopen = () => setConn(true);
   es.onmessage = (e) => {
     let v;
     try { v = JSON.parse(e.data); } catch { return; }
+    if (v.type === 'hello') setConn(true);
     if (v.type === 'hello' && dropped) { dropped = false; resync(); return; }
     handleEvent(v);
   };
+}
+
+/// A beating heart while connected, a sleepy cloud while reconnecting.
+function setConn(on) {
+  for (const c of document.querySelectorAll('.conn')) {
+    if (c.classList.contains(on ? 'on' : 'off')) continue;
+    c.classList.remove('on', 'off');
+    c.classList.add(on ? 'on' : 'off');
+    c.title = on ? t('conn.on') : t('conn.off');
+    c.replaceChildren(on ? '♥' : el('span', { class: 'cloud' }, '☁', el('i', {}, 'zZ')));
+  }
 }
 
 async function resync() {

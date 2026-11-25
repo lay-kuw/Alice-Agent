@@ -38,6 +38,7 @@ pub fn routes() -> Router<AppRef> {
         .route("/google/mail/send", post(send_mail))
         .route("/google/mail/{id}", get(mail_one))
         .route("/google/mail/{id}/read", post(mark_read))
+        .route("/google/mail/{id}/html", get(mail_html))
         .route("/google/tasks", get(tasks))
         .route("/google/tasks/{list}", post(create_task))
         .route("/google/tasks/{list}/{id}", patch(update_task).delete(delete_task))
@@ -229,14 +230,63 @@ async fn mail(State(app): State<AppRef>, Query(m): Query<MailQuery>) -> ApiResul
 }
 
 async fn mail_one(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let s = ready(&app, "gmail")?;
+    Ok(Json(message(&app, id).await?))
+}
+
+async fn message(app: &AppRef, id: String) -> ApiResult<Value> {
+    let s = ready(app, "gmail")?;
     // A message's content never changes.
-    let v = cached(&app, &s, format!("msg:{id}"), KEEP, move |app, s| {
+    cached(app, &s, format!("msg:{id}"), KEEP, move |app, s| {
         let id = id.clone();
         async move { Ok(json!({ "message": g::gmail_get(&G::new(&app, &s), &id).await.map_err(upstream("mail read"))? })) }
     })
-    .await?;
-    Ok(Json(v))
+    .await
+}
+
+#[derive(Deserialize)]
+struct HtmlQuery {
+    images: Option<String>,
+}
+
+/// A message as a page for the Web UI's mail frame. Its own CSP replaces the
+/// app's: the mail's inline styles apply, but no script runs, nothing can be
+/// submitted, and nothing is fetched from the web unless `images=1`. The
+/// sandbox keeps it apart from the app (same origin only so the frame's
+/// height can be measured; without scripts it cannot use that).
+async fn mail_html(State(app): State<AppRef>, Path(id): Path<String>, Query(q): Query<HtmlQuery>) -> ApiResult<axum::response::Response> {
+    use axum::http::header::{CONTENT_SECURITY_POLICY, CONTENT_TYPE, HeaderValue};
+    use axum::response::IntoResponse;
+    let v = message(&app, id).await?;
+    let m = &v["message"];
+    let body = match m["html"].as_str().filter(|h| !h.trim().is_empty()) {
+        Some(h) => h.to_string(),
+        None => format!("<pre class=\"alice-plain\">{}</pre>", html_escape(m["body"].as_str().unwrap_or(""))),
+    };
+    let images = q.images.as_deref() == Some("1");
+    // Images that will not load would leave empty boxes; hide them.
+    let hide = if images { "" } else { "img[src^='http' i]{display:none!important}" };
+    let page = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+         <meta name=\"color-scheme\" content=\"light\"><base target=\"_blank\">\
+         <style>html,body{{margin:0;background:#fff;color:#222}}body{{padding:14px;font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans',sans-serif;overflow-wrap:anywhere}}\
+         img{{max-width:100%;height:auto}}.alice-plain{{white-space:pre-wrap;font:inherit;margin:0}}{hide}</style></head><body>{body}</body></html>"
+    );
+    let img = if images { "img-src data: cid: https: http:" } else { "img-src data: cid:" };
+    let csp = format!(
+        "default-src 'none'; {img}; style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; \
+         sandbox allow-popups allow-popups-to-escape-sandbox allow-same-origin"
+    );
+    let mut res = page.into_response();
+    let h = res.headers_mut();
+    h.insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+    h.insert(CONTENT_SECURITY_POLICY, HeaderValue::from_str(&csp).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?);
+    h.insert("x-frame-options", HeaderValue::from_static("SAMEORIGIN"));
+    h.insert("cache-control", HeaderValue::from_static("no-store"));
+    Ok(res)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[derive(Deserialize)]

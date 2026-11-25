@@ -110,6 +110,8 @@ pub fn router(app: AppRef) -> Router {
         .nest("/api", api)
         .route("/", get(web_index))
         .route("/app.js", get(web_js))
+        .route("/google.js", get(web_google_js))
+        .route("/icon.png", get(web_icon))
         .route("/style.css", get(web_css))
         .route("/oauth/callback", get(oauth_callback))
         .route("/oauth/google/callback", get(oauth_callback))
@@ -223,14 +225,17 @@ async fn security_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
     let h = res.headers_mut();
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
-    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    h.insert(
-        "content-security-policy",
-        HeaderValue::from_static(
-            "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
-        ),
-    );
+    // A handler may set a stricter page of its own (the mail frame); keep it.
+    if !h.contains_key("content-security-policy") {
+        h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+        h.insert(
+            "content-security-policy",
+            HeaderValue::from_static(
+                "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            ),
+        );
+    }
     res
 }
 
@@ -279,6 +284,12 @@ async fn web_index() -> Response {
 }
 async fn web_js() -> Response {
     asset("text/javascript; charset=utf-8", include_str!("../../web/app.js"))
+}
+async fn web_google_js() -> Response {
+    asset("text/javascript; charset=utf-8", include_str!("../../web/google.js"))
+}
+async fn web_icon() -> Response {
+    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "max-age=86400")], include_bytes!("../../web/icon.png").as_slice()).into_response()
 }
 async fn web_css() -> Response {
     asset("text/css; charset=utf-8", include_str!("../../web/style.css"))

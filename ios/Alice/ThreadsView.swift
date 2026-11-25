@@ -98,28 +98,35 @@ struct ThreadRow: View {
     }
 }
 
-/// Connection state as a little heart: it breathes while connected and turns
-/// into a sleepy cloud while reconnecting.
+/// Connection state as a little heart that beats while connected and turns
+/// into a sleepy cloud while reconnecting. Only the scale animates, so it never
+/// shifts in the toolbar.
 struct ConnectionBadge: View {
     let connected: Bool
-    @State private var beat = false
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(LinearGradient(colors: connected ? [Palette.pink, Palette.lavender] : [Palette.peach, Palette.lemon], startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 30, height: 30)
-                .shadow(color: (connected ? Palette.pink : Palette.peach).opacity(0.45), radius: beat ? 7 : 3)
-            Image(systemName: connected ? "heart.fill" : "cloud.fill")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .scaleEffect(beat && connected ? 1.12 : 1)
-            if !connected {
-                Text("z").font(.system(size: 9, weight: .heavy, design: .rounded)).foregroundStyle(.white).offset(x: 9, y: -9)
-            }
+        if connected {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(LinearGradient(colors: [Palette.pink, Palette.lavender], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .keyframeAnimator(initialValue: 1.0, repeating: true) { heart, scale in
+                    heart.scaleEffect(scale)
+                } keyframes: { _ in
+                    // Lub-dub, then rest.
+                    CubicKeyframe(1.22, duration: 0.14)
+                    CubicKeyframe(1.0, duration: 0.14)
+                    CubicKeyframe(1.14, duration: 0.12)
+                    CubicKeyframe(1.0, duration: 0.2)
+                    LinearKeyframe(1.0, duration: 0.9)
+                }
+        } else {
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(Palette.peach)
+                .overlay(alignment: .topTrailing) {
+                    Text("z").font(.system(size: 9, weight: .heavy, design: .rounded)).foregroundStyle(Palette.lavender).offset(x: 5, y: -6)
+                }
+                .symbolEffect(.pulse)
         }
-        .animation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true), value: beat)
-        .onAppear { beat = true }
-        .contentTransition(.symbolEffect(.replace))
     }
 }

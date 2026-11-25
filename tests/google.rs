@@ -92,7 +92,7 @@ async fn google_oauth_pkce_and_tools() {
     // Start login; only scopes of enabled services are requested.
     let r = h.post("/skills/google-workspace/login", json!({})).await;
     let auth_url = r["auth_url"].as_str().unwrap().to_string();
-    assert!(auth_url.contains("gmail.readonly") && auth_url.contains("calendar.events"));
+    assert!(auth_url.contains("gmail.readonly") && auth_url.contains("gmail.modify") && auth_url.contains("calendar.events"));
     assert!(!auth_url.contains("drive") && !auth_url.contains("spreadsheets"));
     assert!(auth_url.contains("code_challenge_method=S256"));
     let param = |k: &str| auth_url.split(&format!("{k}=")).nth(1).unwrap().split('&').next().unwrap().to_string();
@@ -166,6 +166,12 @@ async fn google_oauth_pkce_and_tools() {
 struct FakeApp {
     sent: Mutex<Vec<Value>>,
     tasks: Mutex<Vec<Value>>,
+    modified: Mutex<Vec<(String, Value)>>,
+}
+
+async fn app_modify(State(st): State<Arc<FakeApp>>, axum::extract::Path(id): axum::extract::Path<String>, Json(v): Json<Value>) -> Json<Value> {
+    st.modified.lock().unwrap().push((id.clone(), v));
+    Json(json!({ "id": id }))
 }
 
 async fn app_events(h: axum::http::HeaderMap, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
@@ -230,6 +236,7 @@ async fn app_api_for_calendar_mail_and_tasks() {
         .route("/gmail/users/me/messages", get(app_mail_list))
         .route("/gmail/users/me/messages/send", post(app_send))
         .route("/gmail/users/me/messages/{id}", get(app_mail_get))
+        .route("/gmail/users/me/messages/{id}/modify", post(app_modify))
         .route("/gmail/users/me/profile", get(app_profile))
         .route("/tasks/users/@me/lists", get(app_lists))
         .route("/tasks/lists/L1/tasks", get(app_tasks).post(app_task_write))
@@ -278,6 +285,11 @@ async fn app_api_for_calendar_mail_and_tasks() {
     assert_eq!(sent["threadId"], "th1");
     let raw = String::from_utf8(alice::util::b64_decode(sent["raw"].as_str().unwrap()).unwrap()).unwrap();
     assert!(raw.contains("In-Reply-To: <abc@mail>\r\nReferences: <abc@mail>\r\n"), "{raw}");
+    // Swipe to mark read.
+    h.post("/google/mail/m1/read", json!({})).await;
+    h.post("/google/mail/m1/read", json!({ "read": false })).await;
+    let md = fake.modified.lock().unwrap().clone();
+    assert_eq!(md, vec![("m1".into(), json!({ "removeLabelIds": ["UNREAD"] })), ("m1".into(), json!({ "addLabelIds": ["UNREAD"] }))]);
 
     // Tasks are off until the group is turned on.
     let (code, _) = h.req(reqwest::Method::GET, "/google/tasks", None).await;

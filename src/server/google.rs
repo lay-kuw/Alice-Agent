@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppRef> {
         .route("/google/mail", get(mail))
         .route("/google/mail/send", post(send_mail))
         .route("/google/mail/{id}", get(mail_one))
+        .route("/google/mail/{id}/read", post(mark_read))
         .route("/google/tasks", get(tasks))
         .route("/google/tasks/{list}", post(create_task))
         .route("/google/tasks/{list}/{id}", patch(update_task).delete(delete_task))
@@ -223,6 +224,19 @@ async fn mail_one(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResul
     })
     .await?;
     Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct MarkRead {
+    read: Option<bool>,
+}
+
+async fn mark_read(State(app): State<AppRef>, Path(id): Path<String>, Json(b): Json<MarkRead>) -> ApiResult<Json<Value>> {
+    let s = ready(&app, "gmail")?;
+    g::gmail_mark_read(&G::new(&app, &s), &id, b.read.unwrap_or(true)).await.map_err(upstream("mail mark read"))?;
+    invalidate("mail:");
+    invalidate(&format!("msg:{id}"));
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]

@@ -82,13 +82,6 @@ struct TasksView: View {
     private var addBar: some View {
         let empty = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
         return HStack(spacing: 10) {
-            Button {
-                if empty { adding = true } else { add() }
-            } label: {
-                Image(systemName: "plus.circle.fill").font(.title2).foregroundStyle(Palette.accent)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Add task")
             TextField("Add a task", text: $newTitle)
                 .focused($adding)
                 .submitLabel(.done)

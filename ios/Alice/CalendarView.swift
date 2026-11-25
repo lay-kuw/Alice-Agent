@@ -69,20 +69,21 @@ struct CalendarView: View {
     private var modeMenu: some View {
         Menu {
             Picker("View", selection: Binding(get: { mode }, set: { setMode($0) })) {
-                Label("Week", systemImage: "rectangle.split.1x2").tag("week")
-                Label("Month", systemImage: "calendar").tag("month")
+                Label("Week", systemImage: Self.icon("week")).tag("week")
+                Label("Month", systemImage: Self.icon("month")).tag("month")
             }
             Divider()
             Button("Jump to today", systemImage: "sun.max") { jumpToToday() }
         } label: {
-            HStack(spacing: 4) {
-                Text(mode == "month" ? "Month" : "Week")
-                Image(systemName: "chevron.down").font(.caption2.bold())
-            }
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Palette.lavender)
+            Image(systemName: Self.icon(mode))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.lavender)
+                .contentTransition(.symbolEffect(.replace))
         }
+        .accessibilityLabel(mode == "month" ? "Month view" : "Week view")
     }
+
+    private static func icon(_ mode: String) -> String { mode == "month" ? "calendar" : "rectangle.split.3x1" }
 
     private func setMode(_ m: String) {
         withAnimation(.snappy) {
@@ -96,6 +97,20 @@ struct CalendarView: View {
         withAnimation(.snappy) {
             selected = Calendar.current.startOfDay(for: .now)
             topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(.now) : .now)
+        }
+    }
+
+    /// Move the selected day, keeping it on screen.
+    private func shiftDay(_ by: Int) {
+        let cal = Calendar.current
+        guard let d = cal.date(byAdding: .day, value: by, to: selected) else { return }
+        withAnimation(.snappy) {
+            selected = d
+            let top = topWeek ?? GoogleStore.startOfWeek(d)
+            let visibleEnd = cal.date(byAdding: .day, value: 7 * rows, to: top) ?? top
+            if d < top || d >= visibleEnd {
+                topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(d) : d)
+            }
         }
     }
 
@@ -121,17 +136,22 @@ struct CalendarView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            // Scrolls vertically inside the card, snapping to whole weeks.
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    ForEach(weeks, id: \.self) { w in
-                        weekRow(w).frame(height: Self.rowHeight).id(w)
+            Group {
+                if mode == "month" {
+                    // Scrolls vertically inside the card, snapping to whole weeks.
+                    ScrollView(.vertical, showsIndicators: false) {
+                        LazyVStack(spacing: 0) { weekRows }.scrollTargetLayout()
                     }
+                    .scrollTargetBehavior(.viewAligned)
+                } else {
+                    // One week per page; swipe sideways.
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 0) { weekRows }.scrollTargetLayout()
+                    }
+                    .scrollTargetBehavior(.paging)
                 }
-                .scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $topWeek, anchor: .top)
+            .scrollPosition(id: $topWeek, anchor: mode == "month" ? .top : .leading)
             .frame(height: Self.rowHeight * CGFloat(rows))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .onChange(of: topWeek) { old, new in
@@ -143,52 +163,34 @@ struct CalendarView: View {
         }
         .card(padding: 12)
         .padding(.top, 8)
-        .animation(.snappy, value: mode)
+        .sensoryFeedback(.selection, trigger: selected)
     }
 
-    private func weekRow(_ w: Date) -> some View {
-        let cal = Calendar.current
-        return HStack(spacing: 4) {
-            ForEach(0..<7, id: \.self) { i in
-                dayCell(cal.date(byAdding: .day, value: i, to: w) ?? w)
+    @ViewBuilder private var weekRows: some View {
+        let month = mode == "month" ? focusMonth : nil
+        ForEach(weeks, id: \.self) { w in
+            WeekRow(days: days(of: w, month: month)) { d in
+                withAnimation(.snappy) { selected = d }
             }
+            .equatable()
+            .frame(height: Self.rowHeight)
+            .containerRelativeFrame(.horizontal, alignment: .center) { width, _ in width }
+            .id(w)
         }
-        .padding(.vertical, 3)
     }
 
-    private func dayCell(_ d: Date) -> some View {
+    /// Plain values per day, so a row only redraws when one of them changes.
+    private func days(of w: Date, month: Date?) -> [DayCell] {
         let cal = Calendar.current
-        let isSel = cal.isDate(d, inSameDayAs: selected)
-        let isToday = cal.isDateInToday(d)
-        // Month view fades days outside the month in focus.
-        let faded = mode == "month" && !cal.isDate(d, equalTo: focusMonth, toGranularity: .month)
-        let events = google.events(on: d)
-        return Button {
-            withAnimation(.snappy) { selected = d }
-        } label: {
-            VStack(spacing: 3) {
-                Text(d.formatted(.dateTime.day()))
-                    .font(.system(.subheadline, design: .rounded).weight(isToday || isSel ? .bold : .medium))
-                HStack(spacing: 2) {
-                    ForEach(events.prefix(3)) { e in
-                        Circle().fill(isSel ? Color.white : Palette.event((e.id, e.colorId))).frame(width: 4, height: 4)
-                    }
-                }
-                .frame(height: 4)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .foregroundStyle(isSel ? .white : (isToday ? Palette.lavender : .primary))
-            .opacity(faded && !isSel ? 0.35 : 1)
-            .background {
-                if isSel {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent).shadow(color: Palette.pink.opacity(0.35), radius: 5, y: 2)
-                } else if isToday {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.lavender.opacity(0.6), lineWidth: 1.5)
-                }
-            }
+        return (0..<7).map { i in
+            let d = cal.date(byAdding: .day, value: i, to: w) ?? w
+            return DayCell(
+                date: d,
+                selected: cal.isDate(d, inSameDayAs: selected),
+                today: cal.isDateInToday(d),
+                faded: month.map { !cal.isDate(d, equalTo: $0, toGranularity: .month) } ?? false,
+                dots: google.events(on: d).prefix(3).map { Palette.event(($0.id, $0.colorId)) })
         }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.selection, trigger: isSel)
     }
 
     // MARK: day
@@ -205,20 +207,31 @@ struct CalendarView: View {
 
     @ViewBuilder private var dayEvents: some View {
         let list = google.events(on: selected)
-        if list.isEmpty && google.loadedWeeks.contains(Self.startOfWeek(selected)) {
-            SoftEmpty(title: "Nothing planned", systemImage: "sun.haze", message: "A free day ☕️")
-                .card()
-        } else {
-            VStack(spacing: 10) {
-                ForEach(list) { e in
-                    EventRow(event: e)
-                        .onTapGesture { detail = e }
-                        .contextMenu {
-                            Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = e }
-                        }
+        Group {
+            if list.isEmpty && google.loadedWeeks.contains(Self.startOfWeek(selected)) {
+                SoftEmpty(title: "Nothing planned", systemImage: "sun.haze", message: "A free day ☕️")
+                    .card()
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(list) { e in
+                        EventRow(event: e)
+                            .onTapGesture { detail = e }
+                            .contextMenu {
+                                Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = e }
+                            }
+                    }
                 }
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 160, alignment: .top)
+        .contentShape(Rectangle())
+        // Swipe sideways over the day to go to the previous or next day.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 24).onEnded { v in
+                let dx = v.translation.width, dy = v.translation.height
+                guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                shiftDay(dx < 0 ? 1 : -1)
+            })
     }
 
     // MARK: data
@@ -236,6 +249,57 @@ struct CalendarView: View {
     static func startOfMonth(_ d: Date) -> Date {
         let cal = Calendar.current
         return cal.dateInterval(of: .month, for: d)?.start ?? cal.startOfDay(for: d)
+    }
+}
+
+struct DayCell: Equatable {
+    let date: Date
+    let selected: Bool
+    let today: Bool
+    let faded: Bool
+    let dots: [Color]
+}
+
+/// One week of the calendar grid.
+struct WeekRow: View, @MainActor Equatable {
+    let days: [DayCell]
+    var select: (Date) -> Void
+
+    static func == (a: WeekRow, b: WeekRow) -> Bool { a.days == b.days }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(days, id: \.date) { cell($0) }
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 1)
+    }
+
+    private func cell(_ c: DayCell) -> some View {
+        Button { select(c.date) } label: {
+            VStack(spacing: 3) {
+                Text(c.date.formatted(.dateTime.day()))
+                    .font(.system(.subheadline, design: .rounded).weight(c.today || c.selected ? .bold : .medium))
+                HStack(spacing: 2) {
+                    ForEach(c.dots.indices, id: \.self) { i in
+                        Circle().fill(c.selected ? Color.white : c.dots[i]).frame(width: 4, height: 4)
+                    }
+                }
+                .frame(height: 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .foregroundStyle(c.selected ? .white : (c.today ? Palette.lavender : .primary))
+            .opacity(c.faded && !c.selected ? 0.35 : 1)
+            .background {
+                if c.selected {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.accent)
+                } else if c.today {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.lavender.opacity(0.6), lineWidth: 1.5)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -98,19 +98,28 @@ public enum MailAddress {
 
 public enum GoogleDate {
     /// RFC3339 date-time (with or without fractional seconds) or YYYY-MM-DD (local midnight).
+    // Formatters are costly to make; parsing with them is thread-safe.
+    nonisolated(unsafe) private static let dayFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    nonisolated(unsafe) private static let iso = ISO8601DateFormatter()
+    nonisolated(unsafe) private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     public static func parse(_ s: String) -> Date? {
         if s.count == 10 {
-            let f = DateFormatter()
-            f.calendar = Calendar(identifier: .gregorian)
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = .current
-            f.dateFormat = "yyyy-MM-dd"
-            return f.date(from: s)
+            // Local midnight; the time zone may change while the app runs.
+            dayFormat.timeZone = .current
+            return dayFormat.date(from: s)
         }
-        let f = ISO8601DateFormatter()
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: s)
+        return iso.date(from: s) ?? isoFractional.date(from: s)
     }
 
     public static func rfc3339(_ d: Date) -> String {
@@ -120,12 +129,8 @@ public enum GoogleDate {
     }
 
     public static func day(_ d: Date) -> String {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: d)
+        dayFormat.timeZone = .current
+        return dayFormat.string(from: d)
     }
 }
 
@@ -165,6 +170,10 @@ extension AliceClient {
     public func mailMessage(_ id: String) async throws -> MailMessage {
         struct R: Decodable { let message: MailMessage }
         return try await get("/google/mail/\(escape(id))", R.self).message
+    }
+
+    public func markRead(_ id: String, read: Bool = true) async throws {
+        try await send("POST", "/google/mail/\(escape(id))/read", json: ["read": read])
     }
 
     public func sendMail(to: String, cc: String?, subject: String, body: String, replyTo: String?) async throws {
@@ -220,7 +229,9 @@ public final class GoogleStore {
     public let client: AliceClient
     public private(set) var status: GoogleStatus?
     /// Every event loaded so far, by id.
-    public private(set) var eventsById: [String: CalendarEvent] = [:]
+    public private(set) var eventsById: [String: CalendarEvent] = [:] { didSet { reindex() } }
+    /// Events by local start of day (an event spanning days is on each), sorted.
+    public private(set) var eventsByDay: [Date: [CalendarEvent]] = [:]
     /// Week starts whose events are loaded.
     public private(set) var loadedWeeks: Set<Date> = []
     private var rangeLoadedAt: Date?
@@ -240,15 +251,21 @@ public final class GoogleStore {
         self.client = client
     }
 
-    private func run(_ key: String, load: Bool = false, _ body: () async throws -> Void) async {
+    /// Runs `body`, tracking `key` in `loading`; false when it failed.
+    @discardableResult
+    private func run(_ key: String, load: Bool = false, _ body: () async throws -> Void) async -> Bool {
         loading.insert(key)
         defer { loading.remove(key) }
         do {
             try await body()
             if load { loadError = nil }
-        } catch is CancellationError {} catch {
-            if (error as? URLError)?.code == .cancelled { return }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            if (error as? URLError)?.code == .cancelled { return false }
             if load { loadError = error.localizedDescription } else { lastError = error.localizedDescription }
+            return false
         }
     }
 
@@ -292,27 +309,39 @@ public final class GoogleStore {
         await run("events", load: true) {
             let list = try await client.events(from: from, to: to)
             // Replace what was known for this range.
-            eventsById = eventsById.filter { _, e in
+            var next = eventsById.filter { _, e in
                 guard let s = e.startDate else { return true }
                 return s < from || s >= to
             }
-            for e in list { eventsById[e.id] = e }
+            for e in list { next[e.id] = e }
+            eventsById = next
             for w in weeks { loadedWeeks.insert(w) }
             rangeLoadedAt = Date()
         }
     }
 
     public func events(on day: Date) -> [CalendarEvent] {
+        eventsByDay[Calendar.current.startOfDay(for: day)] ?? []
+    }
+
+    /// Dates are parsed once here, not on every draw.
+    private func reindex() {
         let cal = Calendar.current
-        let start = cal.startOfDay(for: day)
-        guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return [] }
-        return eventsById.values.filter { e in
-            guard let s = e.startDate else { return false }
-            let eEnd = e.endDate ?? s
-            // All-day end dates are exclusive.
-            return s < end && (eEnd > start || (s >= start && s < end))
+        var out: [Date: [(CalendarEvent, Date)]] = [:]
+        for e in eventsById.values {
+            guard let s = e.startDate else { continue }
+            let end = e.endDate ?? s
+            var d = cal.startOfDay(for: s)
+            // All-day end dates are exclusive; cap long events at about two months.
+            for _ in 0..<62 {
+                out[d, default: []].append((e, s))
+                guard let n = cal.date(byAdding: .day, value: 1, to: d), n < end else { break }
+                d = n
+            }
         }
-        .sorted { ($0.allDay ? 0 : 1, $0.startDate ?? .distantPast) < ($1.allDay ? 0 : 1, $1.startDate ?? .distantPast) }
+        eventsByDay = out.mapValues { list in
+            list.sorted { ($0.0.allDay ? 0 : 1, $0.1) < ($1.0.allDay ? 0 : 1, $1.1) }.map(\.0)
+        }
     }
 
     public func addEvent(summary: String, start: Date, end: Date, allDay: Bool, location: String, notes: String) async -> Bool {
@@ -333,8 +362,8 @@ public final class GoogleStore {
 
     public func deleteEvent(_ e: CalendarEvent) async {
         eventsById[e.id] = nil
-        await run("save") { try await client.deleteEvent(e.id) }
-        if lastError != nil { eventsById[e.id] = e }
+        let ok = await run("save") { try await client.deleteEvent(e.id) }
+        if !ok { eventsById[e.id] = e }
     }
 
     // Mail
@@ -369,6 +398,14 @@ public final class GoogleStore {
         return bodies[id]
     }
 
+    /// Mark read (or unread) at once; undone if the server says no.
+    public func setRead(_ id: String, _ read: Bool) async {
+        guard let i = inbox.firstIndex(where: { $0.id == id }), inbox[i].unread == read else { return }
+        inbox[i].unread = !read
+        let ok = await run("read") { try await client.markRead(id, read: read) }
+        if !ok, let i = inbox.firstIndex(where: { $0.id == id }) { inbox[i].unread = read }
+    }
+
     public func send(to: String, cc: String, subject: String, body: String, replyTo: String?) async -> Bool {
         var ok = false
         await run("send") {
@@ -392,26 +429,26 @@ public final class GoogleStore {
         // Show it at once; replace with the server's copy.
         let temp = TaskItem(id: "new-\(UUID().uuidString)", title: title, notes: nil, due: due.map(GoogleDate.day), completed: false, parent: nil)
         lists[li].tasks.insert(temp, at: 0)
-        await run("save") {
+        let ok = await run("save") {
             let t = try await client.createTask(list: list, title: title, due: due.map(GoogleDate.day))
             if let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == temp.id }) { lists[li].tasks[ti] = t }
         }
-        if lastError != nil, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks.removeAll { $0.id == temp.id } }
+        if !ok, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks.removeAll { $0.id == temp.id } }
     }
 
     public func toggle(_ task: TaskItem, in list: String) async {
         guard !task.id.hasPrefix("new-"), let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) else { return }
         let done = !task.completed
         lists[li].tasks[ti].completed = done // optimistic
-        await run("save") { try await client.updateTask(list: list, id: task.id, fields: ["completed": done]) }
-        if lastError != nil, let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti].completed = !done }
+        let ok = await run("save") { try await client.updateTask(list: list, id: task.id, fields: ["completed": done]) }
+        if !ok, let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti].completed = !done }
     }
 
     public func deleteTask(_ task: TaskItem, in list: String) async {
         guard let li = lists.firstIndex(where: { $0.id == list }) else { return }
         let before = lists[li].tasks
         lists[li].tasks.removeAll { $0.id == task.id }
-        await run("save") { try await client.deleteTask(list: list, id: task.id) }
-        if lastError != nil, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks = before }
+        let ok = await run("save") { try await client.deleteTask(list: list, id: task.id) }
+        if !ok, let li = lists.firstIndex(where: { $0.id == list }) { lists[li].tasks = before }
     }
 }

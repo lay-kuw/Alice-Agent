@@ -20,6 +20,13 @@ struct MailView: View {
                             .listRowBackground(Color.clear)
                             .listRowSeparatorTint(Palette.lavender.opacity(0.25))
                             .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore(query: submitted) } } }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                // Swipe right: read (or back to unread).
+                                Button { Task { await google.setRead(m.id, m.unread) } } label: {
+                                    Label(m.unread ? "Read" : "Unread", systemImage: m.unread ? "envelope.open.fill" : "envelope.badge.fill")
+                                }
+                                .tint(m.unread ? Palette.lavender : Palette.pink)
+                            }
                     }
                     if google.loading.contains("more") {
                         ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)

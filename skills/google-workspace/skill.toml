@@ -52,7 +52,7 @@ advanced = true
 [[groups]]
 id = "gmail"
 label = "Gmail"
-scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send"]
+scopes = ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.send", "https://www.googleapis.com/auth/gmail.modify"]
 
 [[groups]]
 id = "calendar"

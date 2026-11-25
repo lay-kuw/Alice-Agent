@@ -264,6 +264,14 @@ pub async fn gmail_send(g: &G<'_>, to: &str, cc: Option<&str>, subject: &str, bo
     Ok(r["id"].as_str().unwrap_or("").to_string())
 }
 
+/// Mark a message read (or unread again). Needs the gmail.modify scope.
+pub async fn gmail_mark_read(g: &G<'_>, id: &str, read: bool) -> Result<(), String> {
+    let labels = json!(["UNREAD"]);
+    let body = if read { json!({ "removeLabelIds": labels }) } else { json!({ "addLabelIds": labels }) };
+    call(g, M::POST, url(g, "gmail", &format!("/users/me/messages/{}/modify", urlencode(id))), Some(&body)).await?;
+    Ok(())
+}
+
 pub async fn gmail_address(g: &G<'_>) -> Result<String, String> {
     let v = call(g, M::GET, url(g, "gmail", "/users/me/profile"), None).await?;
     Ok(v["emailAddress"].as_str().unwrap_or("").to_string())

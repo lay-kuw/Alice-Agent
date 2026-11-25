@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var pending: [Attachment] = []
     @State private var photo: PhotosPickerItem?
     @State private var importing = false
+    @State private var pickingPhoto = false
     @FocusState private var focused: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -46,10 +47,14 @@ struct ChatView: View {
             // The thread was deleted (here or on another device).
             if old != nil, new == nil { dismiss() }
         }
+        // A PhotosPicker placed inside a Menu never opens, so present it from here.
+        .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
         .onChange(of: photo) { _, item in
             guard let item else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
+                // Photos are often HEIC; send JPEG so every model can read them.
+                if let raw = try? await item.loadTransferable(type: Data.self),
+                   let data = UIImage(data: raw)?.jpegData(compressionQuality: 0.85),
                    let a = await store.upload(name: "photo.jpg", mime: "image/jpeg", data: data) {
                     pending.append(a)
                 }
@@ -113,19 +118,25 @@ struct ChatView: View {
                 }
             }
         } label: {
-            HStack(spacing: 4) {
-                Text(base.isEmpty ? "Model" : (store.models?.shortName(base) ?? String(base.split(separator: "/").last ?? ""))).lineLimit(1)
-                if let effort { Text(effort).foregroundStyle(Palette.pink) }
-                Image(systemName: "chevron.down").font(.caption2.bold())
-            }
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.ultraThinMaterial, in: Capsule())
+            // Just an icon; the gauge shows the reasoning level. Names are in the menu.
+            Image(systemName: Self.effortIcon(effort ?? info?.defaultEffort))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.accent)
+        }
+        .accessibilityLabel("Model: \(info?.name ?? base)\(effort.map { " · \($0)" } ?? "")")
+    }
+
+    private static func effortIcon(_ effort: String?) -> String {
+        switch effort {
+        case "minimal", "low": "gauge.with.dots.needle.33percent"
+        case "medium": "gauge.with.dots.needle.50percent"
+        case "high": "gauge.with.dots.needle.67percent"
+        case .some: "gauge.with.dots.needle.100percent"
+        case nil: "sparkles"
         }
     }
 
-    private static let control: CGFloat = 38
+    private static let control: CGFloat = 40
 
     private var composer: some View {
         VStack(spacing: 6) {
@@ -147,7 +158,7 @@ struct ChatView: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
-                    PhotosPicker(selection: $photo, matching: .images) { Label("Photo", systemImage: "photo") }
+                    Button { pickingPhoto = true } label: { Label("Photo", systemImage: "photo") }
                     Button { importing = true } label: { Label("File", systemImage: "doc") }
                 } label: {
                     // Same height as a one-line field, so the row lines up.
@@ -161,10 +172,14 @@ struct ChatView: View {
                 TextField("Message Alice…", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
+                    // A one-line field is exactly as tall as the round buttons.
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 8)
                     .frame(minHeight: Self.control)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Self.control / 2, style: .continuous))
+                    // Tapping anywhere on the bubble (not only the text line) starts typing.
+                    .contentShape(RoundedRectangle(cornerRadius: Self.control / 2, style: .continuous))
+                    .onTapGesture { focused = true }
                 if store.generating {
                     Button { Task { await store.stopGeneration() } } label: {
                         Image(systemName: "stop.fill")

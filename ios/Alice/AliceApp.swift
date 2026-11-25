@@ -5,6 +5,8 @@ import WidgetKit
 
 @main
 struct AliceApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -37,6 +39,7 @@ enum WidgetRefresh {
         let g = GoogleStore(client: AliceClient(baseURL: base, token: c.token), feedsWidgets: true)
         await g.prefetch()
         g.writeSnapshot()
+        await Notifier.update(g)
     }
 
     /// Widgets show nothing once the app is disconnected.
@@ -92,7 +95,11 @@ struct RootView: View {
         let s = ChatStore(client: AliceClient(baseURL: url, token: c.token))
         s.start()
         store = s
-        google = GoogleStore(client: s.client, feedsWidgets: true)
+        let g = GoogleStore(client: s.client, feedsWidgets: true)
+        g.onChange = { [weak g] in if let g { Task { await Notifier.update(g) } } }
+        Notifier.store = g
+        google = g
+        if c.name != "Dev" { Task { await Notifier.askOnce() } }
         if c.name != "Dev" { WidgetRefresh.remember(c) }
         active = c
     }
@@ -104,6 +111,7 @@ struct RootView: View {
         active = nil
         WidgetRefresh.remember(nil)
         WidgetRefresh.clear()
+        Notifier.clear()
     }
 }
 
@@ -136,6 +144,10 @@ struct MainTabs: View {
         #endif
         // Load every tab in the background so switching is instant.
         .task { await google.prefetch() }
+        // Tapped notifications open their tab.
+        .onChange(of: Router.shared.tab, initial: true) { _, t in
+            if let t { tab = t; Router.shared.tab = nil }
+        }
         // Widget taps open their tab (alice://calendar, alice://tasks).
         .onOpenURL { url in
             if let t = url.host(), ["chat", "calendar", "mail", "tasks"].contains(t) { tab = t }

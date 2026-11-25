@@ -82,11 +82,13 @@ alice profile default    # default に戻す
 
 チャットのほか、カレンダー・メール・ToDo のタブがあります。どれも Alice サーバー経由で Google Workspace スキルの接続を使うので、iPhone に Google のトークンは置きません。ToDo（Google Tasks）を使うには `alice skill groups google-workspace` で Tasks をオンにし、`alice skill login google-workspace` で再接続します。
 
-ToDo は右上の ＋ からタイトルと期日を入れて追加します。メールは右へスワイプで既読／未読を切り替えられます。Gmail の変更権限（`gmail.modify`）が要るので、以前に接続した場合は `alice skill login google-workspace` で一度再接続してください。カレンダーは左上のアイコンで週／月表示を切り替え、週表示は左右スワイプで前後の週へ、予定一覧を左右スワイプで前後の日へ移動します。
+ToDo は右上の ＋ からタイトルと期日を入れて追加し、長押しでタイトル・メモ・期日を編集します。メールは右へスワイプで既読／未読を切り替え、開いたメールは右上のボタンから返信できます。Gmail の変更権限（`gmail.modify`）が要るので、以前に接続した場合は `alice skill login google-workspace` で一度再接続してください。カレンダーは左上のアイコンで週／月表示を切り替え、週表示は左右スワイプで前後の週へ、予定一覧を左右スワイプで前後の日へ移動します。
 
 予定には Google カレンダーと同じ 11 色のタグを付けられます（追加時、または予定を開いて変更）。
 
-**ウィジェット**: ホーム画面に「Today」（次の予定）と「Tasks」（期日の近いタスク）を置けます。ロック画面用もあります。ウィジェットはサーバーにもトークンにも触れず、アプリが App Group（`group.local.alice.app`）に書いた最新のスナップショットを表示するだけです。アプリを開いたとき・データが変わったとき・iOS のバックグラウンド更新で書き直されます。サーバーを切り替えると消えます。実機では Signing の Team を両ターゲット（Alice / AliceWidgets）に設定してください。Bundle ID を変える場合は、App Group 名も `Alice.entitlements`・`AliceWidgets.entitlements`・`WidgetSnapshot.appGroup` の 3 か所で揃えて変えます。
+**ウィジェット**: ホーム画面に「Today」（次の予定）、「Month」（1 か月のカレンダーと次の予定）、「Tasks」（期日の近いタスク）を置けます。ロック画面用もあります。ウィジェットはサーバーにもトークンにも触れず、アプリが App Group（`group.local.alice.app`）に書いた最新のスナップショットを表示するだけです。アプリを開いたとき・データが変わったとき・iOS のバックグラウンド更新で書き直されます。サーバーを切り替えると消えます。実機では Signing の Team を両ターゲット（Alice / AliceWidgets）に設定してください。Bundle ID を変える場合は、App Group 名も `Alice.entitlements`・`AliceWidgets.entitlements`・`WidgetSnapshot.appGroup` の 3 か所で揃えて変えます。
+
+**通知**: 予定（10 分前、終日の予定は当日 9 時）、ToDo の期日（当日 9 時）、新着メールを通知します。どれも iPhone の中で作るローカル通知で、プッシュサーバーは使いません。予定と ToDo は読み込んだデータから先に登録しておくので、アプリを閉じていても鳴ります。新着メールは iOS のバックグラウンド更新のときに確認するため、届いてから数十分〜数時間遅れることがあります。種類ごとのオン／オフはチャット左上のハートのメニュー →「Notifications」で切り替えます。
 
 ## 人格（SOUL.md）
 

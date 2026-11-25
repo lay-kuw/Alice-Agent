@@ -20,6 +20,8 @@ public final class ChatStore {
     public var pendingModel: String?
 
     private var eventsTask: Task<Void, Never>?
+    /// A lost connection is reported once, not on every retry.
+    private var offlineReported = false
 
     public init(client: AliceClient) {
         self.client = client
@@ -47,6 +49,7 @@ public final class ChatStore {
                 for try await ev in client.events() {
                     if case .hello = ev {
                         connected = true
+                        offlineReported = false
                         delay = 1
                         await refresh()
                         continue
@@ -55,7 +58,7 @@ public final class ChatStore {
                 }
             } catch {
                 if Task.isCancelled { return }
-                lastError = error.localizedDescription
+                reportOffline(error)
             }
             connected = false
             try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
@@ -76,8 +79,14 @@ public final class ChatStore {
                 if threads.contains(where: { $0.id == id }) { try await load(id) } else { newChat() }
             }
         } catch {
-            lastError = error.localizedDescription
+            reportOffline(error)
         }
+    }
+
+    private func reportOffline(_ error: Error) {
+        guard !offlineReported else { return }
+        offlineReported = true
+        lastError = error.localizedDescription
     }
 
     public func newChat() {

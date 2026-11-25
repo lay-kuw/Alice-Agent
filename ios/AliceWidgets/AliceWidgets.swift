@@ -9,6 +9,7 @@ import WidgetKit
 struct AliceWidgets: WidgetBundle {
     var body: some Widget {
         TodayWidget()
+        MonthWidget()
         TasksWidget()
     }
 }
@@ -54,10 +55,13 @@ enum Tone {
         return Color(red: t.rgb.0, green: t.rgb.1, blue: t.rgb.2)
     }
 
+    static let sunday = Color(red: 0.93, green: 0.45, blue: 0.50)
+    static let saturday = Color(red: 0.40, green: 0.60, blue: 0.93)
+
     static func weekday(_ d: Date) -> Color? {
         switch Calendar.current.component(.weekday, from: d) {
-        case 1: Color(red: 0.93, green: 0.45, blue: 0.50)
-        case 7: Color(red: 0.40, green: 0.60, blue: 0.93)
+        case 1: sunday
+        case 7: saturday
         default: nil
         }
     }
@@ -86,6 +90,48 @@ struct SetupHint: View {
 
 private func time(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
 
+/// "11/25" large with the weekday small beside it.
+struct DateBadge: View {
+    let date: Date
+    var size: CGFloat = 30
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(date.formatted(.dateTime.month(.defaultDigits).day()))
+                .font(.system(size: size, weight: .bold, design: .rounded))
+                .foregroundStyle(Tone.accent)
+            Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+                .foregroundStyle(Tone.weekday(date) ?? Tone.pink)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+    }
+}
+
+/// One line per event: time, then title; later days get a label line.
+struct EventLines: View {
+    let items: [(label: String?, event: WidgetSnapshot.Event)]
+
+    var body: some View {
+        ForEach(items, id: \.event.id) { item in
+            if let l = item.label {
+                Text(l).font(.system(size: 10, weight: .bold)).foregroundStyle(Tone.lavender).frame(height: 15, alignment: .bottom)
+            }
+            HStack(spacing: 6) {
+                Capsule().fill(Tone.event(item.event)).frame(width: 3.5, height: 14)
+                Text(item.event.allDay ? String(localized: "All day") : time(item.event.start))
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .leading)
+                Text(item.event.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 17)
+        }
+    }
+}
+
 // MARK: - Today
 
 struct TodayWidget: Widget {
@@ -103,7 +149,7 @@ struct TodayWidget: Widget {
 
 /// Upcoming events from `now`, with a label on the first event of each later
 /// day. `lines` caps events plus labels, so the list always fits.
-private func upcoming(_ s: WidgetSnapshot, now: Date, lines: Int) -> [(label: String?, event: WidgetSnapshot.Event)] {
+func upcoming(_ s: WidgetSnapshot, now: Date, lines: Int) -> [(label: String?, event: WidgetSnapshot.Event)] {
     let cal = Calendar.current
     var out: [(String?, WidgetSnapshot.Event)] = []
     var used = 0
@@ -143,16 +189,7 @@ struct TodayView: View {
         }
     }
 
-    private var dateBadge: some View {
-        VStack(alignment: .leading, spacing: -2) {
-            Text(entry.date.formatted(.dateTime.weekday(.wide)).uppercased())
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .foregroundStyle(Tone.weekday(entry.date) ?? Tone.pink)
-            Text(entry.date.formatted(.dateTime.day()))
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-                .foregroundStyle(Tone.accent)
-        }
-    }
+    private var dateBadge: some View { DateBadge(date: entry.date) }
 
     private func row(_ e: WidgetSnapshot.Event, compact: Bool = false) -> some View {
         HStack(spacing: 6) {
@@ -196,7 +233,6 @@ struct TodayView: View {
             VStack(alignment: .leading) {
                 dateBadge
                 Spacer(minLength: 0)
-                Text(entry.date.formatted(.dateTime.month(.wide))).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
                 if items.isEmpty { empty() }
@@ -210,35 +246,14 @@ struct TodayView: View {
     private func large(_ s: WidgetSnapshot) -> some View {
         let items = upcoming(s, now: entry.date, lines: 13)
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .lastTextBaseline) {
-                dateBadge
-                Text(entry.date.formatted(.dateTime.month(.wide).year())).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-            }
+            dateBadge
             if items.isEmpty { empty() }
             list(items)
             Spacer(minLength: 0)
         }
     }
 
-    /// One line per event: time, then title.
-    @ViewBuilder private func list(_ items: [(label: String?, event: WidgetSnapshot.Event)]) -> some View {
-        ForEach(items, id: \.event.id) { item in
-            if let l = item.label {
-                Text(l).font(.system(size: 10, weight: .bold)).foregroundStyle(Tone.lavender).frame(height: 15, alignment: .bottom)
-            }
-            HStack(spacing: 6) {
-                Capsule().fill(Tone.event(item.event)).frame(width: 3.5, height: 14)
-                Text(item.event.allDay ? String(localized: "All day") : time(item.event.start))
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .leading)
-                Text(item.event.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .frame(height: 17)
-        }
-    }
+    private func list(_ items: [(label: String?, event: WidgetSnapshot.Event)]) -> some View { EventLines(items: items) }
 
     private func rectangular(_ s: WidgetSnapshot) -> some View {
         let items = upcoming(s, now: entry.date, lines: 2)
@@ -262,6 +277,119 @@ struct TodayView: View {
             return Text("\(e.allDay ? "" : time(e.start) + " ")\(e.title)")
         }
         return Text("Nothing planned")
+    }
+}
+
+// MARK: - Month
+
+struct MonthWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "alice.month", provider: Provider()) { entry in
+            MonthWidgetView(entry: entry)
+                .containerBackground(for: .widget) { PastelWidgetBackground() }
+                .widgetURL(URL(string: "alice://calendar"))
+        }
+        .configurationDisplayName("Month")
+        .description("This month at a glance, with your next events.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct MonthWidgetView: View {
+    let entry: Entry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        let s = entry.snapshot
+        switch family {
+        case .systemSmall:
+            MonthGrid(today: entry.date, snapshot: s, cell: 17, font: 10)
+        case .systemLarge:
+            VStack(alignment: .leading, spacing: 10) {
+                MonthGrid(today: entry.date, snapshot: s, cell: 30, font: 14)
+                if let s {
+                    let items = upcoming(s, now: entry.date, lines: 5)
+                    if items.isEmpty { Text("Nothing planned ☕️").font(.caption).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading, spacing: 4) { EventLines(items: items) }
+                }
+                Spacer(minLength: 0)
+            }
+        default:
+            HStack(alignment: .top, spacing: 14) {
+                MonthGrid(today: entry.date, snapshot: s, cell: 17, font: 10).frame(width: 136)
+                VStack(alignment: .leading, spacing: 4) {
+                    DateBadge(date: entry.date, size: 22)
+                    if let s {
+                        let items = upcoming(s, now: entry.date, lines: 5)
+                        if items.isEmpty { Text("Nothing planned ☕️").font(.caption).foregroundStyle(.secondary) }
+                        EventLines(items: items)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// The month around `today`: weekday initials, then the weeks; today is filled,
+/// days with events get a dot.
+struct MonthGrid: View {
+    let today: Date
+    let snapshot: WidgetSnapshot?
+    let cell: CGFloat
+    let font: CGFloat
+
+    var body: some View {
+        let cal = Calendar.current
+        let month = cal.dateInterval(of: .month, for: today)
+        let first = month.map { cal.dateInterval(of: .weekOfYear, for: $0.start)?.start ?? $0.start } ?? today
+        let weeks = month.map { m in
+            Int((m.end.timeIntervalSince(first) / 86_400 / 7).rounded(.up))
+        } ?? 5
+        let symbols = cal.veryShortStandaloneWeekdaySymbols
+        let order = (0..<7).map { (cal.firstWeekday - 1 + $0) % 7 }
+        VStack(alignment: .leading, spacing: 2) {
+            Text(today.formatted(.dateTime.month(.wide)))
+                .font(.system(size: font + 1, weight: .bold, design: .rounded))
+                .foregroundStyle(Tone.accent)
+                .padding(.leading, 2)
+            Grid(horizontalSpacing: 0, verticalSpacing: cell > 20 ? 4 : 1) {
+                GridRow {
+                    ForEach(order, id: \.self) { i in
+                        Text(symbols[i])
+                            .font(.system(size: font - 2, weight: .bold, design: .rounded))
+                            .foregroundStyle(i == 0 ? Tone.sunday : i == 6 ? Tone.saturday : .secondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                ForEach(0..<weeks, id: \.self) { w in
+                    GridRow {
+                        ForEach(0..<7, id: \.self) { d in
+                            let day = cal.date(byAdding: .day, value: w * 7 + d, to: first) ?? first
+                            dayCell(day, inMonth: month?.contains(day) ?? true, cal: cal)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func dayCell(_ day: Date, inMonth: Bool, cal: Calendar) -> some View {
+        let isToday = cal.isDate(day, inSameDayAs: today)
+        let busy = (snapshot?.eventCount(on: day) ?? 0) > 0
+        return VStack(spacing: 1) {
+            Text(day.formatted(.dateTime.day()))
+                .font(.system(size: font, weight: isToday ? .heavy : .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(isToday ? AnyShapeStyle(.white) : AnyShapeStyle(Tone.weekday(day) ?? .primary))
+                .frame(width: cell, height: cell * 0.82)
+                .background { if isToday { Circle().fill(Tone.accent).frame(width: cell * 0.95, height: cell * 0.95) } }
+            Circle()
+                .fill(busy && !isToday ? Tone.pink : .clear)
+                .frame(width: cell > 20 ? 4 : 3, height: cell > 20 ? 4 : 3)
+        }
+        .opacity(inMonth ? 1 : 0.28)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -295,7 +423,9 @@ struct TasksWidgetView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .widgetAccentable()
             default:
-                let n = family == .systemSmall ? 4 : 5
+                // Medium shows two columns once one is full.
+                let twoColumns = family != .systemSmall && s.tasks.count > 4
+                let shown = Array(s.tasks.prefix(twoColumns ? 8 : 4))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Image(systemName: "checklist").foregroundStyle(Tone.accent)
@@ -306,13 +436,13 @@ struct TasksWidgetView: View {
                     if s.tasks.isEmpty {
                         Text("All done! 🌷").font(.caption).foregroundStyle(.secondary)
                     }
-                    ForEach(s.tasks.prefix(n)) { t in
-                        HStack(spacing: 6) {
-                            Circle().strokeBorder(Tone.lavender, lineWidth: 1.5).frame(width: 11, height: 11)
-                            Text(t.title).font(.system(size: 12.5)).lineLimit(1)
-                            Spacer(minLength: 4)
-                            if family != .systemSmall, let d = t.due { due(d) }
+                    if twoColumns {
+                        HStack(alignment: .top, spacing: 12) {
+                            column(Array(shown.prefix(4)), dues: false)
+                            column(Array(shown.dropFirst(4)), dues: false)
                         }
+                    } else {
+                        column(shown, dues: family != .systemSmall)
                     }
                     Spacer(minLength: 0)
                 }
@@ -322,6 +452,20 @@ struct TasksWidgetView: View {
         } else {
             SetupHint()
         }
+    }
+
+    private func column(_ tasks: [WidgetSnapshot.Task], dues: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(tasks) { t in
+                HStack(spacing: 6) {
+                    Circle().strokeBorder(Tone.lavender, lineWidth: 1.5).frame(width: 11, height: 11)
+                    Text(t.title).font(.system(size: 12.5)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if dues, let d = t.due { due(d) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func due(_ d: Date) -> some View {
@@ -352,6 +496,7 @@ extension WidgetSnapshot {
                 .init(id: "t2", title: "Birthday present", due: at(48), list: "Tasks"),
                 .init(id: "t3", title: "Milk, eggs, strawberries", due: nil, list: "Tasks"),
             ],
-            unread: 2)
+            unread: 2,
+            busy: Dictionary(uniqueKeysWithValues: [0, 1, 3, 6].compactMap { cal.date(byAdding: .day, value: $0, to: today) }.map { (GoogleDate.day($0), 1) }))
     }
 }

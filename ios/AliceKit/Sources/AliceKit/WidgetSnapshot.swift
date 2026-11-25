@@ -34,13 +34,18 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
     /// Open tasks, soonest due first.
     public var tasks: [Task]
     public var unread: Int?
+    /// Number of events per local day ("yyyy-MM-dd"), this month and next, for the month grid.
+    public var busy: [String: Int]?
 
-    public init(updated: Date = .now, events: [Event] = [], tasks: [Task] = [], unread: Int? = nil) {
+    public init(updated: Date = .now, events: [Event] = [], tasks: [Task] = [], unread: Int? = nil, busy: [String: Int]? = nil) {
         self.updated = updated
         self.events = events
         self.tasks = tasks
         self.unread = unread
+        self.busy = busy
     }
+
+    public func eventCount(on day: Date) -> Int { busy?[GoogleDate.day(day)] ?? 0 }
 
     public static let appGroup = "group.local.alice.app"
 

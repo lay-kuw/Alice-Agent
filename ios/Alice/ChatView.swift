@@ -85,7 +85,6 @@ struct ChatView: View {
         return Menu {
             Button { Task { await store.setModel("") } } label: {
                 Label("Default", systemImage: current.isEmpty ? "checkmark" : "")
-                Text(store.models.flatMap { $0.info($0.default)?.name } ?? store.models?.default ?? "")
             }
             ForEach(providers, id: \.self) { p in
                 Section(p) {
@@ -97,7 +96,6 @@ struct ChatView: View {
                             Task { await store.setModel(ModelID.join(m, keep)) }
                         } label: {
                             Label(mi?.name ?? String(m.dropFirst(p.count + 1)), systemImage: m == base && !current.isEmpty ? "checkmark" : "")
-                            if let d = mi?.description, !d.isEmpty { Text(d) }
                         }
                     }
                 }

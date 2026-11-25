@@ -346,7 +346,7 @@ struct EventRow: View {
         .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .leading)
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
-        .background(.regularMaterial.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .softSurface(radius: 14)
         .contentShape(Rectangle())
     }
 }

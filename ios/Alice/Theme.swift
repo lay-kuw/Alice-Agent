@@ -56,22 +56,50 @@ struct PastelBackground: View {
 
 struct CardStyle: ViewModifier {
     var padding: CGFloat = 14
+    var radius: CGFloat = 20
+    @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
-        content
-            .padding(padding)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
-            .shadow(color: Palette.lavender.opacity(0.18), radius: 12, y: 6)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if scheme == .dark {
+            // A faint lavender veil: the background shows through instead of a grey slab.
+            content
+                .padding(padding)
+                .background(Palette.lavender.opacity(0.07), in: shape)
+                .overlay(shape.strokeBorder(Palette.lavender.opacity(0.12), lineWidth: 0.5))
+        } else {
+            content
+                .padding(padding)
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
+                .shadow(color: Palette.lavender.opacity(0.18), radius: 12, y: 6)
+        }
     }
 }
 
 extension View {
     func card(padding: CGFloat = 14) -> some View { modifier(CardStyle(padding: padding)) }
 
+    /// Light rounded surface for list rows; nearly clear in dark mode.
+    func softSurface(radius: CGFloat = 14) -> some View { modifier(SoftSurface(radius: radius)) }
+
     /// Transparent list/scroll background so the pastel gradient shows through.
     func pastel() -> some View {
         scrollContentBackground(.hidden).background(PastelBackground())
+    }
+}
+
+struct SoftSurface: ViewModifier {
+    var radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if scheme == .dark {
+            content.background(Palette.lavender.opacity(0.06), in: shape)
+        } else {
+            content.background(.regularMaterial.opacity(0.7), in: shape)
+        }
     }
 }
 
@@ -80,12 +108,14 @@ struct Avatar: View {
     let name: String
     let key: String
     var size: CGFloat = 40
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let c = Palette.color(for: key)
+        // Softer in dark mode, so bright circles do not jump out of the list.
+        let c = Palette.color(for: key).opacity(scheme == .dark ? 0.6 : 1)
         Text(String(name.trimmingCharacters(in: .whitespaces).first ?? "?").uppercased())
             .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
+            .foregroundStyle(.white.opacity(scheme == .dark ? 0.9 : 1))
             .frame(width: size, height: size)
             .background(LinearGradient(colors: [c, c.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
     }

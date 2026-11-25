@@ -259,6 +259,8 @@ public final class GoogleStore {
 
     /// Write snapshots for the widgets (off in tests and previews).
     public var feedsWidgets = false
+    /// Called (debounced) after events, mail or tasks change.
+    public var onChange: (@MainActor () -> Void)?
     private var snapshotTask: Task<Void, Never>?
     private var lastSnapshot: WidgetSnapshot?
 
@@ -269,12 +271,13 @@ public final class GoogleStore {
 
     /// Coalesce bursts of changes into one write.
     private func snapshotSoon() {
-        guard feedsWidgets else { return }
+        guard feedsWidgets || onChange != nil else { return }
         snapshotTask?.cancel()
         snapshotTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(800))
-            guard !Task.isCancelled else { return }
-            self?.writeSnapshot()
+            guard !Task.isCancelled, let self else { return }
+            if self.feedsWidgets { self.writeSnapshot() }
+            self.onChange?()
         }
     }
 
@@ -307,7 +310,13 @@ public final class GoogleStore {
             }
         }
         .map(\.element)
-        return WidgetSnapshot(updated: now, events: list, tasks: Array(tasks.prefix(20)), unread: inboxLoaded ? inbox.filter(\.unread).count : nil)
+        // Event counts for the month grid: from this month's first week to the end of next month.
+        var busy: [String: Int] = [:]
+        if let month = cal.dateInterval(of: .month, for: now)?.start,
+           let end = cal.date(byAdding: .month, value: 2, to: month) {
+            for (d, es) in eventsByDay where d >= Self.startOfWeek(month) && d < end { busy[GoogleDate.day(d)] = es.count }
+        }
+        return WidgetSnapshot(updated: now, events: list, tasks: Array(tasks.prefix(20)), unread: inboxLoaded ? inbox.filter(\.unread).count : nil, busy: busy)
     }
 
     public func writeSnapshot() {
@@ -316,7 +325,10 @@ public final class GoogleStore {
         if let old = lastSnapshot ?? WidgetSnapshot.load() {
             if !tasksLoaded { s.tasks = old.tasks }
             if s.unread == nil { s.unread = old.unread }
-            if eventsById.isEmpty { s.events = old.events.filter { $0.end > .now } }
+            if eventsById.isEmpty {
+                s.events = old.events.filter { $0.end > .now }
+                s.busy = old.busy
+            }
         }
         var cmp = s
         cmp.updated = lastSnapshot?.updated ?? s.updated
@@ -532,6 +544,23 @@ public final class GoogleStore {
         lists[li].tasks[ti].completed = done // optimistic
         let ok = await run("save") { try await client.updateTask(list: list, id: task.id, fields: ["completed": done]) }
         if !ok, let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti].completed = !done }
+    }
+
+    /// Edit title, notes and due date at once; undone if the server says no.
+    public func updateTask(_ task: TaskItem, in list: String, title: String, notes: String, due: Date?) async {
+        guard let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        let before = lists[li].tasks[ti]
+        var t = before
+        t.title = title
+        t.notes = notes.isEmpty ? nil : notes
+        t.due = due.map(GoogleDate.day)
+        lists[li].tasks[ti] = t
+        let due = t.due
+        let ok = await run("save") {
+            let saved = try await client.updateTask(list: list, id: task.id, fields: ["title": title, "notes": notes, "due": due ?? NSNull()])
+            if let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti] = saved }
+        }
+        if !ok, let li = lists.firstIndex(where: { $0.id == list }), let ti = lists[li].tasks.firstIndex(where: { $0.id == task.id }) { lists[li].tasks[ti] = before }
     }
 
     public func deleteTask(_ task: TaskItem, in list: String) async {

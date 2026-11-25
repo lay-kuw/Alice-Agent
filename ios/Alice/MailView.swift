@@ -3,8 +3,6 @@ import SwiftUI
 
 struct MailView: View {
     @Bindable var google: GoogleStore
-    @State private var search = ""
-    @State private var submitted = ""
     @State private var composing: Draft?
 
     var body: some View {
@@ -16,7 +14,7 @@ struct MailView: View {
                             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 12))
                             .listRowBackground(Color.clear)
                             .listRowSeparatorTint(Palette.lavender.opacity(0.25))
-                            .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore(query: submitted) } } }
+                            .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore() } } }
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 // Swipe right: read (or back to unread).
                                 Button { Task { await google.setRead(m.id, m.unread) } } label: {
@@ -36,26 +34,15 @@ struct MailView: View {
                         if !google.inboxLoaded || google.loading.contains("mail") {
                             ProgressView()
                         } else {
-                            SoftEmpty(title: submitted.isEmpty ? "Inbox zero" : "No results", systemImage: submitted.isEmpty ? "envelope.open" : "magnifyingglass", message: submitted.isEmpty ? "All caught up ✨" : nil)
+                            SoftEmpty(title: "Inbox zero", systemImage: "envelope.open", message: "All caught up ✨")
                         }
                     }
                 }
-                .refreshable { await google.loadInbox(query: submitted) }
-                .searchable(text: $search, prompt: "Search mail (e.g. from:bob is:unread)")
-                .onSubmit(of: .search) {
-                    submitted = search
-                    Task { await google.loadInbox(query: submitted) }
-                }
-                .onChange(of: search) { _, s in
-                    if s.isEmpty, !submitted.isEmpty {
-                        submitted = ""
-                        Task { await google.loadInbox() }
-                    }
-                }
+                .refreshable { await google.loadInbox() }
                 .task { if !google.inboxLoaded { await google.loadInbox() } }
                 .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
             }
-            .navigationTitle(submitted.isEmpty ? "Inbox" : "Search")
+            .navigationTitle("Inbox")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -72,7 +59,7 @@ struct MailRow: View {
     let mail: MailSummary
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Avatar(name: mail.senderName, key: MailAddress.address(mail.from), size: 30)
                 .overlay(alignment: .topLeading) {
                     if mail.unread {
@@ -131,12 +118,11 @@ struct MailDetailView: View {
         .background(PastelBackground())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .bottomBar) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { composing = Draft(replyTo: summary, message: message) } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left.fill").frame(maxWidth: .infinity)
+                    Image(systemName: "arrowshape.turn.up.left.fill").foregroundStyle(Palette.accent)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Palette.lavender)
+                .accessibilityLabel("Reply")
             }
         }
         .sheet(item: $composing) { ComposeView(google: google, draft: $0) }

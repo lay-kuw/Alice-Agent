@@ -14,6 +14,7 @@ struct ThreadsView: View {
     /// The tapped row. List selection (not buttons) opens chats, so a tap while a
     /// row's swipe actions are showing only closes them.
     @State private var picked: String?
+    @State private var notify: [Notifier.Kind: Bool] = [:]
 
     var body: some View {
         NavigationStack {
@@ -25,10 +26,10 @@ struct ThreadsView: View {
                         .listRowSeparatorTint(Palette.lavender.opacity(0.25))
                         // Right to left: delete. Left to right: rename.
                         .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) { confirmDelete = t } label: { Label("Delete", systemImage: "trash") }
+                            Button(role: .destructive) { confirmDelete = t } label: { Label { Text("Delete") } icon: { SwipeIcon(name: "trash") } }
                         }
                         .swipeActions(edge: .leading) {
-                            Button { newTitle = t.title; renaming = t } label: { Label("Rename", systemImage: "pencil") }.tint(Palette.lavender)
+                            Button { newTitle = t.title; renaming = t } label: { Label { Text("Rename") } icon: { SwipeIcon(name: "pencil") } }.tint(Palette.lavender)
                         }
                 }
             }
@@ -56,6 +57,11 @@ struct ThreadsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Label(store.connected ? "Connected" : "Reconnecting…", systemImage: store.connected ? "checkmark.circle" : "arrow.triangle.2.circlepath")
+                        Menu("Notifications", systemImage: "bell") {
+                            ForEach(Notifier.Kind.allCases) { k in
+                                Toggle(isOn: Binding(get: { notify[k] ?? Notifier.enabled(k) }, set: { notify[k] = $0; Notifier.set(k, $0) })) { Text(k.title) }
+                            }
+                        }
                         Button("Switch server", systemImage: "server.rack", action: onDisconnect)
                     } label: { ConnectionBadge(connected: store.connected) }
                     .accessibilityLabel(store.connected ? "Connected to \(connectionName)" : "Reconnecting")
@@ -89,6 +95,21 @@ struct ThreadsView: View {
             .alert("Error", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(store.lastError ?? "") }
+        }
+    }
+}
+
+/// Swipe actions draw SF Symbols large; a pre-sized image keeps them in
+/// proportion with the row.
+struct SwipeIcon: View {
+    let name: String
+
+    var body: some View {
+        let cfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        if let img = UIImage(systemName: name, withConfiguration: cfg)?.withTintColor(.white, renderingMode: .alwaysOriginal) {
+            Image(uiImage: img)
+        } else {
+            Image(systemName: name)
         }
     }
 }
@@ -133,14 +154,21 @@ struct ConnectionBadge: View {
                     CubicKeyframe(1.0, duration: 0.2)
                     LinearKeyframe(1.0, duration: 0.9)
                 }
+                .frame(width: 24, height: 22)
         } else {
-            Image(systemName: "cloud.fill")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(Palette.peach)
-                .overlay(alignment: .topTrailing) {
-                    Text("z").font(.system(size: 9, weight: .heavy, design: .rounded)).foregroundStyle(Palette.lavender).offset(x: 5, y: -6)
-                }
-                .symbolEffect(.pulse)
+            // Same box as the heart, so nothing moves when the state changes.
+            ZStack {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Palette.peach)
+                    .offset(x: -2, y: 2)
+                Text("zZ")
+                    .font(.system(size: 8, weight: .heavy, design: .rounded))
+                    .foregroundStyle(Palette.lavender)
+                    .offset(x: 9, y: -8)
+            }
+            .frame(width: 24, height: 22)
+            .phaseAnimator([1.0, 0.55]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 1.2) }
         }
     }
 }

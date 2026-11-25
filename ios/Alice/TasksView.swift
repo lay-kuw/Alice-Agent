@@ -59,7 +59,6 @@ struct TasksView: View {
                 }
                 .listStyle(.plain)
                 .animation(.snappy, value: google.lists)
-                .sensoryFeedback(.impact(flexibility: .soft), trigger: editing?.id) { _, new in new != nil }
                 .pastel()
                 .overlay { if !google.tasksLoaded { ProgressView() } }
                 .refreshable { await google.loadTasks() }
@@ -127,8 +126,13 @@ struct TasksView: View {
     private func row(_ t: TaskItem, list: String) -> some View {
         TaskRow(task: t) { Task { await google.toggle(t, in: list) } }
             .padding(.leading, t.parent == nil ? 0 : 28)
-            // Press and hold to edit.
-            .onLongPressGesture(minimumDuration: 0.35) { if !t.id.hasPrefix("new-") { editing = Editing(task: t, list: list) } }
+            // Press and hold: the row pops up with Edit and Delete.
+            .contextMenu {
+                if !t.id.hasPrefix("new-") {
+                    Button("Edit", systemImage: "pencil") { editing = Editing(task: t, list: list) }
+                    Button("Delete", systemImage: "trash", role: .destructive) { Task { await google.deleteTask(t, in: list) } }
+                }
+            }
             .listRowBackground(Color.clear)
             .listRowSeparatorTint(Palette.lavender.opacity(0.2))
             .swipeActions {

@@ -108,29 +108,23 @@ pub fn build_email(to: &str, cc: Option<&str>, subject: &str, body: &str, reply:
     Ok(b64url_encode(m.as_bytes()))
 }
 
-fn gmail_text(payload: &Value) -> String {
-    // Prefer text/plain; fall back to stripped text/html.
-    fn walk(p: &Value, want: &str, out: &mut Option<String>) {
-        if out.is_some() {
-            return;
-        }
+/// The first body part of type `want` (e.g. "text/html"), decoded.
+fn gmail_part(payload: &Value, want: &str) -> Option<String> {
+    fn walk(p: &Value, want: &str) -> Option<String> {
         if p["mimeType"].as_str() == Some(want)
             && let Some(d) = p.pointer("/body/data").and_then(|d| d.as_str()).and_then(b64_decode) {
-                *out = Some(String::from_utf8_lossy(&d).into_owned());
-                return;
+                return Some(String::from_utf8_lossy(&d).into_owned());
             }
-        for part in p["parts"].as_array().into_iter().flatten() {
-            walk(part, want, out);
-        }
+        p["parts"].as_array().into_iter().flatten().find_map(|part| walk(part, want))
     }
-    let mut t = None;
-    walk(payload, "text/plain", &mut t);
-    if t.is_none() {
-        let mut h = None;
-        walk(payload, "text/html", &mut h);
-        t = h.map(|h| super::web::extract(&h).1);
-    }
-    t.unwrap_or_default()
+    walk(payload, want)
+}
+
+fn gmail_text(payload: &Value) -> String {
+    // Prefer text/plain; fall back to stripped text/html.
+    gmail_part(payload, "text/plain")
+        .or_else(|| gmail_part(payload, "text/html").map(|h| super::web::extract(&h).1))
+        .unwrap_or_default()
 }
 
 fn header(headers: &Value, name: &str) -> String {
@@ -260,6 +254,10 @@ pub async fn gmail_get(g: &G<'_>, id: &str) -> Result<Value, String> {
     v["cc"] = json!(header(h, "Cc"));
     v["reply_to"] = json!(header(h, "Reply-To"));
     v["body"] = json!(crate::util::truncate(&gmail_text(&d["payload"]), 200_000));
+    // The HTML part as sent, for clients that render it (the iPhone app does, without remote content).
+    if let Some(html) = gmail_part(&d["payload"], "text/html") {
+        v["html"] = json!(crate::util::truncate(&html, 2_000_000));
+    }
     Ok(v)
 }
 

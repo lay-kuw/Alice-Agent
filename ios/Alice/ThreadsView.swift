@@ -10,7 +10,6 @@ struct ThreadsView: View {
     @State private var showChat = false
     @State private var renaming: ChatThread?
     @State private var newTitle = ""
-    @State private var confirmDelete: ChatThread?
     /// The tapped row. List selection (not buttons) opens chats, so a tap while a
     /// row's swipe actions are showing only closes them.
     @State private var picked: String?
@@ -26,7 +25,12 @@ struct ThreadsView: View {
                         .listRowSeparatorTint(Palette.lavender.opacity(0.25))
                         // Right to left: delete. Left to right: rename.
                         .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) { confirmDelete = t } label: { Label { Text("Delete") } icon: { SwipeIcon(name: "trash") } }
+                            Button(role: .destructive) { Task { await store.delete(t.id) } } label: { Label { Text("Delete") } icon: { SwipeIcon(name: "trash") } }
+                        }
+                        // Press and hold: the row pops up with the same actions.
+                        .contextMenu {
+                            Button("Rename", systemImage: "pencil") { newTitle = t.title; renaming = t }
+                            Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
                         }
                         .swipeActions(edge: .leading) {
                             Button { newTitle = t.title; renaming = t } label: { Label { Text("Rename") } icon: { SwipeIcon(name: "pencil") } }.tint(Palette.lavender)
@@ -90,9 +94,6 @@ struct ThreadsView: View {
                 Button("Save") { if let t = renaming { Task { await store.rename(t.id, to: newTitle) } } }
                 Button("Cancel", role: .cancel) {}
             }
-            .confirmationDialog("Delete this thread? Memories learned from it are deleted too.", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }), titleVisibility: .visible) {
-                Button("Delete", role: .destructive) { if let t = confirmDelete { Task { await store.delete(t.id) } } }
-            }
             .alert("Error", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(store.lastError ?? "") }
@@ -100,18 +101,20 @@ struct ThreadsView: View {
     }
 }
 
-/// Swipe actions draw SF Symbols large; a pre-sized image keeps them in
-/// proportion with the row.
+/// Swipe actions scale their image to a fixed size, so the symbol is drawn
+/// small in the middle of a larger clear canvas to keep it in proportion.
 struct SwipeIcon: View {
     let name: String
 
-    var body: some View {
-        let cfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
-        if let img = UIImage(systemName: name, withConfiguration: cfg)?.withTintColor(.white, renderingMode: .alwaysOriginal) {
-            Image(uiImage: img)
-        } else {
-            Image(systemName: name)
-        }
+    var body: some View { Image(uiImage: Self.image(name)) }
+
+    static func image(_ name: String) -> UIImage {
+        let cfg = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        guard let sym = UIImage(systemName: name, withConfiguration: cfg)?.withTintColor(.white, renderingMode: .alwaysOriginal) else { return UIImage() }
+        let side: CGFloat = 30
+        return UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+            sym.draw(at: CGPoint(x: (side - sym.size.width) / 2, y: (side - sym.size.height) / 2))
+        }.withRenderingMode(.alwaysOriginal)
     }
 }
 

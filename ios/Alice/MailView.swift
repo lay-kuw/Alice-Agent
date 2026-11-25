@@ -4,9 +4,10 @@ import SwiftUI
 struct MailView: View {
     @Bindable var google: GoogleStore
     @State private var composing: Draft?
+    @State private var path: [MailSummary] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             GoogleGate(google: google, group: "gmail", title: "Gmail") {
                 List {
                     ForEach(google.inbox) { m in
@@ -51,6 +52,12 @@ struct MailView: View {
             }
             .sheet(item: $composing) { ComposeView(google: google, draft: $0) }
             .googleErrors(google)
+            #if DEBUG
+            // Simulator runs: ALICE_DEV_MAIL=<part of a sender> opens that mail.
+            .task(id: google.inbox.count) {
+                if let k = ProcessInfo.processInfo.environment["ALICE_DEV_MAIL"], path.isEmpty, let m = google.inbox.first(where: { $0.from.contains(k) }) { path = [m] }
+            }
+            #endif
         }
     }
 }
@@ -101,17 +108,21 @@ struct MailDetailView: View {
                     if let d = summary.sentAt { Text(d.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
                 }
                 .card()
-                Group {
-                    if let m = message {
-                        Text(m.body.isEmpty ? summary.snippet : m.body)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity)
+                if let m = message, let html = m.html, !html.isEmpty {
+                    HTMLMailView(html: html)
+                } else {
+                    Group {
+                        if let m = message {
+                            Text(m.body.isEmpty ? summary.snippet : m.body)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            ProgressView().frame(maxWidth: .infinity)
+                        }
                     }
+                    .card(padding: 16)
                 }
-                .card(padding: 16)
             }
             .padding()
         }
@@ -126,7 +137,12 @@ struct MailDetailView: View {
             }
         }
         .sheet(item: $composing) { ComposeView(google: google, draft: $0) }
-        .task { if message == nil { message = await google.open(summary.id) } }
+        .task {
+            if message == nil { message = await google.open(summary.id) }
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["ALICE_DEV_REPLY"] != nil, composing == nil { composing = Draft(replyTo: summary, message: message) }
+            #endif
+        }
     }
 }
 
@@ -168,7 +184,7 @@ struct ComposeView: View {
                     field("Cc", text: $draft.cc).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
                 field("Subject", text: $draft.subject)
-                TextEditor(text: $draft.body)
+                editor
                     .focused($bodyFocused)
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 12)
@@ -195,8 +211,19 @@ struct ComposeView: View {
                     }
                 }
             }
-            .onAppear { if draft.replyToId != nil { bodyFocused = true } }
+            .onAppear {
+                if draft.replyToId != nil { bodyFocused = true }
+            }
             .googleErrors(google)
+        }
+    }
+
+    /// Replies start with the cursor (and the view) at the top, above the quote.
+    @ViewBuilder private var editor: some View {
+        if #available(iOS 18.0, *) {
+            BodyEditor(text: $draft.body, startAtTop: draft.replyToId != nil)
+        } else {
+            TextEditor(text: $draft.body)
         }
     }
 
@@ -210,5 +237,20 @@ struct ComposeView: View {
             .padding(.vertical, 12)
             Divider().overlay(Palette.lavender.opacity(0.3))
         }
+    }
+}
+
+
+/// A body editor whose cursor starts at the top (above a reply's quote), so
+/// the view opens where the user types.
+@available(iOS 18.0, *)
+private struct BodyEditor: View {
+    @Binding var text: String
+    let startAtTop: Bool
+    @State private var selection: TextSelection?
+
+    var body: some View {
+        TextEditor(text: $text, selection: $selection)
+            .onAppear { if startAtTop { selection = TextSelection(insertionPoint: text.startIndex) } }
     }
 }

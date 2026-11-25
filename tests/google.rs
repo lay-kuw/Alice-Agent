@@ -200,8 +200,15 @@ async fn app_mail_list(h: axum::http::HeaderMap, Query(q): Query<HashMap<String,
 async fn app_mail_get(h: axum::http::HeaderMap, axum::extract::Path(id): axum::extract::Path<String>) -> Json<Value> {
     authed(&h);
     let body = alice::util::b64url_encode("Lunch at noon?".as_bytes());
+    let html = alice::util::b64url_encode("<p>Lunch at <b>noon</b>?</p>".as_bytes());
+    // m2 is multipart/alternative with an HTML part.
+    let parts = if id == "m2" {
+        json!([{ "mimeType": "text/plain", "body": { "data": body } }, { "mimeType": "text/html", "body": { "data": html } }])
+    } else {
+        json!([])
+    };
     Json(json!({ "id": id, "threadId": "th1", "snippet": "it&#39;s lunch", "internalDate": "1795000000000", "labelIds": if id == "m1" { json!(["INBOX", "UNREAD"]) } else { json!(["INBOX"]) },
-        "payload": { "mimeType": "text/plain", "body": { "data": body }, "headers": [
+        "payload": { "mimeType": if id == "m2" { "multipart/alternative" } else { "text/plain" }, "body": if id == "m2" { json!({}) } else { json!({ "data": body }) }, "parts": parts, "headers": [
             { "name": "From", "value": "Bob <bob@example.com>" }, { "name": "Subject", "value": "Lunch" }, { "name": "Message-ID", "value": "<abc@mail>" } ] } }))
 }
 
@@ -303,6 +310,10 @@ async fn app_api_for_calendar_mail_and_tasks() {
     assert_eq!((m[0]["unread"].clone(), m[1]["unread"].clone()), (json!(true), json!(false)));
     assert_eq!(m[0]["snippet"], "it's lunch");
     assert_eq!(h.get("/google/mail/m1").await["message"]["body"], "Lunch at noon?");
+    assert!(h.get("/google/mail/m1").await["message"]["html"].is_null());
+    let m2 = h.get("/google/mail/m2").await;
+    assert_eq!(m2["message"]["body"], "Lunch at noon?");
+    assert_eq!(m2["message"]["html"], "<p>Lunch at <b>noon</b>?</p>");
     h.post("/google/mail/send", json!({ "to": "bob@example.com", "subject": "Re: Lunch", "body": "Yes!", "reply_to_id": "m1" })).await;
     let sent = fake.sent.lock().unwrap()[0].clone();
     assert_eq!(sent["threadId"], "th1");

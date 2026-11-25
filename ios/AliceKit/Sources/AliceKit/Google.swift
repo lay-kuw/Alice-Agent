@@ -60,6 +60,8 @@ public struct MailMessage: Codable, Identifiable, Hashable, Sendable {
     public var date: String
     public var dateMs: Int64?
     public var body: String
+    /// The HTML part as sent, when there is one.
+    public var html: String?
 
     public var sentAt: Date? { dateMs.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
 }

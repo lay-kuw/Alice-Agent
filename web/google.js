@@ -5,6 +5,15 @@
 'use strict';
 
 Object.assign(I18N.ja, {
+  'v.agents': 'エージェント', 'ag.intro': '時間と繰り返しを決めて、Alice に自動でお願いできます。結果は指定したチャットに届きます。',
+  'ag.new': '新しいエージェント', 'ag.edit': 'エージェントを編集', 'ag.name': '名前', 'ag.prompt': 'お願いすること',
+  'ag.promptHint': '例: 今日の予定と未読メールをまとめて、気をつけることを 3 つ教えて', 'ag.start': '開始日時', 'ag.repeat': '繰り返し',
+  'ag.once': '1 回だけ', 'ag.min': '分ごと', 'ag.hour': '時間ごと', 'ag.day': '日ごと', 'ag.week': '週ごと', 'ag.every': '間隔',
+  'ag.to': '送り先のチャット', 'ag.newThread': '新しいチャット（最初の実行で作成）', 'ag.newChat': '新しいチャット', 'ag.on': '有効', 'ag.run': '今すぐ実行', 'ag.ran': '実行しました',
+  'ag.next': '次回 {t}', 'ag.done': '実行済み', 'ag.off': '停止中', 'ag.last': '前回 {t}', 'ag.none': 'まだエージェントがいません 🌙',
+  'ag.everyN': '{n}{u}', 'ag.u.min': '分ごと', 'ag.u.hour': '時間ごと', 'ag.u.day': '日ごと', 'ag.u.week': '週ごと',
+  'ag.from': '{t} から', 'ag.daily': '毎日 {t}', 'ag.weekly': '毎週 {d} {t}', 'ag.at': '{t} に 1 回', 'ag.minEvery': '繰り返しは {n} 分以上にしてください',
+  'nt.on': '通知オン', 'nt.off': '通知オフ', 'nt.denied': 'ブラウザで通知がブロックされています', 'nt.insecure': '通知は HTTPS か localhost で開いたときだけ使えます',
   'v.chat': 'チャット', 'v.calendar': 'カレンダー', 'v.mail': 'メール', 'v.tasks': 'タスク',
   'g.setup': 'Alice サーバーで Google を接続してください', 'g.off': '「{t}」がオフになっています',
   'g.offNote': '設定 → スキル で「{t}」をオンにして、再接続してください。', 'g.unreach': 'Alice に接続できません', 'g.retry': 'もう一度確認',
@@ -19,6 +28,15 @@ Object.assign(I18N.ja, {
   'tasks.list': 'リスト', 'tasks.due': '期日', 'tasks.nextWeek': '来週', 'tasks.notes': 'メモ', save: '保存', 'no.title': '（タイトルなし）',
 });
 Object.assign(I18N.en, {
+  'v.agents': 'Agents', 'ag.intro': 'Pick a time and how often, and Alice does it on her own. Results arrive in the chat you choose.',
+  'ag.new': 'New agent', 'ag.edit': 'Edit agent', 'ag.name': 'Name', 'ag.prompt': 'What to do',
+  'ag.promptHint': "e.g. Summarize today's events and unread mail, and tell me three things to watch out for", 'ag.start': 'Starts', 'ag.repeat': 'Repeat',
+  'ag.once': 'Once', 'ag.min': 'Minutes', 'ag.hour': 'Hours', 'ag.day': 'Days', 'ag.week': 'Weeks', 'ag.every': 'Every',
+  'ag.to': 'Send to chat', 'ag.newThread': 'New chat (made on the first run)', 'ag.newChat': 'New chat', 'ag.on': 'Enabled', 'ag.run': 'Run now', 'ag.ran': 'Started',
+  'ag.next': 'Next {t}', 'ag.done': 'Done', 'ag.off': 'Paused', 'ag.last': 'Last {t}', 'ag.none': 'No agents yet 🌙',
+  'ag.everyN': 'Every {n} {u}', 'ag.u.min': 'min', 'ag.u.hour': 'h', 'ag.u.day': 'days', 'ag.u.week': 'weeks',
+  'ag.from': 'from {t}', 'ag.daily': 'Every day at {t}', 'ag.weekly': 'Every {d} at {t}', 'ag.at': 'Once at {t}', 'ag.minEvery': 'Repeat at least every {n} minutes',
+  'nt.on': 'Notifications on', 'nt.off': 'Notifications off', 'nt.denied': 'Notifications are blocked in this browser', 'nt.insecure': 'Notifications need HTTPS or localhost',
   'v.chat': 'Chat', 'v.calendar': 'Calendar', 'v.mail': 'Mail', 'v.tasks': 'Tasks',
   'g.setup': 'Connect Google on your Alice server', 'g.off': '{t} is turned off',
   'g.offNote': 'Turn on “{t}” in Settings → Skills, then reconnect.', 'g.unreach': "Can't reach Alice", 'g.retry': 'Check again',
@@ -142,13 +160,13 @@ function setView(v) {
   const [base, arg] = String(v).split('/');
   v = base;
   if (v === 'mail' && arg) G.openId = decodeURIComponent(arg);
-  if (!['chat', 'calendar', 'mail', 'tasks'].includes(v)) v = 'chat';
+  if (!['chat', 'calendar', 'mail', 'tasks', 'agents'].includes(v)) v = 'chat';
   G.view = v;
   const app = $('app');
-  app.classList.remove('view-chat', 'view-calendar', 'view-mail', 'view-tasks');
+  app.classList.remove('view-chat', 'view-calendar', 'view-mail', 'view-tasks', 'view-agents');
   app.classList.add('view-' + v);
   for (const b of $('rail').querySelectorAll('button[data-view]')) b.classList.toggle('on', b.dataset.view === v);
-  for (const id of ['chat', 'calendar', 'mail', 'tasks']) $('view-' + id).classList.toggle('hidden', id !== v);
+  for (const id of ['chat', 'calendar', 'mail', 'tasks', 'agents']) $('view-' + id).classList.toggle('hidden', id !== v);
   try { localStorage.setItem('alice.view', v); } catch {}
   if (!arg && location.hash !== '#' + v) history.replaceState(null, '', v === 'chat' ? location.pathname : '#' + v);
   if (v !== 'chat') { closeSide(); renderView(); loadView(); }
@@ -163,6 +181,7 @@ function renderView() {
   const v = G.view;
   if (v === 'chat') return;
   const box = $('view-' + v);
+  if (v === 'agents') return renderAgents(box);
   const gate = gateEl(GROUP[v], t('v.' + v));
   if (gate) return box.replaceChildren(gate);
   if (v === 'calendar') renderCalendar(box);
@@ -171,6 +190,7 @@ function renderView() {
 }
 
 async function loadView(force) {
+  if (G.view === 'agents') return loadAgents();
   if (!G.status || force) {
     const ok = await gtry(async () => { G.status = await api('GET', '/google'); G.statusErr = null; }, true);
     if (!ok && !G.status) G.statusErr = G.loadErr;
@@ -652,6 +672,143 @@ function taskSheet(x, listId) {
     editing ? field(t('tasks.notes'), notes) : field(t('tasks.list'), list), hasDue.node, dueBox),
   [el('button', { class: 'ghost', onclick: closeModal }, t('cancel')), save]);
   title.focus();
+}
+
+// ------------------------------------------------------------ agents (scheduled instructions)
+
+G.agents = null;
+G.minEvery = 5;
+
+async function loadAgents() {
+  await gtry(async () => { const r = await api('GET', '/agents'); G.agents = r.agents; G.minEvery = r.min_every_min || 5; G.loadErr = null; }, true);
+  if (G.view === 'agents') renderView();
+}
+function agentsUpdated() { if (G.view === 'agents') loadAgents(); else G.agents = null; }
+
+const fmtWhen = (ms) => new Date(ms).toLocaleString(locale(), { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+const UNITS = [['week', 10080], ['day', 1440], ['hour', 60], ['min', 1]];
+const splitEvery = (m) => { for (const [u, n] of UNITS) if (m % n === 0) return [u, m / n]; return ['min', m]; };
+
+function scheduleText(a) {
+  if (!a.every_min) return t('ag.at', { t: fmtWhen(a.start_at) });
+  const [u, n] = splitEvery(a.every_min);
+  const s = new Date(a.start_at);
+  if (u === 'day' && n === 1) return t('ag.daily', { t: hm(s) });
+  if (u === 'week' && n === 1) return t('ag.weekly', { d: s.toLocaleDateString(locale(), { weekday: 'long' }), t: hm(s) });
+  return t('ag.everyN', { n, u: t('ag.u.' + u) }) + ' · ' + t('ag.from', { t: fmtWhen(a.start_at) });
+}
+
+function renderAgents(box) {
+  const list = G.agents;
+  const cards = !list ? [el('div', { class: 'soft-empty' }, el('div', { class: 'spinner' }))]
+    : !list.length ? [el('div', { class: 'gcard soft-empty' }, t('ag.none'))]
+    : list.map(agentCard);
+  const top = header(t('v.agents'), notifyButton(),
+    el('button', { class: 'primary icon round', title: t('ag.new'), onclick: () => agentSheet() }, icon('plus')));
+  fill(box, top, loadBanner(), el('p', { class: 'muted ag-intro' }, t('ag.intro')), el('div', { class: 'ag-list' }, ...cards));
+}
+
+function agentCard(a) {
+  const sw = toggle(a.enabled, '');
+  sw.input.addEventListener('change', () => saveAgent(a.id, { enabled: sw.input.checked }));
+  const state = !a.enabled ? t('ag.off') : a.next_run ? t('ag.next', { t: fmtWhen(a.next_run) }) : t('ag.done');
+  const to = a.thread_title || (a.thread_id ? '…' : t('ag.newChat'));
+  const card = el('div', { class: 'gcard ag-card' + (a.enabled ? '' : ' off') },
+    el('div', { class: 'ag-head' }, css(el('span', { class: 'ag-icon' }, '✦'), { '--c': pastel(a.id) }),
+      el('span', { class: 'grow' }, el('b', {}, a.name), el('small', {}, scheduleText(a))), sw.node),
+    el('p', { class: 'ag-prompt' }, a.prompt),
+    el('div', { class: 'ag-foot' },
+      el('span', { class: 'chipbtn ag-state' }, state),
+      a.thread_id ? el('button', { class: 'ghost small', onclick: () => { setView('chat'); openThread(a.thread_id); } }, '→ ', to) : el('span', { class: 'muted small' }, '→ ', to),
+      el('span', { class: 'grow' }),
+      a.last_run ? el('small', { class: 'muted', title: a.last_status || '' }, t('ag.last', { t: fmtWhen(a.last_run) }), a.last_status && a.last_status !== 'ok' ? ' ⚠︎' : '') : null,
+      el('button', { class: 'ghost small', onclick: () => runAgent(a) }, '▶ ', t('ag.run')),
+      el('button', { class: 'ghost icon more-btn on', title: t('more'), onclick: (ev) => { ev.stopPropagation(); popMenu(ev.clientX, ev.clientY, [[t('edit'), () => agentSheet(a)], [t('delete'), () => deleteAgent(a), true]]); } }, icon('more'))));
+  card.addEventListener('dblclick', () => agentSheet(a));
+  return card;
+}
+
+async function saveAgent(id, fields) {
+  const ok = await gtry(() => api(id ? 'PATCH' : 'POST', id ? '/agents/' + id : '/agents', fields));
+  await loadAgents();
+  return ok;
+}
+
+async function runAgent(a) {
+  if (await gtry(() => api('POST', `/agents/${a.id}/run`, {}))) toast(t('ag.ran'));
+  loadAgents();
+}
+
+async function deleteAgent(a) {
+  G.agents = G.agents.filter((x) => x.id !== a.id);
+  renderView();
+  await gtry(() => api('DELETE', '/agents/' + a.id));
+  loadAgents();
+}
+
+const localInput = (ms) => { const d = new Date(ms); return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+function agentSheet(a) {
+  const name = el('input', { type: 'text', value: a ? a.name : '' });
+  const prompt = el('textarea', { rows: 5, placeholder: t('ag.promptHint') });
+  prompt.value = a ? a.prompt : '';
+  const next = new Date(); next.setMinutes(0, 0, 0); next.setHours(next.getHours() + 1);
+  const start = el('input', { type: 'datetime-local', value: localInput(a ? a.start_at : next.getTime()) });
+  const [u0, n0] = a && a.every_min ? splitEvery(a.every_min) : ['once', 1];
+  const unit = el('select', {}, ...[['once', t('ag.once')], ['min', t('ag.min')], ['hour', t('ag.hour')], ['day', t('ag.day')], ['week', t('ag.week')]].map(([v, l]) => el('option', { value: v }, l)));
+  unit.value = u0;
+  const n = el('input', { type: 'number', min: 1, value: n0 });
+  const every = field(t('ag.every'), n);
+  const sync = () => every.classList.toggle('hidden', unit.value === 'once');
+  unit.addEventListener('change', sync); sync();
+  const to = el('select', {}, el('option', { value: '' }, t('ag.newThread')), ...S.threads.map((th) => el('option', { value: th.id }, th.title || t('newTitle'))));
+  to.value = (a && a.thread_id) || '';
+  const on = toggle(a ? a.enabled : true, t('ag.on'));
+  const save = el('button', { class: 'primary', onclick: async () => {
+    if (!name.value.trim()) return name.focus();
+    if (!prompt.value.trim()) return prompt.focus();
+    const mult = { min: 1, hour: 60, day: 1440, week: 10080 }[unit.value] || 0;
+    const every_min = unit.value === 'once' ? 0 : Math.max(1, Math.round(Number(n.value) || 1)) * mult;
+    if (every_min && every_min < G.minEvery) return toast(t('ag.minEvery', { n: G.minEvery }));
+    const at = start.value ? new Date(start.value).getTime() : Date.now();
+    save.disabled = true;
+    const ok = await saveAgent(a && a.id, { name: name.value.trim(), prompt: prompt.value.trim(), start_at: at, every_min, thread_id: to.value || null, enabled: on.input.checked });
+    save.disabled = false;
+    if (ok) closeModal();
+  } }, a ? t('save') : t('add'));
+  modal(a ? t('ag.edit') : t('ag.new'), el('div', { class: 'form' }, field(t('ag.name'), name), field(t('ag.prompt'), prompt),
+    field(t('ag.start'), start), el('div', { class: 'row' }, field(t('ag.repeat'), unit), every), field(t('ag.to'), to), on.node),
+  [a ? el('button', { class: 'ghost', onclick: () => { closeModal(); runAgent(a); } }, '▶ ', t('ag.run')) : null, el('span', { class: 'grow' }),
+    el('button', { class: 'ghost', onclick: closeModal }, t('cancel')), save]);
+  name.focus();
+}
+
+// ------------------------------------------------------------ chat notifications
+
+const notifyOK = () => 'Notification' in window && window.isSecureContext;
+const notifyOn = () => { try { return localStorage.getItem('alice.notify') === 'on'; } catch { return false; } };
+
+function notifyButton() {
+  if (!notifyOK()) return el('span', { class: 'muted small', title: t('nt.insecure') }, '🔕');
+  const enabled = notifyOn() && Notification.permission === 'granted';
+  return el('button', { class: 'ghost small', title: Notification.permission === 'denied' ? t('nt.denied') : '', onclick: async () => {
+    let on = !enabled;
+    if (on && Notification.permission !== 'granted') on = (await Notification.requestPermission()) === 'granted';
+    if (!on && Notification.permission === 'denied') toast(t('nt.denied'));
+    try { localStorage.setItem('alice.notify', on ? 'on' : 'off'); } catch {}
+    renderView();
+  } }, enabled ? '🔔 ' + t('nt.on') : '🔕 ' + t('nt.off'));
+}
+
+/// A reply finished in a chat you are not looking at (or the tab is hidden).
+function notifyReply(threadId, m) {
+  if (!notifyOK() || !notifyOn() || Notification.permission !== 'granted' || m.role !== 'assistant') return;
+  if (!document.hidden && G.view === 'chat' && S.current === threadId) return;
+  const th = S.threads.find((x) => x.id === threadId);
+  const text = (m.content || '').replace(/[#*_`>|-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (!text) return;
+  const n = new Notification(th && th.title ? th.title : 'Alice', { body: text, icon: '/icon.png', tag: threadId });
+  n.onclick = () => { window.focus(); setView('chat'); openThread(threadId); n.close(); };
 }
 
 // ------------------------------------------------------------ shared

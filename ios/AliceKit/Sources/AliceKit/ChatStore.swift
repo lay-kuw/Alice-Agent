@@ -18,6 +18,13 @@ public final class ChatStore {
     public private(set) var models: ModelsResponse?
     public private(set) var connected = false
     public var lastError: String?
+    /// Scheduled agents; nil until first loaded.
+    public private(set) var agents: [AgentJob]?
+    public private(set) var minEveryMin: Int64 = 5
+    /// An assistant reply finished in a thread other than the open one.
+    public var onReply: (@MainActor (ChatThread, Message) -> Void)?
+    /// True while the open thread is on screen (set by the chat view).
+    public var viewingChat = false
     /// Model chosen before a thread exists.
     public var pendingModel: String?
 
@@ -263,6 +270,54 @@ public final class ChatStore {
         do { try await client.setThreadModel(id, model: model) } catch { lastError = error.localizedDescription }
     }
 
+    // MARK: scheduled agents
+
+    public func loadAgents() async {
+        do {
+            let r = try await client.agents()
+            agents = r.agents
+            minEveryMin = r.minEveryMin
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    public func saveAgent(id: String?, _ f: AgentFields) async -> Bool {
+        do {
+            try await client.saveAgent(id: id, f)
+            await loadAgents()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    public func setAgentEnabled(_ a: AgentJob, _ on: Bool) async {
+        if let i = agents?.firstIndex(where: { $0.id == a.id }) { agents?[i].enabled = on }
+        do { try await client.setAgentEnabled(a.id, on) } catch { lastError = error.localizedDescription }
+        await loadAgents()
+    }
+
+    public func deleteAgent(_ a: AgentJob) async {
+        agents?.removeAll { $0.id == a.id }
+        do { try await client.deleteAgent(a.id) } catch { lastError = error.localizedDescription }
+        await loadAgents()
+    }
+
+    /// Run now; returns the thread it posted to.
+    public func runAgent(_ a: AgentJob) async -> String? {
+        do {
+            let t = try await client.runAgent(a.id)
+            await loadAgents()
+            return t
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     public func resolve(_ approval: Approval, approve: Bool) async {
         approvals.removeAll { $0.id == approval.id }
         try? await client.resolveApproval(approval.id, approve: approve)
@@ -287,7 +342,9 @@ public final class ChatStore {
 
     public func apply(_ ev: ServerEvent) async {
         switch ev {
-        case .hello, .other: break
+        case .hello: break
+        case .other(let type):
+            if type == "agents.updated", agents != nil { await loadAgents() }
         case .resync: await refresh()
         case .threadCreated(let t), .threadUpdated(let t):
             upsertThread(t)
@@ -320,7 +377,10 @@ public final class ChatStore {
             guard tid == currentThreadId, let i = messages.firstIndex(where: { $0.id == mid }) else { return }
             messages[i].content += delta
         case .messageCompleted(let m):
-            if m.endsTurn, let i = threads.firstIndex(where: { $0.id == m.threadId }) { threads[i].generating = false }
+            if m.endsTurn, let i = threads.firstIndex(where: { $0.id == m.threadId }) {
+                threads[i].generating = false
+                if m.role == "assistant", m.threadId != currentThreadId || !viewingChat { onReply?(threads[i], m) }
+            }
             guard m.threadId == currentThreadId else { return }
             upsert(m)
             if m.endsTurn {

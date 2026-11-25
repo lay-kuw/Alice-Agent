@@ -14,6 +14,7 @@ struct ThreadsView: View {
     /// row's swipe actions are showing only closes them.
     @State private var picked: String?
     @State private var notify: [Notifier.Kind: Bool] = [:]
+    @State private var showAgents = false
 
     var body: some View {
         NavigationStack {
@@ -62,6 +63,7 @@ struct ThreadsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
                         Label(store.connected ? "Connected" : "Reconnecting…", systemImage: store.connected ? "checkmark.circle" : "arrow.triangle.2.circlepath")
+                        Button("Agents", systemImage: "clock.badge.checkmark") { showAgents = true }
                         Menu("Notifications", systemImage: "bell") {
                             ForEach(Notifier.Kind.allCases) { k in
                                 Toggle(isOn: Binding(get: { notify[k] ?? Notifier.enabled(k) }, set: { notify[k] = $0; Notifier.set(k, $0) })) { Text(k.title) }
@@ -80,8 +82,27 @@ struct ThreadsView: View {
             }
             .navigationDestination(isPresented: $showChat) {
                 ChatView(store: store)
+                    .onAppear { store.viewingChat = true }
+                    .onDisappear { store.viewingChat = false }
+            }
+            .sheet(isPresented: $showAgents) {
+                AgentsView(store: store) { thread in
+                    // "Open chat" from an agent: close the sheet and show it.
+                    showAgents = false
+                    Task { await store.open(thread) }
+                    showChat = true
+                }
+            }
+            // A tapped reply notification opens its chat.
+            .onChange(of: Router.shared.thread, initial: true) { _, id in
+                guard let id else { return }
+                Router.shared.thread = nil
+                showAgents = false
+                Task { await store.open(id) }
+                showChat = true
             }
             #if DEBUG
+            .onAppear { if ProcessInfo.processInfo.environment["ALICE_DEV_AGENTS"] != nil { showAgents = true } }
             .task(id: store.threads.first?.id) {
                 if ProcessInfo.processInfo.environment["ALICE_DEV_CHAT"] != nil, !showChat, let t = store.threads.first {
                     await store.open(t.id)

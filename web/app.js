@@ -830,6 +830,7 @@ function handleEvent(v) {
       }
       const th = S.threads.find((x) => x.id === v.thread_id);
       if (th && endsTurn(v.message)) { th.generating = false; renderThreads(); }
+      if (endsTurn(v.message) && typeof notifyReply === 'function') notifyReply(v.thread_id, v.message);
       break;
     }
     case 'tool.started': case 'tool.completed':
@@ -841,6 +842,7 @@ function handleEvent(v) {
       break;
     case 'tool.approval_resolved': S.approvals.delete(v.approval_id); $('approval-' + v.approval_id)?.remove(); break;
     case 'config.updated': loadModels().then(renderHeader).catch(() => {}); break;
+    case 'agents.updated': if (typeof agentsUpdated === 'function') agentsUpdated(); break;
   }
 }
 

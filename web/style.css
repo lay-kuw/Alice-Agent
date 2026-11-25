@@ -471,3 +471,27 @@ input[type=date], input[type=time] { background: var(--glass-strong); border: 1p
   .more-btn { opacity: 1; }
   .sidebar { bottom: 0; }
 }
+
+/* agents */
+#view-agents > * { max-width: 820px; }
+.ag-intro { padding: 0 22px; margin: 0 auto 12px; font-size: 13.5px; }
+.ag-list { display: grid; gap: 12px; padding: 0 22px 28px; }
+.ag-card { padding: 14px 16px; display: grid; gap: 8px; }
+.ag-card.off { opacity: .6; }
+.ag-head { display: flex; gap: 12px; align-items: center; }
+.ag-head .grow { display: grid; }
+.ag-head small { color: var(--muted); font-size: 12.5px; }
+.ag-icon { width: 36px; height: 36px; flex: none; border-radius: 11px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 65%, transparent)); }
+.ag-prompt { margin: 0; white-space: pre-wrap; font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ag-foot { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ag-state { font-size: 12px; padding: 3px 10px; }
+button.small { font-size: 12.5px; padding: 4px 10px; }
+.ag-card .more-btn { opacity: 1; }
+.modal-actions .grow { flex: 1; }
+.form .row { flex-wrap: nowrap; }
+.rail-settings { margin-bottom: 4px; }
+@media (max-width: 760px) {
+  .rail button { width: auto; flex: 1; min-width: 0; font-size: 9.5px; padding: 6px 0 4px; }
+  .rail button svg { width: 22px; height: 22px; }
+  .ag-intro, .ag-list { padding-left: 12px; padding-right: 12px; }
+}

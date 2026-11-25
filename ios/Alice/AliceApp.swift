@@ -40,6 +40,7 @@ enum WidgetRefresh {
         await g.prefetch()
         g.writeSnapshot()
         await Notifier.update(g)
+        await Notifier.newReplies(g.client)
     }
 
     /// Widgets show nothing once the app is disconnected.
@@ -80,6 +81,7 @@ struct RootView: View {
             // Keep no stream open in the background; resync on return.
             if p == .background {
                 store?.stopEvents()
+                if let store { Notifier.markChatsSeen(store.threads) }
                 google?.writeSnapshot()
                 WidgetRefresh.schedule()
             }
@@ -101,6 +103,7 @@ struct RootView: View {
         g.cache = cache
         s.restore()
         g.restore()
+        s.onReply = { t, m in Task { await Notifier.reply(in: t, m) } }
         s.start()
         store = s
         g.onChange = { [weak g] in if let g { Task { await Notifier.update(g) } } }

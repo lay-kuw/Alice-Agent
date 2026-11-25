@@ -8,10 +8,11 @@ import UserNotifications
 @MainActor
 enum Notifier {
     enum Kind: String, CaseIterable, Identifiable {
-        case calendar, mail, tasks
+        case chat, calendar, mail, tasks
         var id: String { rawValue }
         var title: LocalizedStringKey {
             switch self {
+            case .chat: "Chat"
             case .calendar: "Calendar"
             case .mail: "Mail"
             case .tasks: "Tasks"
@@ -24,6 +25,7 @@ enum Notifier {
     /// All-day events and due tasks ring at this hour on the day.
     static let morningHour = 9
     private static let seenKey = "notify.mailSeen"
+    private static let chatSeenKey = "notify.chatSeen"
     private static let askedKey = "notify.asked"
     private static let center = UNUserNotificationCenter.current()
 
@@ -114,11 +116,55 @@ enum Notifier {
         }
     }
 
+    // MARK: chat replies
+
+    /// A reply finished in a chat that is not on screen (scheduled agents, or
+    /// a conversation you left).
+    static func reply(in thread: ChatThread, _ m: Message) async {
+        guard enabled(.chat) else { return }
+        let auth = await center.notificationSettings().authorizationStatus
+        guard auth == .authorized || auth == .provisional || auth == .ephemeral else { return }
+        let text = Self.snippet(m.content)
+        guard !text.isEmpty else { return }
+        let c = content(thread.displayTitle, body: text, tab: "chat")
+        c.userInfo["thread"] = thread.id
+        try? await center.add(UNNotificationRequest(identifier: "chat.\(m.id)", content: c, trigger: nil))
+    }
+
+    /// Everything up to now has been seen in the app.
+    static func markChatsSeen(_ threads: [ChatThread]) {
+        let latest = threads.map(\.updatedAt).max() ?? 0
+        let d = UserDefaults.standard
+        if latest > Int64(d.double(forKey: chatSeenKey)) { d.set(Double(latest), forKey: chatSeenKey) }
+    }
+
+    /// Background refresh: replies that arrived while the app was closed.
+    static func newReplies(_ client: AliceClient) async {
+        guard enabled(.chat), let threads = try? await client.threads() else { return }
+        let d = UserDefaults.standard
+        let seen = Int64(d.double(forKey: chatSeenKey))
+        defer { markChatsSeen(threads) }
+        guard seen > 0 else { return }
+        for t in threads.filter({ $0.updatedAt > seen && $0.generating != true }).prefix(3) {
+            guard let r = try? await client.messages(t.id),
+                  let m = r.messages.last(where: { $0.role == "assistant" && $0.createdAt > seen && !$0.content.isEmpty }) else { continue }
+            await reply(in: t, m)
+        }
+    }
+
+    private static func snippet(_ s: String) -> String {
+        let plain = s.replacingOccurrences(of: #"[#*_`>|]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        return String(plain.prefix(180))
+    }
+
     /// Nothing is left behind after disconnecting.
     static func clear() {
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
         UserDefaults.standard.removeObject(forKey: seenKey)
+        UserDefaults.standard.removeObject(forKey: chatSeenKey)
         store = nil
     }
 
@@ -143,6 +189,8 @@ enum Notifier {
 final class Router {
     static let shared = Router()
     var tab: String?
+    /// A chat to open (from a reply notification).
+    var thread: String?
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -157,8 +205,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        let tab = response.notification.request.content.userInfo["tab"] as? String
-        Task { @MainActor in Router.shared.tab = tab }
+        let info = response.notification.request.content.userInfo
+        let tab = info["tab"] as? String, thread = info["thread"] as? String
+        Task { @MainActor in
+            Router.shared.thread = thread
+            Router.shared.tab = tab
+        }
         completionHandler()
     }
 }

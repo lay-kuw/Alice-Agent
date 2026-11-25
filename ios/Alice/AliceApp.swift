@@ -85,6 +85,7 @@ struct RootView: View {
             }
             if p == .active {
                 store?.start()
+                store?.retryNow()
                 if let google { Task { await google.prefetch() } }
             }
         }
@@ -93,9 +94,15 @@ struct RootView: View {
     private func connect(_ c: Connection) {
         guard let url = URL(string: c.url) else { return }
         let s = ChatStore(client: AliceClient(baseURL: url, token: c.token))
+        let g = GoogleStore(client: s.client, feedsWidgets: true)
+        // Last data seen, shown at once and while the server is unreachable.
+        let cache = OfflineCache(server: c.url)
+        s.cache = cache
+        g.cache = cache
+        s.restore()
+        g.restore()
         s.start()
         store = s
-        let g = GoogleStore(client: s.client, feedsWidgets: true)
         g.onChange = { [weak g] in if let g { Task { await Notifier.update(g) } } }
         Notifier.store = g
         google = g
@@ -106,6 +113,7 @@ struct RootView: View {
 
     private func disconnect() {
         store?.stopEvents()
+        store?.cache?.clear()
         store = nil
         google = nil
         active = nil

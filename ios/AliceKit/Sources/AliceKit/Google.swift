@@ -230,9 +230,10 @@ extension AliceClient {
 
 // MARK: - Store
 
-/// Google data for the Calendar, Mail and Tasks tabs. Kept in memory only (no
-/// disk cache); the Alice server holds the tokens and caches Google's answers,
-/// so repeat loads are instant. Data already on screen is refreshed quietly.
+/// Google data for the Calendar, Mail and Tasks tabs. The Alice server holds
+/// the tokens and caches Google's answers, so repeat loads are instant. Data
+/// already on screen is refreshed quietly. With `cache`, the last data seen is
+/// kept on the device and shown while the server is unreachable.
 @MainActor
 @Observable
 public final class GoogleStore {
@@ -261,6 +262,8 @@ public final class GoogleStore {
     public var feedsWidgets = false
     /// Called (debounced) after events, mail or tasks change.
     public var onChange: (@MainActor () -> Void)?
+    /// Offline copy of what was last loaded (read-only while offline).
+    public var cache: OfflineCache?
     private var snapshotTask: Task<Void, Never>?
     private var lastSnapshot: WidgetSnapshot?
 
@@ -271,14 +274,47 @@ public final class GoogleStore {
 
     /// Coalesce bursts of changes into one write.
     private func snapshotSoon() {
-        guard feedsWidgets || onChange != nil else { return }
+        guard feedsWidgets || onChange != nil || cache != nil else { return }
         snapshotTask?.cancel()
         snapshotTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(800))
             guard !Task.isCancelled, let self else { return }
             if self.feedsWidgets { self.writeSnapshot() }
+            self.saveCache()
             self.onChange?()
         }
+    }
+
+    private struct Saved: Codable {
+        var status: GoogleStatus?
+        var events: [CalendarEvent]
+        var inbox: [MailSummary]
+        var bodies: [MailMessage]
+        var lists: [TaskList]?
+    }
+
+    /// Show the last saved data at once; the network load that follows replaces it.
+    public func restore() {
+        guard let c = cache?.load(Saved.self, "google") else { return }
+        status = status ?? c.status
+        if eventsById.isEmpty { eventsById = Dictionary(c.events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
+        if !inboxLoaded, !c.inbox.isEmpty {
+            inbox = c.inbox
+            inboxLoaded = true
+        }
+        for m in c.bodies where bodies[m.id] == nil { bodies[m.id] = m }
+        if !tasksLoaded, let l = c.lists {
+            lists = l
+            tasksLoaded = true
+        }
+    }
+
+    private func saveCache() {
+        guard let cache, status != nil else { return }
+        // Opened mail bodies for what is in the list, newest first.
+        let kept = inbox.prefix(30).compactMap { bodies[$0.id] }
+        cache.save(Saved(status: status, events: Array(eventsById.values), inbox: Array(inbox.prefix(100)), bodies: kept,
+                         lists: tasksLoaded ? lists.map { l in var l = l; l.tasks.removeAll { $0.id.hasPrefix("new-") }; return l } : nil), "google")
     }
 
     /// The widget data as of now: the next seven days of events, open tasks, unread count.

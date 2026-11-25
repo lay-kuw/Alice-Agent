@@ -1,8 +1,10 @@
 import Foundation
+import Network
 import Observation
 
-/// UI state for one server connection, kept in memory only. The server is
-/// the source of truth; deletions arrive as events and are applied here.
+/// UI state for one server connection. The server is the source of truth;
+/// deletions arrive as events and are applied here. With `cache`, the thread
+/// list and recent conversations are kept on the device for offline reading.
 @MainActor
 @Observable
 public final class ChatStore {
@@ -22,6 +24,69 @@ public final class ChatStore {
     private var eventsTask: Task<Void, Never>?
     /// A lost connection is reported once, not on every retry.
     private var offlineReported = false
+    /// Set to retry the connection without waiting out the backoff.
+    private var kicked = false
+    private var pathMonitor: NWPathMonitor?
+
+    /// Offline copy of threads and recent conversations.
+    public var cache: OfflineCache?
+    private var convos: [String: MessagesResponse] = [:]
+    /// Thread `updatedAt` each saved conversation matches.
+    private var stamps: [String: Int64] = [:]
+    private var saveTask: Task<Void, Never>?
+
+    private struct Saved: Codable {
+        var threads: [ChatThread]
+        var models: ModelsResponse?
+        var convos: [String: MessagesResponse]
+        var stamps: [String: Int64]?
+    }
+
+    /// Show the last saved threads at once; the server's answer replaces them.
+    public func restore() {
+        guard let c = cache?.load(Saved.self, "chat") else { return }
+        if threads.isEmpty { threads = c.threads }
+        models = models ?? c.models
+        convos = c.convos
+        stamps = c.stamps ?? [:]
+    }
+
+    private func saveSoon() {
+        guard cache != nil else { return }
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, let cache = self.cache else { return }
+            // Conversations of the 20 most recent threads.
+            let recent = Set(self.threads.prefix(20).map(\.id))
+            self.convos = self.convos.filter { recent.contains($0.key) }
+            self.stamps = self.stamps.filter { recent.contains($0.key) }
+            cache.save(Saved(threads: self.threads, models: self.models, convos: self.convos, stamps: self.stamps), "chat")
+        }
+    }
+
+    private func remember(_ id: String) {
+        guard cache != nil else { return }
+        convos[id] = MessagesResponse(threadId: id, messages: messages, attachments: attachments, generating: false)
+        stamps[id] = threads.first { $0.id == id }?.updatedAt
+        saveSoon()
+    }
+
+    /// Keep the most recent conversations readable offline, fetching only those that changed.
+    private func saveRecent() async {
+        guard cache != nil else { return }
+        for t in threads.prefix(10) where t.generating != true && stamps[t.id] != t.updatedAt {
+            guard let r = try? await client.messages(t.id), !r.generating else { continue }
+            convos[t.id] = r
+            stamps[t.id] = t.updatedAt
+        }
+        saveSoon()
+    }
+
+    /// Try to reconnect now (network came back, app returned to the front).
+    public func retryNow() {
+        if !connected { kicked = true }
+    }
 
     public init(client: AliceClient) {
         self.client = client
@@ -32,6 +97,16 @@ public final class ChatStore {
     public var otherApprovals: [Approval] { approvals.filter { $0.threadId != currentThreadId } }
 
     public func start() {
+        if pathMonitor == nil {
+            // Reconnect as soon as the network changes instead of waiting out the backoff.
+            let m = NWPathMonitor()
+            m.pathUpdateHandler = { [weak self] path in
+                guard path.status == .satisfied else { return }
+                Task { @MainActor in self?.retryNow() }
+            }
+            m.start(queue: .global(qos: .utility))
+            pathMonitor = m
+        }
         guard eventsTask == nil else { return }
         eventsTask = Task { [weak self] in await self?.eventLoop() }
     }
@@ -39,6 +114,8 @@ public final class ChatStore {
     public func stopEvents() {
         eventsTask?.cancel()
         eventsTask = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
         connected = false
     }
 
@@ -61,8 +138,13 @@ public final class ChatStore {
                 reportOffline(error)
             }
             connected = false
-            try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
-            delay = min(delay * 2, 30)
+            // Short backoff (1, 2, 4, 8 s), cut short by retryNow().
+            let until = Date().addingTimeInterval(TimeInterval(delay))
+            while Date() < until, !kicked, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            kicked = false
+            delay = min(delay * 2, 8)
         }
     }
 
@@ -75,6 +157,8 @@ public final class ChatStore {
             let list = try await t
             if list != threads { threads = list }
             models = try await m
+            saveSoon()
+            Task { await saveRecent() }
             if let id = currentThreadId {
                 if threads.contains(where: { $0.id == id }) { try await load(id) } else { newChat() }
             }
@@ -98,7 +182,18 @@ public final class ChatStore {
 
     public func open(_ id: String) async {
         currentThreadId = id
-        do { try await load(id) } catch { lastError = error.localizedDescription }
+        // The saved copy shows at once (and is all there is while offline).
+        if let c = convos[id] {
+            messages = c.messages
+            attachments = c.attachments
+            generating = false
+        } else {
+            messages = []
+            attachments = []
+        }
+        do { try await load(id) } catch {
+            if convos[id] == nil || connected { lastError = error.localizedDescription }
+        }
     }
 
     private func load(_ id: String) async throws {
@@ -107,6 +202,7 @@ public final class ChatStore {
         messages = r.messages
         attachments = r.attachments
         generating = r.generating
+        if !r.generating { remember(id) }
     }
 
     @discardableResult
@@ -193,13 +289,19 @@ public final class ChatStore {
         switch ev {
         case .hello, .other: break
         case .resync: await refresh()
-        case .threadCreated(let t), .threadUpdated(let t): upsertThread(t)
+        case .threadCreated(let t), .threadUpdated(let t):
+            upsertThread(t)
+            saveSoon()
         case .threadDeleted(let id):
             threads.removeAll { $0.id == id }
+            convos[id] = nil
+            saveSoon()
             approvals.removeAll { $0.threadId == id }
             if currentThreadId == id { newChat() }
         case .threadsCleared:
             threads = []
+            convos = [:]
+            saveSoon()
             approvals = []
             newChat()
         case .messageCreated(let m):
@@ -221,7 +323,10 @@ public final class ChatStore {
             if m.endsTurn, let i = threads.firstIndex(where: { $0.id == m.threadId }) { threads[i].generating = false }
             guard m.threadId == currentThreadId else { return }
             upsert(m)
-            if m.endsTurn { generating = false }
+            if m.endsTurn {
+                generating = false
+                remember(m.threadId)
+            }
         case .toolStarted(let tid, _), .toolCompleted(let tid, _):
             guard tid == currentThreadId else { return }
             if let r = try? await client.messages(tid), currentThreadId == tid { messages = r.messages }

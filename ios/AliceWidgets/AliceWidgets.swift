@@ -11,6 +11,7 @@ struct AliceWidgets: WidgetBundle {
         TodayWidget()
         MonthWidget()
         TasksWidget()
+        AgendaWidget()
     }
 }
 
@@ -380,7 +381,9 @@ struct MonthGrid: View {
         let busy = (snapshot?.eventCount(on: day) ?? 0) > 0
         return VStack(spacing: 1) {
             Text(day.formatted(.dateTime.day()))
-                .font(.system(size: font, weight: isToday ? .heavy : .semibold, design: .rounded).monospacedDigit())
+                .font(.system(size: font, weight: isToday ? .heavy : .semibold, design: .rounded))
+                // Proportional digits, a little tighter, so 10–31 read as one number.
+                .tracking(-font * 0.06)
                 .foregroundStyle(isToday ? AnyShapeStyle(.white) : AnyShapeStyle(Tone.weekday(day) ?? .primary))
                 .frame(width: cell, height: cell * 0.82)
                 .background { if isToday { Circle().fill(Tone.accent).frame(width: cell * 0.95, height: cell * 0.95) } }
@@ -455,6 +458,17 @@ struct TasksWidgetView: View {
     }
 
     private func column(_ tasks: [WidgetSnapshot.Task], dues: Bool) -> some View {
+        TaskLines(tasks: tasks, now: entry.date, dues: dues)
+    }
+}
+
+/// Open tasks, one line each, with the due day when `dues`.
+struct TaskLines: View {
+    let tasks: [WidgetSnapshot.Task]
+    let now: Date
+    var dues = true
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(tasks) { t in
                 HStack(spacing: 6) {
@@ -470,11 +484,68 @@ struct TasksWidgetView: View {
 
     private func due(_ d: Date) -> some View {
         let cal = Calendar.current
-        let late = d < cal.startOfDay(for: entry.date)
+        let late = d < cal.startOfDay(for: now)
         let label = cal.isDateInToday(d) ? String(localized: "Today") : cal.isDateInTomorrow(d) ? String(localized: "Tomorrow") : d.formatted(.dateTime.month(.abbreviated).day())
         return Text(label)
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(late ? .red : Tone.lavender)
+    }
+}
+
+// MARK: - Today + Tasks
+
+struct AgendaWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "alice.agenda", provider: Provider()) { entry in
+            AgendaView(entry: entry)
+                .containerBackground(for: .widget) { PastelWidgetBackground() }
+        }
+        .configurationDisplayName("Today + Tasks")
+        .description("Your next events and open tasks side by side.")
+        .supportedFamilies([.systemMedium, .systemLarge])
+    }
+}
+
+/// Events on the left, tasks on the right; each half opens its own tab.
+struct AgendaView: View {
+    let entry: Entry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        if let s = entry.snapshot {
+            let large = family == .systemLarge
+            HStack(alignment: .top, spacing: 12) {
+                Link(destination: URL(string: "alice://calendar")!) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        DateBadge(date: entry.date, size: 22)
+                        let items = upcoming(s, now: entry.date, lines: large ? 14 : 4)
+                        if items.isEmpty { Text("Nothing planned ☕️").font(.caption).foregroundStyle(.secondary) }
+                        EventLines(items: items)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Capsule().fill(Tone.lavender.opacity(0.25)).frame(width: 1)
+                Link(destination: URL(string: "alice://tasks")!) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checklist").foregroundStyle(Tone.accent)
+                            Text("Tasks").font(.system(.subheadline, design: .rounded).weight(.bold))
+                            Spacer()
+                            Text("\(s.tasks.count)").font(.system(.headline, design: .rounded).weight(.bold)).foregroundStyle(Tone.accent)
+                        }
+                        .frame(height: 27)
+                        if s.tasks.isEmpty { Text("All done! 🌷").font(.caption).foregroundStyle(.secondary) }
+                        TaskLines(tasks: Array(s.tasks.prefix(large ? 14 : 4)), now: entry.date, dues: false)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .foregroundStyle(.primary)
+        } else {
+            SetupHint()
+        }
     }
 }
 

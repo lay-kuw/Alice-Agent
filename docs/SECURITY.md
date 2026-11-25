@@ -48,7 +48,7 @@
 - スキル: 外部スキルは検出されても無効のまま。有効化時に宣言された権限（ネットワーク先・ファイル・ローカル実行）を表示。`http` ツールは宣言したホストにしか接続できず、引数は URL エンコードしてパスやホストを変えられない。`command` ツールは環境変数を空にして PATH/HOME/LANG/TMPDIR と自分のトークンだけを渡す。スキルフォルダは `~/.alice` 配下なのでモデルからは書き換えられない。
 - Codex（MCP）: Alice 専用の CODEX_HOME で、シェル・ブラウザ・プラグイン・サブエージェント・フック・Web 検索を無効化し（MCP ツールを呼ぶための code mode の `exec` は、ファイル・ネットワークのない V8 isolate なので有効のまま）、読み取り専用サンドボックス・空の作業フォルダで実行。ツールを渡す前にモデルに見えるツール一覧を検査し、許可リスト外があればテキスト方式に切り替える（fail closed）。`alice mcp` はターントークンしか持たず、そのトークンは `/api/mcp/*` 以外（承認・設定・秘密情報）に使えない。承認は Alice の UI でのみ行える。
 - 削除: `secure_delete`、WAL の `TRUNCATE` チェックポイント、FTS の `optimize`、全削除時 `VACUUM`。テストで DB ファイルに削除済み文字列が残らないことを確認。
-- iPhone: 接続情報は Keychain（`AfterFirstUnlockThisDeviceOnly`）、URLSession はエフェメラル（ディスクキャッシュ・Cookie なし）、画像はメモリのみ。
+- iPhone: 接続情報は Keychain（`AfterFirstUnlockThisDeviceOnly`）、URLSession はエフェメラル（ディスクキャッシュ・Cookie なし）、画像はメモリのみ。オフライン表示用に、最後に読み込んだ予定・メール（一覧と最近の本文）・ToDo・チャット履歴（最近 20 スレッド）を Application Support に保存する（Complete Data Protection でロック中は読めない、バックアップ対象外、サーバー切り替え時に削除）。
 
 ## 3. 残存リスク（設計上の限界）
 

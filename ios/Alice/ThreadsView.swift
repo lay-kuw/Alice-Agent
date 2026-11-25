@@ -48,6 +48,7 @@ struct ThreadsView: View {
             }
             .refreshable {
                 // Let the spinner finish its animation even when the server answers at once.
+                store.retryNow()
                 async let done: Void = store.refresh()
                 try? await Task.sleep(for: .milliseconds(500))
                 await done

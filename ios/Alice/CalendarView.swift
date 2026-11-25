@@ -11,12 +11,17 @@ struct CalendarView: View {
     @State private var detail: CalendarEvent?
     @State private var confirmDelete: CalendarEvent?
 
-    /// About three years either way; rows are created lazily.
-    private let weeks: [Date] = {
+    /// About three years either way; rows are created lazily. Made once, so
+    /// the rows keep their identity across redraws.
+    @State private var weeks: [Date] = {
         let cal = Calendar.current
         let now = GoogleStore.startOfWeek(.now)
         return (-156...156).compactMap { cal.date(byAdding: .day, value: 7 * $0, to: now) }
     }()
+    /// Set while the app itself moves the calendar (today, mode, day swipe).
+    @State private var moving = false
+    /// The last real position, in case the scroller reports none on the way to a bad jump.
+    @State private var lastTop: Date?
 
     private var rows: Int { mode == "month" ? 6 : 1 }
     private static let rowHeight: CGFloat = 50
@@ -92,7 +97,7 @@ struct CalendarView: View {
     private static func icon(_ mode: String) -> String { mode == "month" ? "calendar" : "rectangle.split.3x1" }
 
     private func setMode(_ m: String) {
-        withAnimation(.snappy) {
+        move {
             mode = m
             let anchor = m == "month" ? Self.startOfMonth(selected) : selected
             topWeek = GoogleStore.startOfWeek(anchor)
@@ -100,10 +105,34 @@ struct CalendarView: View {
     }
 
     private func jumpToToday() {
-        withAnimation(.snappy) {
+        move {
             selected = Calendar.current.startOfDay(for: .now)
             topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(.now) : .now)
         }
+    }
+
+    /// A jump the app makes on purpose; long jumps are otherwise undone (see `guardJump`).
+    private func move(_ change: () -> Void) {
+        moving = true
+        withAnimation(.snappy, change)
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            moving = false
+        }
+    }
+
+    /// SwiftUI sometimes loses a lazy scroller's position when the rows redraw
+    /// (new events, a mode switch) and snaps to the first row, three years back.
+    /// Scrolling by hand moves a few weeks per update at most, so a long jump
+    /// the app did not ask for is put back.
+    private func guardJump(from old: Date?, to new: Date?) -> Bool {
+        guard !moving, let old, let new else { return false }
+        let weeksApart = abs(Calendar.current.dateComponents([.day], from: old, to: new).day ?? 0) / 7
+        guard weeksApart > 12 else { return false }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { topWeek = old }
+        return true
     }
 
     /// Move the selected day, keeping it on screen.
@@ -115,7 +144,12 @@ struct CalendarView: View {
             let top = topWeek ?? GoogleStore.startOfWeek(d)
             let visibleEnd = cal.date(byAdding: .day, value: 7 * rows, to: top) ?? top
             if d < top || d >= visibleEnd {
+                moving = true
                 topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(d) : d)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(700))
+                    moving = false
+                }
             }
         }
     }
@@ -162,6 +196,8 @@ struct CalendarView: View {
             .frame(height: Self.rowHeight * CGFloat(rows))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .onChange(of: topWeek) { old, new in
+                if guardJump(from: old ?? lastTop, to: new) { return }
+                if let new { lastTop = new }
                 // In week view the selection follows the week (same weekday).
                 guard mode == "week", let old, let new, old != new else { return }
                 let offset = cal.dateComponents([.day], from: old, to: selected).day ?? 0

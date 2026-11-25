@@ -56,6 +56,7 @@ struct MailView: View {
                 .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
             }
             .navigationTitle(submitted.isEmpty ? "Inbox" : "Search")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { composing = Draft() } label: { Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent) }

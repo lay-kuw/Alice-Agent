@@ -17,9 +17,6 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if store.messages.isEmpty {
-                        Text("How can I help?").font(.title2.weight(.semibold)).frame(maxWidth: .infinity).padding(.top, 80)
-                    }
                     ForEach(store.messages.filter { $0.role != "tool" }) { m in
                         MessageRow(message: m, store: store).id(m.id)
                     }
@@ -118,20 +115,10 @@ struct ChatView: View {
                 }
             }
         } label: {
-            ModelBadge(level: Self.effortLevel(effort ?? info?.defaultEffort), seed: base)
+            ModelBadge(seed: base)
         }
+        .menuIndicator(.hidden)
         .accessibilityLabel("Model: \(info?.name ?? base)\(effort.map { " · \($0)" } ?? "")")
-    }
-
-    /// Reasoning depth as 0–4 dots (0: the model has no levels).
-    private static func effortLevel(_ effort: String?) -> Int {
-        switch effort {
-        case nil: 0
-        case "minimal", "low": 1
-        case "medium": 2
-        case "high": 3
-        default: 4
-        }
     }
 
     private static let control: CGFloat = 40
@@ -401,28 +388,14 @@ struct TableBlock: View {
     }
 }
 
-/// The model button: a little pastel bubble with a sparkle, and dots below
-/// for how deeply it thinks.
+/// The model button: a simple sparkle.
 struct ModelBadge: View {
-    let level: Int
     let seed: String
 
     var body: some View {
-        VStack(spacing: 2) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 12, weight: .heavy))
-                .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
-                .background(LinearGradient(colors: [Palette.color(for: seed), Palette.pink], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
-                .symbolEffect(.bounce, value: seed)
-            if level > 0 {
-                HStack(spacing: 2) {
-                    ForEach(0..<4, id: \.self) { i in
-                        Circle().fill(i < level ? Palette.pink : Palette.lavender.opacity(0.3)).frame(width: 3.5, height: 3.5)
-                    }
-                }
-            }
-        }
-        .animation(.snappy, value: level)
+        // An image (not text), so the toolbar gives it a round button like the others.
+        Image(systemName: "sparkle")
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(Palette.accent)
     }
 }

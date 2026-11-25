@@ -68,7 +68,9 @@ public final class ChatStore {
         do {
             async let t = client.threads()
             async let m = client.models()
-            threads = try await t
+            // Only replace what changed, so the list does not redraw mid-refresh.
+            let list = try await t
+            if list != threads { threads = list }
             models = try await m
             if let id = currentThreadId {
                 if threads.contains(where: { $0.id == id }) { try await load(id) } else { newChat() }

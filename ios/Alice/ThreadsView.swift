@@ -11,36 +11,46 @@ struct ThreadsView: View {
     @State private var renaming: ChatThread?
     @State private var newTitle = ""
     @State private var confirmDelete: ChatThread?
-    /// Changed when a chat opens, so a row left swiped open closes again.
-    @State private var listID = UUID()
+    /// The tapped row. List selection (not buttons) opens chats, so a tap while a
+    /// row's swipe actions are showing only closes them.
+    @State private var picked: String?
 
     var body: some View {
         NavigationStack {
-            List {
+            List(selection: $picked) {
                 ForEach(store.threads) { t in
-                    Button {
-                        Task { await store.open(t.id) }
-                        showChat = true
-                    } label: { ThreadRow(thread: t) }
-                    .buttonStyle(.plain)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparatorTint(Palette.lavender.opacity(0.25))
-                    .swipeActions {
-                        Button(role: .destructive) { confirmDelete = t } label: { Label("Delete", systemImage: "trash") }
-                        Button { newTitle = t.title; renaming = t } label: { Label("Rename", systemImage: "pencil") }.tint(Palette.lavender)
-                    }
+                    ThreadRow(thread: t)
+                        .tag(t.id)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparatorTint(Palette.lavender.opacity(0.25))
+                        // Right to left: delete. Left to right: rename.
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) { confirmDelete = t } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button { newTitle = t.title; renaming = t } label: { Label("Rename", systemImage: "pencil") }.tint(Palette.lavender)
+                        }
                 }
             }
             .listStyle(.plain)
-            .id(listID)
-            .onChange(of: showChat) { _, open in if open { listID = UUID() } }
+            .onChange(of: picked) { _, id in
+                guard let id else { return }
+                Task { await store.open(id) }
+                showChat = true
+                picked = nil
+            }
             .pastel()
             .overlay {
                 if store.threads.isEmpty {
                     SoftEmpty(title: "No chats yet", systemImage: "bubble.left.and.bubble.right", message: "Chats from the CLI, Web, Telegram and Discord appear here too.")
                 }
             }
-            .refreshable { await store.refresh() }
+            .refreshable {
+                // Let the spinner finish its animation even when the server answers at once.
+                async let done: Void = store.refresh()
+                try? await Task.sleep(for: .milliseconds(500))
+                await done
+            }
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

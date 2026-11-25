@@ -44,9 +44,13 @@ struct CalendarView: View {
                 }
             }
             .navigationTitle(focusMonth.formatted(.dateTime.year().month(.wide)))
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 #if DEBUG
                 if let m = ProcessInfo.processInfo.environment["ALICE_DEV_CALENDAR"] { mode = m }
+                if let n = ProcessInfo.processInfo.environment["ALICE_DEV_DAY"].flatMap(Int.init) {
+                    selected = Calendar.current.date(byAdding: .day, value: n, to: selected) ?? selected
+                }
                 #endif
                 // Month view starts at the month's first week, week view at this week.
                 if topWeek == nil { topWeek = GoogleStore.startOfWeek(mode == "month" ? Self.startOfMonth(selected) : selected) }
@@ -338,7 +342,8 @@ struct EventRow: View {
             }
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Every row is the same size, with or without an end time or place.
+        .frame(maxWidth: .infinity, minHeight: 38, maxHeight: 38, alignment: .leading)
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .background(.regularMaterial.opacity(0.7), in: RoundedRectangle(cornerRadius: 14, style: .continuous))

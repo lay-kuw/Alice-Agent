@@ -57,6 +57,7 @@ struct TasksView: View {
                 .task { if !google.tasksLoaded { await google.loadTasks() } }
             }
             .navigationTitle("Tasks")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }

@@ -69,10 +69,13 @@ pub enum Cmd {
     Google { args: Vec<String> },
     /// Auto-start service: install, uninstall, status
     Service { args: Vec<String> },
-    /// Show the API token and connection info for Web / iPhone (`--rotate` to replace it)
+    /// Show the API token and connection info for Web / iPhone (`--rotate` for a new random one, `--set` to choose your own)
     Token {
         #[arg(long)]
         rotate: bool,
+        /// Type your own token (asked with hidden input)
+        #[arg(long, conflicts_with = "rotate")]
+        set: bool,
     },
     /// Run the server in the foreground (used by the service manager)
     #[command(hide = true)]
@@ -111,7 +114,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Config { args }) => config_cmd(&paths, args).await,
         Some(Cmd::Tool { args }) => tool_cmd(&paths, args).await,
         Some(Cmd::Gateway { args }) => crate::channels::gateway_cmd(&paths, args).await,
-        Some(Cmd::Token { rotate }) => token_cmd(&paths, rotate).await,
+        Some(Cmd::Token { rotate, set }) => token_cmd(&paths, rotate, set).await,
         Some(Cmd::Profile { args }) => profile::cmd(&paths, args).await,
         Some(Cmd::Service { args }) => service_cmd(&paths, args),
         Some(Cmd::Google { args }) => google_cmd(&paths, args).await,
@@ -235,8 +238,9 @@ async fn setup(paths: &Paths) -> CliResult<()> {
     let mut cfg = Config::load(paths)?;
 
     println!("\n2. Server");
-    println!("   Keep 127.0.0.1 unless you need LAN access; for remote use prefer Tailscale or an HTTPS reverse proxy.");
-    cfg.server.bind = ask("   Bind address", &cfg.server.bind);
+    println!("   127.0.0.1 is always on. Add this machine's LAN or Tailscale IP to reach Alice from other devices");
+    println!("   (several: comma-separated, e.g. 127.0.0.1,192.168.1.20). Plain HTTP: use trusted networks only.");
+    cfg.server.bind = ask("   Listen addresses", &cfg.server.bind);
     loop {
         let p = ask("   Port", &cfg.server.port.to_string());
         if let Ok(n) = p.parse::<u16>() {
@@ -300,18 +304,45 @@ async fn status(paths: &Paths) -> CliResult<()> {
     Ok(())
 }
 
-async fn token_cmd(paths: &Paths, rotate: bool) -> CliResult<()> {
+async fn token_cmd(paths: &Paths, rotate: bool, set: bool) -> CliResult<()> {
     let mut s = Secrets::load(paths)?;
-    if rotate || s.get("server.token").is_none() {
+    if set {
+        let t = ask_secret("New API token (input hidden)");
+        crate::util::check_token(&t)?;
+        if ask_secret("Again") != t {
+            return Err("the two entries differ; nothing changed".into());
+        }
+        s.set("server.token", &t);
+        s.save(paths)?;
+        println!("Token saved. Restart the server (`alice restart`) and log in again on other devices.");
+    } else if rotate || s.get("server.token").is_none() {
         s.set("server.token", &crate::util::new_token());
         s.save(paths)?;
         println!("New token generated. Restart the server (`alice restart`) and log in again on other devices.");
     }
     let cfg = Config::load(paths)?;
-    let url = if cfg.server.public_url.is_empty() { format!("http://{}:{}", cfg.server.bind, cfg.server.port) } else { cfg.server.public_url.clone() };
     println!("Profile:    {}", paths.profile);
-    println!("Server URL: {url}");
-    println!("API token:  {}", s.get("server.token").unwrap_or(""));
+    if !cfg.server.public_url.is_empty() {
+        println!("Server URL: {}", cfg.server.public_url);
+    } else {
+        // Every address other devices can use, then this machine's own.
+        let mut urls: Vec<String> = crate::server::listen_addrs(&cfg.server.bind)
+            .into_iter()
+            .filter(|a| !matches!(a.as_str(), "127.0.0.1" | "localhost" | "::1"))
+            .map(|a| match a.as_str() {
+                "0.0.0.0" | "::" => format!("http://<this machine's IP>:{}", cfg.server.port),
+                h if h.contains(':') => format!("http://[{h}]:{}", cfg.server.port),
+                h => format!("http://{h}:{}", cfg.server.port),
+            })
+            .collect();
+        urls.push(format!("{} (this machine only)", crate::cli::client::local_url(&cfg)));
+        for (i, u) in urls.iter().enumerate() {
+            println!("{} {u}", if i == 0 { "Server URL:" } else { "           " });
+        }
+    }
+    if !set {
+        println!("API token:  {}", s.get("server.token").unwrap_or(""));
+    }
     Ok(())
 }
 

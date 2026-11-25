@@ -112,7 +112,17 @@ ToDo は右上の ＋ からタイトルと期日を入れて追加します。�
 
 ## リモートアクセス
 
-既定は `127.0.0.1` のみ。他の端末からは Tailscale（例: `tailscale serve 7878`）または HTTPS リバースプロキシ経由で接続し、`alice config set server.public_url https://...` を設定してください。
+既定は `127.0.0.1` のみ。同じ Wi-Fi や Tailscale の端末から直接つなぐときは、この Mac の IP を足します（`127.0.0.1` は常に有効なので書かなくて OK、複数はカンマ区切り）:
+
+```sh
+alice config set server.bind 192.168.1.20          # LAN の IP
+alice config set server.bind 192.168.1.20,100.x.y.z # LAN と Tailscale
+alice restart && alice token                       # つなぐ URL を表示
+```
+
+その IP がない（Wi-Fi が変わった等）ときは警告して飛ばし、Alice 自体は起動します。通信は平文 HTTP なので、信頼できるネットワークだけで使ってください。外から使うなら Tailscale（例: `tailscale serve 7878`）か HTTPS リバースプロキシ経由にし、`alice config set server.public_url https://...` を設定します。
+
+API トークンは `alice token --set` で自分で決められます（12 文字以上、入力は非表示）。`alice token --rotate` でランダムに作り直し。どちらも `alice restart` 後に Web / iPhone で入れ直します。間違ったトークンが 1 分に 30 回続いた接続元は 1 分間拒否します。
 
 ## 開発
 

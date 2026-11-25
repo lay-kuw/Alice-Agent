@@ -289,7 +289,7 @@
 				CODE_SIGN_ENTITLEMENTS = Alice.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4NX348LWCL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Alice/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Alice;
@@ -313,7 +313,7 @@
 				CODE_SIGN_ENTITLEMENTS = Alice.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4NX348LWCL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Alice/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Alice;
@@ -335,7 +335,7 @@
 				CODE_SIGN_ENTITLEMENTS = AliceWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4NX348LWCL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AliceWidgets/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Alice;
@@ -360,7 +360,7 @@
 				CODE_SIGN_ENTITLEMENTS = AliceWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 4NX348LWCL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AliceWidgets/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Alice;

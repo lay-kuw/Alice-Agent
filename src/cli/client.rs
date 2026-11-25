@@ -5,13 +5,10 @@ use crate::providers::SseLines;
 use serde_json::Value;
 
 /// URL of the local server from its bind address and port.
+/// The server always listens on loopback too (see `server::listen_addrs`).
 pub fn local_url(cfg: &Config) -> String {
-    let host = match cfg.server.bind.as_str() {
-        "0.0.0.0" | "" => "127.0.0.1".to_string(),
-        "::" => "[::1]".to_string(),
-        h if h.contains(':') => format!("[{h}]"),
-        h => h.to_string(),
-    };
+    let addrs = crate::server::listen_addrs(&cfg.server.bind);
+    let host = if addrs.iter().any(|a| a == "::1" || a == "::") && !addrs.iter().any(|a| a == "127.0.0.1" || a == "0.0.0.0" || a == "localhost") { "[::1]" } else { "127.0.0.1" };
     format!("http://{host}:{}", cfg.server.port)
 }
 

@@ -21,6 +21,21 @@ pub fn new_token() -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A self-chosen API token: long enough not to be guessed, and safe in an
+/// HTTP header and a cookie.
+pub fn check_token(t: &str) -> Result<(), String> {
+    if t.chars().count() < 12 {
+        return Err("the token must be at least 12 characters".into());
+    }
+    if t.len() > 256 {
+        return Err("the token must be at most 256 characters".into());
+    }
+    if let Some(c) = t.chars().find(|c| !c.is_ascii_graphic() || matches!(c, ';' | ',' | '"' | '\\')) {
+        return Err(format!("the token cannot contain {c:?} (use letters, digits and symbols other than ; , \" \\)"));
+    }
+    Ok(())
+}
+
 /// Constant-time comparison for secrets.
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -106,6 +121,15 @@ pub fn truncate(s: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_chosen_tokens() {
+        assert!(check_token("short").is_err());
+        assert!(check_token("my-alice-token-2026!").is_ok());
+        assert!(check_token("has space in it ok?").is_err());
+        assert!(check_token("semi;colon-token-x").is_err());
+        assert!(check_token("日本語のトークンです長い").is_err());
+    }
 
     #[test]
     fn ids_are_unique_and_short() {

@@ -182,7 +182,9 @@ impl Harness {
         let router = alice::server::router(app.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        // With the client address, like the real server (per-address token guard).
+        let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let server = tokio::spawn(async move { axum::serve(listener, svc).await.unwrap() });
         Harness {
             dir,
             paths,

@@ -143,7 +143,62 @@ fn token_ok(app: &App, candidate: &str) -> bool {
     }
 }
 
+/// Wrong tokens per client address. Past the limit within a minute, that
+/// address is refused until the minute is over, so a short self-chosen token
+/// cannot be guessed quickly from the network.
+mod guard {
+    use std::collections::HashMap;
+    use std::net::IpAddr;
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+
+    pub const LIMIT: u32 = 30;
+    const WINDOW: Duration = Duration::from_secs(60);
+    static FAILS: LazyLock<Mutex<HashMap<IpAddr, (Instant, u32)>>> = LazyLock::new(Default::default);
+
+    pub fn ip(ext: &axum::http::Extensions) -> Option<IpAddr> {
+        ext.get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip())
+    }
+
+    pub fn locked(ip: Option<IpAddr>) -> bool {
+        let Some(ip) = ip else { return false };
+        let mut m = FAILS.lock().unwrap();
+        match m.get(&ip) {
+            Some((t, _)) if t.elapsed() >= WINDOW => {
+                m.remove(&ip);
+                false
+            }
+            Some((_, n)) => *n >= LIMIT,
+            None => false,
+        }
+    }
+
+    pub fn fail(ip: Option<IpAddr>) {
+        let Some(ip) = ip else { return };
+        let mut m = FAILS.lock().unwrap();
+        if m.len() > 10_000 {
+            m.retain(|_, (t, _)| t.elapsed() < WINDOW);
+        }
+        let e = m.entry(ip).or_insert((Instant::now(), 0));
+        if e.0.elapsed() >= WINDOW {
+            *e = (Instant::now(), 0);
+        }
+        e.1 += 1;
+        if e.1 == LIMIT {
+            crate::warn!("too many wrong API tokens from {ip}; refusing it for a minute");
+        }
+    }
+}
+
+fn too_many() -> Response {
+    ApiError(StatusCode::TOO_MANY_REQUESTS, "too many wrong tokens; try again in a minute".into()).into_response()
+}
+
 async fn auth(State(app): State<AppRef>, req: Request, next: Next) -> Response {
+    let ip = guard::ip(req.extensions());
+    if guard::locked(ip) {
+        return too_many();
+    }
     let headers = req.headers();
     if let Some(t) = bearer_token(headers) {
         if token_ok(&app, &t) {
@@ -159,6 +214,9 @@ async fn auth(State(app): State<AppRef>, req: Request, next: Next) -> Response {
             }
             return ApiError(StatusCode::FORBIDDEN, "missing CSRF header".into()).into_response();
         }
+    if bearer_token(req.headers()).is_some() || cookie_token(&app, req.headers()).is_some() {
+        guard::fail(ip);
+    }
     ApiError(StatusCode::UNAUTHORIZED, "unauthorized".into()).into_response()
 }
 
@@ -182,8 +240,13 @@ struct LoginBody {
     token: String,
 }
 
-async fn login(State(app): State<AppRef>, headers: HeaderMap, Json(b): Json<LoginBody>) -> ApiResult<Response> {
+async fn login(State(app): State<AppRef>, ext: axum::http::Extensions, headers: HeaderMap, Json(b): Json<LoginBody>) -> ApiResult<Response> {
+    let ip = guard::ip(&ext);
+    if guard::locked(ip) {
+        return Ok(too_many());
+    }
     if !token_ok(&app, b.token.trim()) {
+        guard::fail(ip);
         // Slow down guessing.
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         return Err(ApiError(StatusCode::UNAUTHORIZED, "invalid token".into()));
@@ -1182,19 +1245,52 @@ async fn oauth_callback(State(app): State<AppRef>, Query(q): Query<CallbackQuery
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
 }
 
+/// Addresses to listen on: `server.bind` may list several, comma-separated.
+/// Loopback is always included (the CLI, OAuth callbacks and the Codex tool
+/// bridge use it) unless an unspecified address (0.0.0.0, ::) already covers it.
+pub fn listen_addrs(bind: &str) -> Vec<String> {
+    let mut v: Vec<String> = bind.split(',').map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).collect();
+    let covers = |a: &str| matches!(a, "127.0.0.1" | "localhost" | "0.0.0.0" | "::" | "::1");
+    if !v.iter().any(|a| covers(a)) {
+        v.insert(0, "127.0.0.1".into());
+    }
+    v.dedup();
+    v
+}
+
+fn is_loopback(a: &str) -> bool {
+    matches!(a, "127.0.0.1" | "localhost" | "::1")
+}
+
 /// Bind and serve until shutdown.
 pub async fn serve(app: AppRef) -> std::io::Result<()> {
     let cfg = app.config();
-    let addr = format!("{}:{}", cfg.server.bind, cfg.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    let loopback = cfg.server.bind == "127.0.0.1" || cfg.server.bind == "::1" || cfg.server.bind == "localhost";
-    if !loopback {
-        crate::warn!("listening on non-loopback address {addr}: use Tailscale or an HTTPS reverse proxy for remote access");
+    let mut listeners = Vec::new();
+    for host in listen_addrs(&cfg.server.bind) {
+        let addr = if host.contains(':') { format!("[{host}]:{}", cfg.server.port) } else { format!("{host}:{}", cfg.server.port) };
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(l) => {
+                if !is_loopback(&host) {
+                    crate::warn!("listening on non-loopback address {addr}: plain HTTP, so use it on a trusted network (or Tailscale / an HTTPS proxy)");
+                }
+                crate::info!("alice {} (profile {}) listening on http://{addr}", env!("CARGO_PKG_VERSION"), app.paths.profile);
+                listeners.push(l);
+            }
+            // An address that is not on this machine right now (Wi-Fi changed,
+            // VPN down) must not keep Alice from starting.
+            Err(e) if !is_loopback(&host) && !listeners.is_empty() => crate::warn!("cannot listen on {addr}: {e} (skipped)"),
+            Err(e) => return Err(std::io::Error::new(e.kind(), format!("{addr}: {e}"))),
+        }
     }
-    crate::info!("alice {} (profile {}) listening on http://{addr}", env!("CARGO_PKG_VERSION"), app.paths.profile);
-    let router = router(app.clone());
-    let (stopping_tx, stopping) = tokio::sync::oneshot::channel::<()>();
-    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+    let router = router(app.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let mut servers = tokio::task::JoinSet::new();
+    for l in listeners {
+        let mut rx = stop_rx.clone();
+        let svc = router.clone();
+        servers.spawn(async move { axum::serve(l, svc).with_graceful_shutdown(async move { let _ = rx.wait_for(|s| *s).await; }).await });
+    }
+    let signal = async {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
@@ -1203,19 +1299,35 @@ pub async fn serve(app: AppRef) -> std::io::Result<()> {
         }
         #[cfg(not(unix))]
         let _ = ctrl_c.await;
-        crate::info!("shutting down");
-        let _ = stopping_tx.send(());
-    });
+    };
+    tokio::select! {
+        _ = signal => {}
+        // A listener failed on its own.
+        Some(r) = servers.join_next() => { r.map_err(std::io::Error::other)??; }
+    }
+    crate::info!("shutting down");
+    let _ = stop_tx.send(true);
     // Event streams (Web, TUI, iPhone) never end on their own: give requests
     // in flight a few seconds, then exit instead of waiting forever.
     tokio::select! {
-        r = server => r?,
-        _ = async {
-            let _ = stopping.await;
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        } => crate::info!("closing remaining connections"),
+        _ = async { while servers.join_next().await.is_some() {} } => {}
+        _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => crate::info!("closing remaining connections"),
     }
     // Leave the DB checkpointed on exit.
     let _ = storage::checkpoint(&app.db.lock());
     Ok(())
+}
+
+#[cfg(test)]
+mod listen_tests {
+    use super::listen_addrs;
+
+    #[test]
+    fn loopback_is_always_there() {
+        assert_eq!(listen_addrs("127.0.0.1"), ["127.0.0.1"]);
+        assert_eq!(listen_addrs("192.168.1.20"), ["127.0.0.1", "192.168.1.20"]);
+        assert_eq!(listen_addrs(" 127.0.0.1 , 100.64.0.5 "), ["127.0.0.1", "100.64.0.5"]);
+        assert_eq!(listen_addrs("0.0.0.0"), ["0.0.0.0"]);
+        assert_eq!(listen_addrs(""), ["127.0.0.1"]);
+    }
 }

@@ -17,8 +17,12 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(store.messages.filter { $0.role != "tool" && !($0.role == "user" && $0.client == "agent") && !AgentReply.isQuiet($0) }) { m in
+                    ForEach(visible) { m in
                         MessageRow(message: m, store: store).id(m.id)
+                    }
+                    // Tools run between replies; the app shows only that Alice is busy.
+                    if store.generating, visible.last.map({ !$0.isStreaming || $0.content.isEmpty }) ?? true {
+                        TypingDots().id("typing")
                     }
                     ForEach(store.currentApprovals) { a in
                         ApprovalCard(approval: a) { ok in Task { await store.resolve(a, approve: ok) } }
@@ -198,6 +202,36 @@ struct ChatView: View {
     }
 }
 
+extension ChatView {
+    /// What the app shows: no tool traffic (the Web UI shows it), no hidden
+    /// agent instructions, and no "nothing to report" from an agent.
+    var visible: [Message] {
+        store.messages.filter { m in
+            switch m.role {
+            case "user": m.client != "agent"
+            case "assistant":
+                !AgentReply.isQuiet(m)
+                    && (!m.content.isEmpty || m.status == "error" || (m.status == "cancelled" && m.client != "agent") || (m.isStreaming && !m.hasToolCalls))
+            default: false
+            }
+        }
+    }
+}
+
+/// Three soft dots while Alice is working.
+struct TypingDots: View {
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle().fill(Palette.lavender).frame(width: 7, height: 7)
+                    .phaseAnimator([0.3, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.6).delay(Double(i) * 0.2) }
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityLabel("Alice is working")
+    }
+}
+
 struct MessageRow: View {
     let message: Message
     let store: ChatStore
@@ -219,19 +253,8 @@ struct MessageRow: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                if !message.content.isEmpty || message.isStreaming {
-                    MarkdownView(text: message.content.isEmpty ? "…" : message.content)
-                }
-                ForEach(message.toolCalls ?? [], id: \.id) { call in
-                    let result = store.toolResult(for: call.id)
-                    let ok = result?.meta?["ok"]?.bool
-                    Label {
-                        Text("\(call.name) \(call.arguments.summary)").lineLimit(2)
-                    } icon: {
-                        Image(systemName: result == nil ? "gearshape" : (ok == false ? "xmark.circle" : "checkmark.circle"))
-                    }
-                    .font(.caption.monospaced())
-                    .foregroundStyle(ok == false ? .red : .secondary)
+                if !message.content.isEmpty {
+                    MarkdownView(text: message.content)
                 }
                 if message.status == "error" {
                     Text(message.meta?["error"]?.string ?? "Generation failed").font(.caption).foregroundStyle(.red)

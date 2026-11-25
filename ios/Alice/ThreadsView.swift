@@ -103,8 +103,10 @@ struct ThreadsView: View {
             }
             #if DEBUG
             .onAppear { if ProcessInfo.processInfo.environment["ALICE_DEV_AGENTS"] != nil { showAgents = true } }
-            .task(id: store.threads.first?.id) {
-                if ProcessInfo.processInfo.environment["ALICE_DEV_CHAT"] != nil, !showChat, let t = store.threads.first {
+            .task(id: store.threads.count) {
+                // ALICE_DEV_CHAT=1 opens the newest chat; a thread id opens that one.
+                if let k = ProcessInfo.processInfo.environment["ALICE_DEV_CHAT"], !showChat,
+                   let t = store.threads.first(where: { $0.id == k }) ?? (k.count == 12 ? nil : store.threads.first) {
                     await store.open(t.id)
                     showChat = true
                 }

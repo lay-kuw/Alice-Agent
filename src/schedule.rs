@@ -235,9 +235,11 @@ pub fn tick(app: &AppRef, now: i64) -> usize {
 /// The user never sees this message.
 fn instruction(a: &Agent) -> String {
     format!(
-        "{}\n\n---\n(Scheduled task \"{}\", running on its own; the user does not see this message. Write to the user as if you \
-         were reaching out on your own, without mentioning a task, a schedule or instructions. If, following the instructions \
-         above, there is nothing to report or do this time, reply with exactly {SILENT} and nothing else.)",
+        "{}\n\n---\n(Scheduled task \"{}\", running on its own; the user does not see this message. Write to the user in your \
+         usual voice and personality from your instructions, as if you were reaching out on your own, without mentioning a \
+         task, a schedule or instructions. Do not describe the tools, skills, searches or steps you used; just tell the result. \
+         If, following the instructions above, there is nothing to report or do this time, reply with exactly {SILENT} and \
+         nothing else.)",
         a.prompt, a.name
     )
 }

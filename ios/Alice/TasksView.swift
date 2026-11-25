@@ -4,17 +4,14 @@ import SwiftUI
 struct TasksView: View {
     @Bindable var google: GoogleStore
     @State private var listId: String?
-    @State private var newTitle = ""
-    @State private var due: Date?
     @State private var showCompleted = false
-    @FocusState private var adding: Bool
+    @State private var adding = false
 
     var body: some View {
         NavigationStack {
             GoogleGate(google: google, group: "tasks", title: "Tasks") {
                 List {
                     if google.lists.count > 1 { listChips.listRowBackground(Color.clear).listRowSeparator(.hidden) }
-                    addBar.listRowBackground(Color.clear).listRowSeparator(.hidden)
                     if let list = current {
                         let open = list.tasks.filter { !$0.completed }
                         let done = list.tasks.filter(\.completed)
@@ -48,6 +45,21 @@ struct TasksView: View {
                 .task { if !google.tasksLoaded { await google.loadTasks() } }
             }
             .navigationTitle(current?.title ?? String(localized: "Tasks"))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }
+                        .accessibilityLabel("New task")
+                        .disabled(current == nil)
+                }
+            }
+            #if DEBUG
+            .task(id: google.tasksLoaded) {
+                if google.tasksLoaded, ProcessInfo.processInfo.environment["ALICE_DEV_ADD"] != nil { adding = true }
+            }
+            #endif
+            .sheet(isPresented: $adding) {
+                NewTaskSheet(google: google, listId: current?.id ?? "")
+            }
             .googleErrors(google)
         }
     }
@@ -79,50 +91,6 @@ struct TasksView: View {
         }
     }
 
-    private var addBar: some View {
-        let empty = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
-        return HStack(spacing: 10) {
-            TextField("Add a task", text: $newTitle)
-                .focused($adding)
-                .submitLabel(.done)
-                .onSubmit(add)
-            if !empty {
-                Button("Add", action: add)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Palette.accent, in: Capsule())
-                    .buttonStyle(.borderless)
-                    .transition(.scale.combined(with: .opacity))
-            }
-            Menu {
-                Button("Today") { due = Calendar.current.startOfDay(for: .now) }
-                Button("Tomorrow") { due = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: .now)) }
-                Button("Next week") { due = Calendar.current.date(byAdding: .day, value: 7, to: Calendar.current.startOfDay(for: .now)) }
-                if due != nil { Button("No date", role: .destructive) { due = nil } }
-            } label: {
-                if let due {
-                    Chip(text: due.formatted(.dateTime.month(.abbreviated).day()), systemImage: "calendar", color: Palette.pink)
-                } else {
-                    Image(systemName: "calendar.badge.plus").foregroundStyle(.secondary)
-                }
-            }
-        }
-        .card(padding: 12)
-        .animation(.snappy, value: empty)
-    }
-
-    private func add() {
-        let title = newTitle.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty, let list = current?.id else { return }
-        newTitle = ""
-        let d = due
-        due = nil
-        Task { await google.addTask(list: list, title: title, due: d) }
-        adding = true
-    }
-
     private func row(_ t: TaskItem, list: String) -> some View {
         TaskRow(task: t) { Task { await google.toggle(t, in: list) } }
             .padding(.leading, t.parent == nil ? 0 : 28)
@@ -131,6 +99,83 @@ struct TasksView: View {
             .swipeActions {
                 Button(role: .destructive) { Task { await google.deleteTask(t, in: list) } } label: { Label("Delete", systemImage: "trash") }
             }
+    }
+}
+
+struct NewTaskSheet: View {
+    @Bindable var google: GoogleStore
+    @State var listId: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var hasDue = false
+    @State private var due = Calendar.current.startOfDay(for: .now)
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Title", text: $title, axis: .vertical)
+                        .font(.title3.weight(.semibold))
+                        .focused($focused)
+                    if google.lists.count > 1 {
+                        Picker("List", selection: $listId) {
+                            ForEach(google.lists) { Text($0.title).tag($0.id) }
+                        }
+                    }
+                }
+                Section {
+                    Toggle("Due date", isOn: $hasDue.animation()).tint(Palette.pink)
+                    if hasDue {
+                        // Quick picks, then the full calendar.
+                        HStack(spacing: 8) {
+                            quick("Today", 0)
+                            quick("Tomorrow", 1)
+                            quick("Next week", 7)
+                        }
+                        DatePicker("Date", selection: $due, displayedComponents: .date)
+                            .datePickerStyle(.graphical)
+                            .tint(Palette.pink)
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(PastelBackground())
+            .navigationTitle("New task")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let d = hasDue ? due : nil
+                        // Shown in the list at once; saved in the background.
+                        Task { await google.addTask(list: listId, title: t, due: d) }
+                        dismiss()
+                    }
+                    .bold()
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear { focused = true }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func quick(_ label: LocalizedStringKey, _ days: Int) -> some View {
+        let d = Calendar.current.date(byAdding: .day, value: days, to: Calendar.current.startOfDay(for: .now)) ?? .now
+        let on = Calendar.current.isDate(d, inSameDayAs: due)
+        return Button { withAnimation(.snappy) { due = d } } label: {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .foregroundStyle(on ? .white : .primary)
+                .background {
+                    if on { Capsule().fill(Palette.accent) } else { Capsule().fill(Palette.lavender.opacity(0.15)) }
+                }
+        }
+        .buttonStyle(.borderless)
     }
 }
 

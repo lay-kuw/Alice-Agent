@@ -82,7 +82,7 @@ alice profile default    # default に戻す
 
 チャットのほか、カレンダー・メール・ToDo のタブがあります。どれも Alice サーバー経由で Google Workspace スキルの接続を使うので、iPhone に Google のトークンは置きません。ToDo（Google Tasks）を使うには `alice skill groups google-workspace` で Tasks をオンにし、`alice skill login google-workspace` で再接続します。
 
-メールは右へスワイプで既読／未読を切り替えられます。Gmail の変更権限（`gmail.modify`）が要るので、以前に接続した場合は `alice skill login google-workspace` で一度再接続してください。カレンダーは左上のアイコンで週／月表示を切り替え、週表示は左右スワイプで前後の週へ、予定一覧を左右スワイプで前後の日へ移動します。
+ToDo は右上の ＋ からタイトルと期日を入れて追加します。メールは右へスワイプで既読／未読を切り替えられます。Gmail の変更権限（`gmail.modify`）が要るので、以前に接続した場合は `alice skill login google-workspace` で一度再接続してください。カレンダーは左上のアイコンで週／月表示を切り替え、週表示は左右スワイプで前後の週へ、予定一覧を左右スワイプで前後の日へ移動します。
 
 ## 人格（SOUL.md）
 

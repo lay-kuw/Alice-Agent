@@ -54,12 +54,19 @@ pub struct App {
     /// Models discovered from providers (names, efforts); ids live in config.
     pub models: Mutex<crate::providers::catalog::Discovered>,
     pub models_refreshing: std::sync::atomic::AtomicBool,
+    /// secrets.toml as last read, to notice edits made by the CLI.
+    secrets_mtime: Mutex<Option<std::time::SystemTime>>,
+}
+
+fn mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
 pub type AppRef = Arc<App>;
 
 impl App {
     pub fn new(paths: Paths, config: Config, secrets: Secrets, db: Db) -> AppRef {
+        let paths_secrets = paths.secrets();
         let (events, _) = broadcast::channel(1024);
         let http = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
@@ -82,6 +89,7 @@ impl App {
             bridges: Mutex::new(HashMap::new()),
             models: Mutex::new(HashMap::new()),
             models_refreshing: Default::default(),
+            secrets_mtime: Mutex::new(mtime(&paths_secrets)),
         })
     }
 
@@ -103,13 +111,35 @@ impl App {
         Ok(next)
     }
 
+    /// Read-modify-write, starting from the file, so a change made meanwhile by
+    /// the CLI (e.g. `alice token --set`) is kept.
     pub fn update_secrets(&self, f: impl FnOnce(&mut Secrets)) -> Result<(), String> {
         let mut guard = self.secrets.write().unwrap_or_else(|e| e.into_inner());
-        let mut next = guard.clone();
+        let mut next = Secrets::load(&self.paths).unwrap_or_else(|_| guard.clone());
         f(&mut next);
         next.save(&self.paths)?;
+        *self.secrets_mtime.lock().unwrap_or_else(|e| e.into_inner()) = mtime(&self.paths.secrets());
         *guard = next;
         Ok(())
+    }
+
+    /// Reload secrets.toml when it changed on disk since it was last read.
+    /// Returns whether it was reloaded.
+    pub fn reload_secrets_if_changed(&self) -> bool {
+        let now = mtime(&self.paths.secrets());
+        let mut seen = self.secrets_mtime.lock().unwrap_or_else(|e| e.into_inner());
+        if now == *seen {
+            return false;
+        }
+        match Secrets::load(&self.paths) {
+            Ok(s) => {
+                *self.secrets.write().unwrap_or_else(|e| e.into_inner()) = s;
+                *seen = now;
+                crate::info!("secrets.toml changed on disk; reloaded");
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Broadcast an event to all SSE subscribers and channel tasks.

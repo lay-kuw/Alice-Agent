@@ -122,7 +122,7 @@ alice restart && alice token                       # つなぐ URL を表示
 
 その IP がない（Wi-Fi が変わった等）ときは警告して飛ばし、Alice 自体は起動します。通信は平文 HTTP なので、信頼できるネットワークだけで使ってください。外から使うなら Tailscale（例: `tailscale serve 7878`）か HTTPS リバースプロキシ経由にし、`alice config set server.public_url https://...` を設定します。
 
-API トークンは `alice token --set` で自分で決められます（12 文字以上、入力は非表示）。`alice token --rotate` でランダムに作り直し。どちらも `alice restart` 後に Web / iPhone で入れ直します。間違ったトークンが 1 分に 30 回続いた接続元は 1 分間拒否します。
+API トークンは `alice token --set` で自分で決められます（12 文字以上、入力は非表示）。`alice token --rotate` でランダムに作り直し。どちらも再起動なしですぐ有効になるので、Web / iPhone で入れ直します。間違ったトークンが 1 分に 30 回続いた接続元は 1 分間拒否します。
 
 ## 開発
 

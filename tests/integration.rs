@@ -356,3 +356,22 @@ async fn conversation_survives_restart() {
     assert_eq!(r["status"], "complete");
     assert!(content(&r).contains("ECHO=after restart"));
 }
+
+#[tokio::test]
+async fn token_changed_on_disk_works_without_restart() {
+    let h = Harness::new().await;
+    // What `alice token --set` does while the server runs.
+    let mut s = alice::config::Secrets::load(&h.paths).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    s.set("server.token", "my-own-token-2026!");
+    s.save(&h.paths).unwrap();
+    let status = |t: &'static str| {
+        let h = &h;
+        async move { h.http.get(format!("{}/api/threads", h.base)).bearer_auth(t).send().await.unwrap().status().as_u16() }
+    };
+    assert_eq!(status("my-own-token-2026!").await, 200);
+    assert_eq!(status("test-token-0123456789").await, 401);
+    // A later write by the server keeps the new token.
+    h.app.update_secrets(|s| s.set("brave.api_key", "k")).unwrap();
+    assert_eq!(alice::config::Secrets::load(&h.paths).unwrap().get("server.token"), Some("my-own-token-2026!"));
+}

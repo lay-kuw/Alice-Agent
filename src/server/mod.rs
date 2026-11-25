@@ -137,10 +137,9 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn token_ok(app: &App, candidate: &str) -> bool {
-    match app.secrets().get("server.token") {
-        Some(t) => ct_eq(t.as_bytes(), candidate.as_bytes()),
-        None => false,
-    }
+    let check = || app.secrets().get("server.token").is_some_and(|t| ct_eq(t.as_bytes(), candidate.as_bytes()));
+    // A token changed with `alice token --set` works without a restart.
+    check() || (app.reload_secrets_if_changed() && check())
 }
 
 /// Wrong tokens per client address. Past the limit within a minute, that

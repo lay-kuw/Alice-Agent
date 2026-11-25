@@ -314,11 +314,11 @@ async fn token_cmd(paths: &Paths, rotate: bool, set: bool) -> CliResult<()> {
         }
         s.set("server.token", &t);
         s.save(paths)?;
-        println!("Token saved. Restart the server (`alice restart`) and log in again on other devices.");
+        println!("Token saved. The running server uses it right away; log in again on the Web and iPhone.");
     } else if rotate || s.get("server.token").is_none() {
         s.set("server.token", &crate::util::new_token());
         s.save(paths)?;
-        println!("New token generated. Restart the server (`alice restart`) and log in again on other devices.");
+        println!("New token generated. The running server uses it right away; log in again on the Web and iPhone.");
     }
     let cfg = Config::load(paths)?;
     println!("Profile:    {}", paths.profile);

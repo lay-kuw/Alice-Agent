@@ -134,6 +134,7 @@ struct MainTabs: View {
     var onDisconnect: () -> Void
     @SceneStorage("tab") private var tab = "home"
     @AppStorage("home.enabled") private var homeEnabled = true
+    @Environment(\.locale) private var locale
 
     var body: some View {
         TabView(selection: $tab) {
@@ -143,7 +144,7 @@ struct MainTabs: View {
                     .tag("home")
             }
             ChatTab(store: store, connectionName: connectionName, onDisconnect: onDisconnect)
-                .tabItem { Label(homeEnabled ? "Chat" : "Alice", systemImage: "ellipsis.bubble.fill") }
+                .tabItem { Label("Chat", systemImage: "ellipsis.bubble.fill") }
                 .tag("chat")
             CalendarView(google: google)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
@@ -155,6 +156,15 @@ struct MainTabs: View {
             TasksView(google: google)
                 .tabItem { Label("To-do", systemImage: "checkmark.square.fill") }
                 .tag("tasks")
+        }
+        // Titles kept by navigation do not follow a language change; rebuild the tabs.
+        .id(locale.identifier)
+        .sideDrawer {
+            ThreadsSheet(store: store) { id in
+                Drawer.shared.open = false
+                if let id { Task { await store.open(id) } } else { store.newChat() }
+                tab = "chat"
+            }
         }
         // Replies notify only when their chat is not on screen.
         .onChange(of: tab, initial: true) { _, t in store.viewingChat = t == "chat" }

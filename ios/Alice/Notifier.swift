@@ -68,7 +68,7 @@ enum Notifier {
                 for e in g.snapshot(now: now).events {
                     let at = e.allDay ? morning(e.start) : e.start.addingTimeInterval(-eventLead)
                     guard at > now else { continue }
-                    let c = content(e.title, body: e.allDay ? String(localized: "All day") : "\(Fmt.time(e.start)) – \(Fmt.time(e.end))" + (e.location.map { " · \($0)" } ?? ""), tab: "calendar")
+                    let c = content(e.title, body: e.allDay ? L("All day") : "\(Fmt.time(e.start)) – \(Fmt.time(e.end))" + (e.location.map { " · \($0)" } ?? ""), tab: "calendar")
                     planned.append(("cal.\(e.id).\(Int(e.start.timeIntervalSince1970))", at, c))
                 }
             }
@@ -81,7 +81,7 @@ enum Notifier {
                         guard let d = t.dueDate else { continue }
                         let at = morning(d)
                         guard at > now else { continue }
-                        planned.append(("task.\(t.id).\(t.due ?? "")", at, content(t.title, body: String(localized: "Due today"), tab: "tasks")))
+                        planned.append(("task.\(t.id).\(t.due ?? "")", at, content(t.title, body: L("Due today"), tab: "tasks")))
                     }
                 }
             }
@@ -153,7 +153,9 @@ enum Notifier {
     }
 
     private static func snippet(_ s: String) -> String {
-        let plain = s.replacingOccurrences(of: #"[#*_`>|]+"#, with: " ", options: .regularExpression)
+        // Markdown marks and table rules (|---|:---:|) are not worth reading in a notification.
+        let plain = s.replacingOccurrences(of: #":?-{3,}:?"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[#*_`>|]+"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
         return String(plain.prefix(180))

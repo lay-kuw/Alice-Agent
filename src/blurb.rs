@@ -29,7 +29,12 @@ fn what(screen: &str) -> &'static str {
 pub fn prompt(soul: &str, name: &str, tone: &str, screen: &str, lang: &str, now: &str) -> String {
     let soul = soul.trim().replace("{{name}}", name);
     let tone = if tone.trim().is_empty() { "your usual voice".to_string() } else { format!("this tone: {}", tone.trim()) };
-    let language = if lang == "en" { "English" } else { "Japanese" };
+    // "soul": whatever language her personality notes are written in.
+    let language = match lang {
+        "en" => "English",
+        "ja" => "Japanese",
+        _ => "the language your personality notes above are written in (Japanese if unclear)",
+    };
     format!(
         "{soul}\n\nYou are writing one short line that {name} says at the top of {} in the user's app. \
 Use {tone}. Write in {language}. At most two short sentences (about 50 Japanese characters or 20 English words), \
@@ -43,7 +48,10 @@ pub async fn say(app: &AppRef, screen: &str, lang: &str, facts: &str, now: &str)
     if !SCREENS.contains(&screen) {
         return Err("unknown screen".into());
     }
-    let lang = if lang == "en" { "en" } else { "ja" };
+    let lang = match lang {
+        "en" | "ja" => lang,
+        _ => "soul",
+    };
     let facts = crate::util::truncate(facts.trim(), 2000);
     let cfg = app.config();
     let key = format!("{screen}|{lang}|{}|{}|{facts}", cfg.agent.blurb_tone, crate::util::truncate(now, 13));

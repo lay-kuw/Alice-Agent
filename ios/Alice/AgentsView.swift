@@ -96,7 +96,7 @@ struct AgentRow: View {
                 HStack(spacing: 6) {
                     Chip(text: AgentText.state(agent), systemImage: agent.enabled && agent.nextRun != nil ? "clock" : nil, color: agent.enabled ? Palette.lavender : .secondary)
                         .fixedSize()
-                    Text("→ \(agent.threadTitle ?? String(localized: "New chat"))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Text("→ \(agent.threadTitle ?? L("New chat"))").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     if let s = agent.lastStatus { AgentText.status(s) }
                 }
             }
@@ -109,19 +109,19 @@ struct AgentRow: View {
 }
 
 enum AgentText {
-    static func when(_ d: Date) -> String { d.formatted(.dateTime.month(.defaultDigits).day().weekday(.abbreviated).hour().minute()) }
+    static func when(_ d: Date) -> String { d.fmt(.dateTime.month(.defaultDigits).day().weekday(.abbreviated).hour().minute()) }
 
     static func schedule(_ a: AgentJob) -> String {
-        if let t = a.times, !t.isEmpty { return String(localized: "Every day at \(t.joined(separator: " · "))") }
+        if let t = a.times, !t.isEmpty { return L("Every day at \(t.joined(separator: " · "))") }
         let (u, n) = AgentJob.split(a.everyMin)
         switch u {
-        case .once: return String(localized: "Once at \(when(a.start))")
-        case .days where n == 1: return String(localized: "Every day")
-        case .weeks where n == 1: return String(localized: "Every week")
-        case .days: return String(localized: "Every \(n) days")
-        case .weeks: return String(localized: "Every \(n) weeks")
-        case .hours: return String(localized: "Every \(n) h")
-        case .minutes: return String(localized: "Every \(n) min")
+        case .once: return L("Once at \(when(a.start))")
+        case .days where n == 1: return L("Every day")
+        case .weeks where n == 1: return L("Every week")
+        case .days: return L("Every \(n) days")
+        case .weeks: return L("Every \(n) weeks")
+        case .hours: return L("Every \(n) h")
+        case .minutes: return L("Every \(n) min")
         }
     }
 
@@ -136,9 +136,9 @@ enum AgentText {
     }
 
     static func state(_ a: AgentJob) -> String {
-        if !a.enabled { return String(localized: "Paused") }
-        if let n = a.next { return String(localized: "Next \(when(n))") }
-        return String(localized: "Done")
+        if !a.enabled { return L("Paused") }
+        if let n = a.next { return L("Next \(when(n))") }
+        return L("Done")
     }
 }
 
@@ -249,10 +249,10 @@ struct AgentEditor: View {
 
     private var unitName: String {
         switch unit {
-        case .minutes: String(localized: "min")
-        case .hours: String(localized: "h")
-        case .days: String(localized: "days")
-        case .weeks: String(localized: "weeks")
+        case .minutes: L("min")
+        case .hours: L("h")
+        case .days: L("days")
+        case .weeks: L("weeks")
         case .once: ""
         }
     }

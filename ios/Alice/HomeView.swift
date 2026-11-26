@@ -11,7 +11,6 @@ struct HomeView: View {
     /// Switch tabs ("chat", "calendar", "mail", "tasks").
     var go: (String) -> Void
     @State private var ask = ""
-    @State private var showThreads = false
     @State private var showSettings = false
     @State private var showAgents = false
     @FocusState private var focused: Bool
@@ -34,7 +33,7 @@ struct HomeView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { showThreads = true } label: { Image(systemName: "line.3.horizontal") }.accessibilityLabel("Chats")
+                    Button { Drawer.shared.open = true } label: { Image(systemName: "line.3.horizontal") }.accessibilityLabel("Chats")
                 }
                 ToolbarItem(placement: .principal) { Text("Alice Agent ✨").font(.headline.weight(.bold)) }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -45,13 +44,6 @@ struct HomeView: View {
                 }
             }
             .task(id: facts) { await Blurbs.shared.ask("home", facts: facts, client: store.client) }
-        }
-        .sheet(isPresented: $showThreads) {
-            ThreadsSheet(store: store) { id in
-                showThreads = false
-                if let id { Task { await store.open(id) } } else { store.newChat() }
-                go("chat")
-            }
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {

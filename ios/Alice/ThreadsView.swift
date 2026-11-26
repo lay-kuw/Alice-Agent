@@ -7,19 +7,12 @@ struct ChatTab: View {
     @Bindable var store: ChatStore
     let connectionName: String
     var onDisconnect: () -> Void
-    @State private var showThreads = false
     @State private var showSettings = false
     @State private var showAgents = false
 
     var body: some View {
         NavigationStack {
-            ChatView(store: store, openThreads: { showThreads = true }, openSettings: { showSettings = true }, openAgents: { showAgents = true })
-        }
-        .sheet(isPresented: $showThreads) {
-            ThreadsSheet(store: store) { id in
-                showThreads = false
-                if let id { Task { await store.open(id) } } else { store.newChat() }
-            }
+            ChatView(store: store, openThreads: { Drawer.shared.open = true }, openSettings: { showSettings = true }, openAgents: { showAgents = true })
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {
@@ -39,14 +32,14 @@ struct ChatTab: View {
             guard let id else { return }
             Router.shared.thread = nil
             showAgents = false
-            showThreads = false
+            Drawer.shared.open = false
             Task { await store.open(id) }
         }
         #if DEBUG
         .onAppear {
             let env = ProcessInfo.processInfo.environment
             if env["ALICE_DEV_AGENTS"] != nil { showAgents = true }
-            if env["ALICE_DEV_THREADS"] != nil { showThreads = true }
+            if env["ALICE_DEV_THREADS"] != nil { Drawer.shared.open = true }
             if env["ALICE_DEV_SETTINGS"] != nil { showSettings = true }
         }
         .task(id: store.threads.count) {
@@ -61,6 +54,54 @@ struct ChatTab: View {
             Button("OK", role: .cancel) {}
         } message: { Text(store.lastError ?? "") }
     }
+}
+
+/// The chat list slides in from the left over everything (tabs included).
+@MainActor
+@Observable
+final class Drawer {
+    static let shared = Drawer()
+    var open = false
+}
+
+struct SideDrawer<Panel: View>: ViewModifier {
+    @Bindable var drawer = Drawer.shared
+    @ViewBuilder var panel: () -> Panel
+    @GestureState private var drag: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            GeometryReader { geo in
+                let width = min(330, geo.size.width * 0.84)
+                ZStack(alignment: .leading) {
+                    if drawer.open {
+                        Color.black.opacity(0.28)
+                            .ignoresSafeArea()
+                            .onTapGesture { withAnimation(.snappy) { drawer.open = false } }
+                            .transition(.opacity)
+                        panel()
+                            .frame(width: width)
+                            .background(PastelBackground())
+                            .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: 26, topTrailingRadius: 26, style: .continuous))
+                            .shadow(color: .black.opacity(0.18), radius: 20, x: 6)
+                            .ignoresSafeArea(edges: .vertical)
+                            .offset(x: min(0, drag))
+                            .gesture(
+                                DragGesture(minimumDistance: 12)
+                                    .updating($drag) { v, s, _ in s = v.translation.width }
+                                    .onEnded { v in if v.translation.width < -width / 4 { withAnimation(.snappy) { drawer.open = false } } }
+                            )
+                            .transition(.move(edge: .leading))
+                    }
+                }
+                .animation(.snappy, value: drawer.open)
+            }
+        }
+    }
+}
+
+extension View {
+    func sideDrawer<Panel: View>(@ViewBuilder _ panel: @escaping () -> Panel) -> some View { modifier(SideDrawer(panel: panel)) }
 }
 
 /// All chats, starred first. Picking one (or New chat) hands it back.
@@ -82,16 +123,21 @@ struct ThreadsSheet: View {
                     ThreadRow(thread: t, current: t.id == store.currentThreadId)
                         .tag(t.id)
                         .listRowBackground(Color.clear)
-                        .listRowSeparatorTint(Palette.lavender.opacity(0.25))
-                        // Right to left: delete. Left to right: rename.
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
+                        // Right to left: delete (not for starred chats). Left to right: rename.
                         .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) { Task { await store.delete(t.id) } } label: { Label { Text("Delete") } icon: { SwipeIcon(name: "trash") } }
+                            if !t.isPinned {
+                                Button(role: .destructive) { Task { await store.delete(t.id) } } label: { Label { Text("Delete") } icon: { SwipeIcon(name: "trash") } }
+                            }
                         }
                         // Press and hold: the row pops up with the same actions.
                         .contextMenu {
                             Button(t.isPinned ? "Unstar" : "Star", systemImage: t.isPinned ? "star.slash" : "star.fill") { Task { await store.setPinned(t.id, !t.isPinned) } }
                             Button("Rename", systemImage: "pencil") { newTitle = t.title; renaming = t }
-                            Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
+                            if !t.isPinned {
+                                Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
+                            }
                         }
                         .swipeActions(edge: .leading) {
                             Button { newTitle = t.title; renaming = t } label: { Label { Text("Rename") } icon: { SwipeIcon(name: "pencil") } }.tint(Palette.lavender)
@@ -120,7 +166,9 @@ struct ThreadsSheet: View {
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { Drawer.shared.open = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { pick(nil) } label: { Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent) }
                         .accessibilityLabel("New chat")
@@ -132,7 +180,6 @@ struct ThreadsSheet: View {
                 Button("Cancel", role: .cancel) {}
             }
         }
-        .presentationDetents([.large])
     }
 }
 
@@ -158,13 +205,13 @@ struct ThreadRow: View {
     var current = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Image(systemName: "sparkles")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(LinearGradient(colors: [Palette.color(for: thread.id), Palette.color(for: thread.id).opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            Text(thread.displayTitle).font(.body.weight(current ? .bold : .medium)).foregroundStyle(.primary).lineLimit(1)
+                .frame(width: 26, height: 26)
+                .background(LinearGradient(colors: [Palette.color(for: thread.id), Palette.color(for: thread.id).opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            Text(thread.displayTitle).font(.subheadline.weight(current ? .bold : .medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 0)
             if thread.isPinned {
                 Image(systemName: "star.fill")
@@ -175,7 +222,9 @@ struct ThreadRow: View {
             }
             if thread.generating == true { ProgressView().controlSize(.small).tint(Palette.pink) }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(current ? Palette.lavender.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .contentShape(Rectangle())
     }
 }

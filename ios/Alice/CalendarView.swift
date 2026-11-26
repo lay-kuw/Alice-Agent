@@ -51,7 +51,7 @@ struct CalendarView: View {
                     await load(force: false)
                 }
             }
-            .navigationTitle(focusMonth.formatted(.dateTime.year().month(.wide)))
+            .navigationTitle(focusMonth.fmt(.dateTime.year().month(.wide)))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 #if DEBUG
@@ -189,7 +189,7 @@ struct CalendarView: View {
             HStack(spacing: 0) {
                 ForEach(0..<7, id: \.self) { i in
                     let d = cal.date(byAdding: .day, value: i, to: head) ?? head
-                    Text(d.formatted(.dateTime.weekday(.narrow)))
+                    Text(d.fmt(.dateTime.weekday(.narrow)))
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(Palette.weekday(d) ?? .secondary)
                         .frame(maxWidth: .infinity)
@@ -258,9 +258,9 @@ struct CalendarView: View {
 
     private var dayHeader: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(Calendar.current.isDateInToday(selected) ? String(localized: "Today") : selected.formatted(.dateTime.weekday(.wide)))
+            Text(Calendar.current.isDateInToday(selected) ? L("Today") : selected.fmt(.dateTime.weekday(.wide)))
                 .font(.system(.title2, design: .rounded).weight(.bold))
-            Text(selected.formatted(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
+            Text(selected.fmt(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
             Spacer()
         }
         // An overlay, so the spinner never changes the header's height.
@@ -425,7 +425,7 @@ struct EventDetailSheet: View {
                     Text(event.displayTitle).font(.system(.title, design: .rounded).weight(.bold))
                     VStack(alignment: .leading, spacing: 10) {
                         if let s = event.startDate {
-                            Label(event.allDay ? s.formatted(date: .complete, time: .omitted) : "\(s.formatted(date: .abbreviated, time: .shortened)) – \(event.endDate.map(Fmt.time) ?? "")", systemImage: "calendar")
+                            Label(event.allDay ? s.fmt(Date.FormatStyle(date: .complete, time: .omitted)) : "\(s.fmt(Date.FormatStyle(date: .abbreviated, time: .shortened))) – \(event.endDate.map(Fmt.time) ?? "")", systemImage: "calendar")
                         }
                         if let l = event.location, !l.isEmpty { Label(l, systemImage: "mappin.and.ellipse") }
                     }

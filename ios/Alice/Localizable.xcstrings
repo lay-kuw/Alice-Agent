@@ -1453,6 +1453,16 @@
         }
       }
     },
+    "Show the original layout": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "元のレイアウトで表示"
+          }
+        }
+      }
+    },
     "Shown at the top of Home, Chat, Calendar, Mail and To-do. Turn the comments off to save model use.": {
       "localizations": {
         "ja": {
@@ -1573,6 +1583,16 @@
         }
       }
     },
+    "This week's tasks": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今週のタスク"
+          }
+        }
+      }
+    },
     "Title": {
       "localizations": {
         "ja": {
@@ -1583,22 +1603,12 @@
         }
       }
     },
-    "To me": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自分宛"
-          }
-        }
-      }
-    },
     "To-do": {
       "localizations": {
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "To-do"
+            "value": "やること"
           }
         }
       }
@@ -1790,6 +1800,54 @@
           "stringUnit": {
             "state": "translated",
             "value": "分"
+          }
+        }
+      }
+    },
+    "scope.all": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべて"
+          }
+        }
+      }
+    },
+    "scope.today": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今日"
+          }
+        }
+      }
+    },
+    "scope.week": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Week"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今週"
           }
         }
       }

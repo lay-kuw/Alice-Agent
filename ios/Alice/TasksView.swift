@@ -6,8 +6,8 @@ struct TasksView: View {
     /// The list shown, or nil for every list grouped by list.
     @AppStorage("tasks.list") private var listId = ""
     @State private var showCompleted = false
-    /// today / week / all
-    @AppStorage("tasks.scope") private var scope = "today"
+    /// all / today / week
+    @AppStorage("tasks.view") private var scope = "all"
     @State private var openGroups: Set<String> = []
     @State private var adding = false
     @State private var editing: Editing?
@@ -72,9 +72,9 @@ struct TasksView: View {
 
     private var scopeChips: some View {
         HStack(spacing: 8) {
-            scopeChip("today", "Today", "sun.max")
-            scopeChip("week", "This week", "calendar")
-            scopeChip("all", "All", "tray.full")
+            scopeChip("all", "scope.all", "tray.full")
+            scopeChip("today", "scope.today", "sun.max")
+            scopeChip("week", "scope.week", "calendar")
         }
     }
 
@@ -82,6 +82,8 @@ struct TasksView: View {
         Button { withAnimation(.snappy) { scope = id } } label: {
             Label(title, systemImage: icon)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .foregroundStyle(scope == id ? .white : .primary)
@@ -108,17 +110,7 @@ struct TasksView: View {
             return t.completed ? o == 0 : o <= 0
         }
         let done = today.filter(\.1.completed).count
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Today's tasks").font(.headline.weight(.bold))
-                Text("\(done)/\(today.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Image(systemName: "sparkles").foregroundStyle(Palette.accent)
-            }
-            ProgressView(value: today.isEmpty ? 0 : Double(done) / Double(today.count)).tint(Palette.lavender)
-        }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+        progress("Today's tasks", done: done, total: today.count)
         if today.isEmpty && google.tasksLoaded {
             Text("Nothing due today 🌷").foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
         }
@@ -127,15 +119,33 @@ struct TasksView: View {
         group("week", "This week", allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { (2...7).contains($0) } ?? false) })
     }
 
-    /// Open tasks due within a week, by day.
+    /// Tasks due within a week (open ones, overdue too, and those done), with progress.
     @ViewBuilder private var weekSection: some View {
-        let soon = allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { $0 <= 7 } ?? false) }
-            .sorted { ($0.1.dueDate ?? .distantFuture) < ($1.1.dueDate ?? .distantFuture) }
+        let week = allTasks.filter { _, t in dayOffset(t).map { t.completed ? (0...7).contains($0) : $0 <= 7 } ?? false }
+            .sorted { ($0.1.completed ? 1 : 0, $0.1.dueDate ?? .distantFuture) < ($1.1.completed ? 1 : 0, $1.1.dueDate ?? .distantFuture) }
+        let soon = week
+        let done = week.filter(\.1.completed).count
+        progress("This week's tasks", done: done, total: week.count)
         if soon.isEmpty && google.tasksLoaded {
             SoftEmpty(title: "A light week", systemImage: "leaf", message: "Nothing due in the next seven days")
                 .listRowBackground(Color.clear).listRowSeparator(.hidden)
         }
         ForEach(soon, id: \.1.id) { list, t in row(t, list: list) }
+    }
+
+    /// "Today's tasks 2/4" with a soft bar.
+    private func progress(_ title: LocalizedStringKey, done: Int, total: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline.weight(.bold))
+                Text("\(done)/\(total)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "sparkles").foregroundStyle(Palette.accent)
+            }
+            ProgressView(value: total == 0 ? 0 : Double(done) / Double(total)).tint(Palette.lavender)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     /// A folding group with a count, like "Tomorrow 3 ⌄".
@@ -224,7 +234,7 @@ struct TasksView: View {
     private var listChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                chip(String(localized: "All"), id: "", count: google.lists.reduce(0) { $0 + $1.tasks.filter { !$0.completed }.count })
+                chip(L("All"), id: "", count: google.lists.reduce(0) { $0 + $1.tasks.filter { !$0.completed }.count })
                 ForEach(google.lists) { l in
                     chip(l.title, id: l.id, count: l.tasks.filter { !$0.completed }.count)
                 }
@@ -401,7 +411,7 @@ struct TaskRow: View {
             .buttonStyle(.plain)
             .sensoryFeedback(.success, trigger: bursts)
             VStack(alignment: .leading, spacing: 4) {
-                Text(task.title.isEmpty ? String(localized: "(No title)") : task.title)
+                Text(task.title.isEmpty ? L("(No title)") : task.title)
                     .strikethrough(checked, color: .secondary)
                     .foregroundStyle(checked ? .secondary : .primary)
                 if let n = task.notes, !n.isEmpty {

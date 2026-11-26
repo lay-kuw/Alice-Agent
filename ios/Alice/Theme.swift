@@ -176,14 +176,18 @@ struct SoftEmpty: View {
 }
 
 enum Fmt {
-    static func time(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
+    /// 24-hour "13:30" in both languages, so time columns line up.
+    static func time(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+    }
 
     /// Mail list date: time today, weekday this week, else month/day.
     static func short(_ d: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(d) { return time(d) }
-        if cal.isDateInYesterday(d) { return String(localized: "Yesterday") }
-        if let days = cal.dateComponents([.day], from: d, to: .now).day, days < 7 { return d.formatted(.dateTime.weekday(.abbreviated)) }
-        return d.formatted(.dateTime.month(.abbreviated).day())
+        if cal.isDateInYesterday(d) { return L("Yesterday") }
+        if let days = cal.dateComponents([.day], from: d, to: .now).day, days < 7 { return d.fmt(.dateTime.weekday(.abbreviated)) }
+        return d.fmt(.dateTime.month(.abbreviated).day())
     }
 }

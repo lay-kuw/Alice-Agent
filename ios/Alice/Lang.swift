@@ -30,6 +30,11 @@ enum Lang {
     }
 }
 
+extension Date {
+    /// Formatted in the app's language (not the phone's).
+    func fmt(_ style: Date.FormatStyle) -> String { formatted(style.locale(Lang.locale)) }
+}
+
 /// Shorthand for `Lang.t`.
 func L(_ value: String.LocalizationValue) -> String { Lang.t(value) }
 
@@ -39,9 +44,8 @@ struct LanguageByAppearance: ViewModifier {
 
     func body(content: Content) -> some View {
         let code = scheme == .dark ? "en" : "ja"
-        content
-            .environment(\.locale, Locale(identifier: code))
-            .onAppear { Lang.code = code }
-            .onChange(of: scheme) { _, s in Lang.code = s == .dark ? "en" : "ja" }
+        // Set before the views below draw, so code-built strings match.
+        if Lang.code != code { Lang.code = code }
+        return content.environment(\.locale, Locale(identifier: code))
     }
 }

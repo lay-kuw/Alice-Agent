@@ -11,7 +11,7 @@ struct MailView: View {
 
     private static let filters: [(String, LocalizedStringKey, String)] = [
         ("all", "All", "in:inbox"), ("unread", "Unread", "in:inbox is:unread"),
-        ("important", "Important", "in:inbox is:important"), ("me", "To me", "in:inbox to:me"),
+        ("important", "Important", "in:inbox is:important"),
     ]
     private var query: String { Self.filters.first { $0.0 == filter }?.2 ?? "in:inbox" }
 
@@ -151,6 +151,7 @@ struct MailDetailView: View {
     let summary: MailSummary
     @State private var message: MailMessage?
     @State private var composing: Draft?
+    @State private var showHTML = false
 
     var body: some View {
         ScrollView {
@@ -164,10 +165,11 @@ struct MailDetailView: View {
                         if let to = message?.to, !to.isEmpty { Text("to \(to)").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                     }
                     Spacer()
-                    if let d = summary.sentAt { Text(d.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
+                    if let d = summary.sentAt { Text(d.fmt(Date.FormatStyle(date: .abbreviated, time: .shortened))).font(.caption).foregroundStyle(.secondary) }
                 }
                 .card()
-                if let m = message, let html = m.html, !html.isEmpty {
+                // Plain text by default (light and quick); the HTML version on request.
+                if let m = message, let html = m.html, !html.isEmpty, showHTML {
                     HTMLMailView(html: html)
                 } else {
                     Group {
@@ -181,6 +183,13 @@ struct MailDetailView: View {
                         }
                     }
                     .card(padding: 16)
+                    if let html = message?.html, !html.isEmpty {
+                        Button { withAnimation { showHTML = true } } label: {
+                            Label("Show the original layout", systemImage: "doc.richtext").font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.lavender)
+                    }
                 }
             }
             .padding()
@@ -221,7 +230,7 @@ struct Draft: Identifiable {
         subject = s.subject.lowercased().hasPrefix("re:") ? s.subject : "Re: \(s.subject)"
         replyToId = s.id
         if let m = message {
-            let when = m.sentAt?.formatted(date: .abbreviated, time: .shortened) ?? m.date
+            let when = m.sentAt?.fmt(Date.FormatStyle(date: .abbreviated, time: .shortened)) ?? m.date
             let quoted = m.body.split(separator: "\n", omittingEmptySubsequences: false).prefix(40).map { "> \($0)" }.joined(separator: "\n")
             body = "\n\n\(when), \(s.senderName):\n\(quoted)"
         }

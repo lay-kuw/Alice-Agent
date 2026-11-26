@@ -30,8 +30,7 @@ struct MascotHero: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
-                .shadow(color: Palette.lavender.opacity(0.5), radius: 18, y: 10)
+                .shadow(color: Palette.lavender.opacity(0.45), radius: 14, y: 8)
                 .offset(y: float ? -5 : 5)
             Sparkle(size: size * 0.13).offset(x: -size * 0.52, y: -size * 0.42)
             Sparkle(size: size * 0.08).offset(x: -size * 0.62, y: -size * 0.22)
@@ -69,15 +68,16 @@ final class Blurbs {
     /// Turned off in Settings (no model calls at all then).
     static var enabled: Bool { UserDefaults.standard.object(forKey: "blurbs.enabled") as? Bool ?? true }
 
-    func line(_ screen: String) -> String? { lines[screen + "|" + Lang.code] }
+    /// Comments speak Alice's own language (from SOUL), whatever the app's language.
+    func line(_ screen: String) -> String? { lines[screen] }
 
     func ask(_ screen: String, facts: String, client: AliceClient) async {
         guard Self.enabled else { return }
-        let key = screen + "|" + Lang.code
+        let key = screen
         let sig = facts + "|" + Self.hour()
         guard asked[key] != sig else { return }
         asked[key] = sig
-        if let text = try? await client.blurb(screen: screen, lang: Lang.code, facts: facts, now: Self.now()) {
+        if let text = try? await client.blurb(screen: screen, lang: "soul", facts: facts, now: Self.now()) {
             withAnimation(.snappy) { lines[key] = text }
         } else {
             asked[key] = nil
@@ -132,12 +132,14 @@ struct BlurbBubble: View {
 /// A rounded bubble with a small tail on the left.
 struct BubbleShape: Shape {
     func path(in r: CGRect) -> Path {
-        var p = Path(roundedRect: r, cornerRadius: 18, style: .continuous)
-        p.move(to: CGPoint(x: r.minX + 1, y: r.midY - 7))
-        p.addLine(to: CGPoint(x: r.minX - 7, y: r.midY))
-        p.addLine(to: CGPoint(x: r.minX + 1, y: r.midY + 7))
-        p.closeSubpath()
-        return p
+        // One outline (bubble and tail joined), so the edge runs smoothly round the tail.
+        let body = Path(roundedRect: r, cornerRadius: 18, style: .continuous)
+        var tail = Path()
+        tail.move(to: CGPoint(x: r.minX + 6, y: r.midY - 8))
+        tail.addQuadCurve(to: CGPoint(x: r.minX - 7, y: r.midY + 1), control: CGPoint(x: r.minX - 1, y: r.midY - 2))
+        tail.addQuadCurve(to: CGPoint(x: r.minX + 6, y: r.midY + 7), control: CGPoint(x: r.minX, y: r.midY + 6))
+        tail.closeSubpath()
+        return body.union(tail)
     }
 }
 

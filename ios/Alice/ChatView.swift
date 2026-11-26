@@ -29,7 +29,7 @@ struct ChatView: View {
                         MessageRow(message: m, store: store).id(m.id)
                     }
                     // Tools run between replies; the app shows only that Alice is busy.
-                    if store.generating, visible.last.map({ !$0.isStreaming || $0.content.isEmpty }) ?? true {
+                    if store.generating, !(visible.last?.isStreaming ?? false) {
                         TypingDots().id("typing")
                     }
                     ForEach(store.currentApprovals) { a in
@@ -103,8 +103,9 @@ struct ChatView: View {
                     Text(t.displayTitle)
                     Button(t.isPinned ? "Unstar" : "Star", systemImage: t.isPinned ? "star.slash" : "star.fill") { Task { await store.setPinned(t.id, !t.isPinned) } }
                     modelMenu
-                    Button("Chats", systemImage: "list.bullet", action: openThreads)
-                    Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
+                    if !t.isPinned {
+                        Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
+                    }
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel("More")
             }
@@ -270,7 +271,8 @@ extension ChatView {
             case "user": m.client != "agent" && m.client != "background"
             case "assistant":
                 !AgentReply.isQuiet(m)
-                    && (!m.content.isEmpty || m.status == "error" || (m.status == "cancelled" && m.client != "agent") || (m.isStreaming && !m.hasToolCalls))
+                    // An empty reply still being written shows as the typing dots instead.
+                    && (!m.content.isEmpty || m.status == "error" || (m.status == "cancelled" && m.client != "agent"))
             default: false
             }
         }

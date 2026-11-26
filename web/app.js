@@ -250,6 +250,30 @@ function inline(s) {
   return out;
 }
 
+// Light syntax colouring. The code is cut into tokens first and every token
+// is escaped, so only our own <span> tags are added.
+const KEYWORDS = new Set(('fn let const var function return if else for while loop match struct impl pub use mod class def import from export '
+  + 'async await true false null none nil self this new in of type interface enum trait where mut static break continue try catch '
+  + 'throw raise with as elif lambda yield do switch case default package func go defer select').split(' '));
+const HASH_COMMENTS = /^(py|python|sh|bash|zsh|shell|ruby|rb|yaml|yml|toml|r|perl|make|makefile|dockerfile|conf|ini)$/i;
+function highlight(code, lang) {
+  const hash = HASH_COMMENTS.test(lang || '');
+  const re = new RegExp([
+    '(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/' + (hash ? '|#[^\\n]*' : '') + ')',      // 1 comment
+    '("(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'|`(?:\\\\.|[^`\\\\])*`)', // 2 string
+    '\\b(\\d[\\d_]*(?:\\.\\d+)?)\\b',                                         // 3 number
+    '\\b([A-Za-z_][A-Za-z0-9_]*)\\b',                                    // 4 word
+  ].join('|'), 'g');
+  let out = '', last = 0, m;
+  while ((m = re.exec(code))) {
+    out += esc(code.slice(last, m.index));
+    const cls = m[1] ? 'c' : m[2] ? 's' : m[3] ? 'n' : KEYWORDS.has(m[4].toLowerCase()) ? 'k' : '';
+    out += cls ? `<span class="tok-${cls}">${esc(m[0])}</span>` : esc(m[0]);
+    last = re.lastIndex;
+  }
+  return out + esc(code.slice(last));
+}
+
 function md(src) {
   const lines = String(src).replace(/\r\n/g, '\n').split('\n');
   const out = [];
@@ -264,8 +288,8 @@ function md(src) {
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) code.push(lines[i++]);
       i++;
-      out.push('<div class="codeblock">' + (lang ? '<span class="lang">' + esc(lang) + '</span>' : '') +
-        '<button class="copy ghost" type="button">' + esc(t('copy')) + '</button><pre><code>' + esc(code.join('\n')) + '</code></pre></div>');
+      out.push('<div class="codeblock"><div class="code-head"><i class="dots"></i><span class="lang">' + esc(lang || 'text') + '</span>' +
+        '<button class="copy ghost" type="button">' + esc(t('copy')) + '</button></div><pre><code>' + highlight(code.join('\n'), lang) + '</code></pre></div>');
       continue;
     }
     if (!line.trim()) { i++; continue; }
@@ -311,7 +335,7 @@ function md(src) {
 document.addEventListener('click', (e) => {
   const b = e.target.closest('.codeblock .copy');
   if (!b) return;
-  navigator.clipboard?.writeText(b.parentElement.querySelector('code').textContent).then(() => {
+  navigator.clipboard?.writeText(b.closest('.codeblock').querySelector('code').textContent).then(() => {
     b.textContent = t('copied');
     setTimeout(() => (b.textContent = t('copy')), 1200);
   });

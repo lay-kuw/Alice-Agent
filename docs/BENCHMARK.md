@@ -14,20 +14,20 @@
 | Alice overhead per turn, max | 0.97 ms |
 | Database size after 30 turns (incl. WAL) | 929 KB |
 
-測定日: 2026-11-24 / macOS 27.2, Apple Silicon / release ビルド（バイナリ 9.3 MB）
-再現: `cargo build --release && scripts/bench.py target/release/alice 30`
+Measured 2026-11-24 / macOS 27.2, Apple Silicon / release build (binary 9.3 MB)
+Reproduce: `cargo build --release && scripts/bench.py target/release/alice 30`
 
-## 目標との比較
+## Against the goals
 
-| 目標 | 結果 |
+| Goal | Result |
 |---|---|
-| CLI Startup 10 ms 未満 | 達成（`--version` 約 4 ms、API 往復を含むコマンドも 4〜6 ms） |
-| Idle Memory 20 MB 未満 | 達成（起動直後 約 11 MB、30 ターン後 約 14 MB） |
-| Alice 自体の処理時間 | 1 ターンあたり中央値 0.3 ms（コンテキスト構築・Memory 検索・DB 書き込み）。応答時間のほぼ全てが LLM 側 |
-| 不要なバックグラウンド処理なし | 待機中のタイマーはなし（SSE 接続ごとの 20 秒キープアライブ、有効な gateway の long polling / heartbeat のみ） |
-| 不要な LLM 呼び出しの削減 | スレッド名は LLM を使わず自動生成。Memory 抽出は 1 ターン 1 回、短文はスキップ |
+| CLI startup under 10 ms | Met (`--version` about 4 ms; commands with an API round trip 4–6 ms) |
+| Idle memory under 20 MB | Met (about 11 MB after start, about 14 MB after 30 turns) |
+| Alice's own processing time | 0.3 ms median per turn (context, memory search, DB writes). Nearly all of the response time is the model's |
+| No needless background work | No timers while idle except the 20 s SSE keep-alive per connection, the scheduler's 20 s tick, and long polling / heartbeats of enabled gateways |
+| Fewer needless model calls | Thread titles are made without a model. Memory extraction runs once per turn and skips short messages. Screen comments are cached |
 
-## 注記
-- "Client wall time" はベンチマークの 5 ms ポーリング間隔を含む。実クライアントは SSE で即時に受信する。
-- DB サイズは WAL を含む。スレッド削除や全削除の際に WAL は切り詰められる。
-- Linux（x86_64 / ARM64）の測定は未実施。CI ワークフロー（`.github/workflows`）で同じテストを実行する。
+## Notes
+- "Client wall time" includes the benchmark's 5 ms polling interval. Real clients get events at once over SSE.
+- The DB size includes the WAL, which is truncated when threads are deleted.
+- Linux (x86_64 / ARM64) has not been benchmarked; CI runs the same tests there.

@@ -1,65 +1,70 @@
-# Alice Agent (A2) — ロードマップ
+# Alice Agent (A2) — Roadmap
 
-状態: ☐ 未着手 / ◐ 進行中 / ☑ 完了（自動テストまたは実機確認済み）
+State: ☐ not started / ◐ in progress / ☑ done (automated tests or checked for real)
 
-## 計測値（macOS Apple Silicon, release build）
-- CLI 起動: `alice --version` 中央値 3.5ms、`alice chat list`（API 往復込み）3.8ms
-- サーバー待機時メモリ (RSS): 約 11–13MB
-- リリースバイナリ: 8.5MB（Web GUI 埋め込み済み）
+## Measurements (macOS, Apple Silicon, release build)
+- CLI startup: `alice --version` median 3.5 ms, `alice chat list` (with an API round trip) 3.8 ms
+- Server idle memory (RSS): about 11–13 MB
+- Release binary: about 11 MB (Web UI embedded)
 
-## プロファイル
-- ☑ `alice profile <name>` で独立インスタンス（設定・秘密情報・DB・gateway・ポート・サービス）
+## Profiles
+- ☑ `alice profile <name>` for independent instances (settings, secrets, DB, gateways, port, service)
 
 ## Phase 1 — Core
-- ☑ Rust プロジェクト・設定・秘密情報・パス
-- ☑ SQLite スキーマ・マイグレーション
-- ☑ Server API（threads / messages / events / status）・トークン認証
-- ◐ Provider: OpenAI / OpenAI-compatible / Ollama / Anthropic / Gemini（ストリーミング・ツール呼び出し）— 各 API の SSE 形式を再現したテストで検証済み。実 API キーでの疎通は未確認
-- ☑ Agent Loop・キャンセル・削除競合対策
+- ☑ Rust project, settings, secrets, paths
+- ☑ SQLite schema and migrations
+- ☑ Server API (threads / messages / events / status) and token auth
+- ◐ Providers: OpenAI / OpenAI-compatible / Ollama / Anthropic / Gemini (streaming, tool calls) — verified against tests that replay each API's SSE format; not yet tried with real API keys
+- ☑ Agent loop, cancelling, delete races
 - ☑ CLI: setup / start / stop / restart / status / log / chat / model / config / memory / tool / token
-- ☑ テスト: ローカルの OpenAI 互換テストサーバーを使った結合テスト
+- ☑ Tests: integration tests against a local OpenAI-compatible test server
 
 ## Phase 2 — Memory
-- ☑ 抽出（user メッセージのみ）・key による統合
-- ☑ FTS5 trigram 検索・コンテキスト注入
-- ☑ 出典追跡・スレッド削除時の再構築・全削除
+- ☑ Extraction (user messages only), merged by key
+- ☑ FTS5 trigram search and context injection
+- ☑ Source tracking, rebuild on thread delete, delete-all
 - ☑ CLI: memory list / search / show / status / clear
-- ☑ テスト: 横断参照・削除・非復活・競合・全削除後に空
+- ☑ Tests: cross-thread use, deletion, no resurrection, races, empty after delete-all
+- ☑ Recall skill (memory and conversation search) and rolling compaction of long threads
 
 ## Phase 3 — Web
-- ☑ 埋め込み Web Chat（ストリーミング・Markdown・停止・モデル選択）
-- ☑ Settings（General / Models / Channels / Tools / Memory / System）
-- ☑ Cookie 認証・CSRF・CSP
-- ☑ SSE によるリアルタイム同期
+- ☑ Embedded Web chat (streaming, Markdown, stop, model choice)
+- ☑ Settings (General / Models / Channels / Tools / Memory / System)
+- ☑ Cookie auth, CSRF, CSP
+- ☑ Live sync over SSE
+- ☑ Calendar, Mail, Tasks and Agents views
 
 ## Phase 4 — Tools
-- ☑ 権限ゲート（disabled / ask / allow）・承認 API
-- ☑ File System（ルート制限・シンボリックリンク対策）
-- ☑ Web Search（Brave / SearXNG）・URL Fetch・本文抽出（SSRF 対策込み。Brave/SearXNG は実キーでの疎通未確認）
-- ☑ Google（OAuth 2.0 PKCE, Gmail / Calendar / Drive / Docs / Sheets）— 偽 Google API で検証。実アカウントでの疎通は未確認
+- ☑ Permission gate (disabled / ask / allow) and approval API
+- ☑ File system (root limits, symlink protection)
+- ☑ Web search (Brave / SearXNG), URL fetch, text extraction (with SSRF protection; Brave/SearXNG not yet tried with real keys)
+- ☑ Google (OAuth 2.0 PKCE; Gmail / Calendar / Tasks / Drive / Docs / Sheets) — used with a real account
 
-## Phase 5 — Channels
-- ☑ Telegram（long polling, allowlist, コマンド, 承認ボタン）— 偽 Bot API で検証。実 Bot での疎通は未確認
-- ☑ Discord（Gateway, allowlist, コマンド, 承認）— 偽 Gateway/REST で検証。実 Bot での疎通は未確認
-- ◐ Subscription Provider: codex-cli（公式 JSONL 形式で検証、実ログインでの疎通は未確認）/ antigravity-cli（公式ドキュメントの stream-json 形式に準拠、実ログインでの疎通は未確認。gemini-cli は終了）
+## Phase 5 — Channels and subscriptions
+- ☑ Telegram (long polling, allow list, commands, approval buttons) — verified against a fake Bot API; not yet tried with a real bot
+- ☑ Discord (gateway, allow list, commands, approvals) — verified against a fake gateway/REST; not yet tried with a real bot
+- ☑ codex-cli (ChatGPT subscription) — used with a real login on macOS and Linux
+- ◐ antigravity-cli (Google AI subscription) — follows the documented stream-json format; not yet tried with a real sign-in. gemini-cli is retired
 
 ## Phase 6 — iPhone
-- ◐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認・添付・停止・モデル選択）— AliceKit は実サーバーとの通しテスト済み、アプリはシミュレータ向けビルド成功。実機/シミュレータでの画面確認は未実施（シミュレータランタイム未導入）
+- ☑ SwiftUI app (connection, Keychain, threads, streaming, approvals, attachments, stop, model choice) — used on a real iPhone
+- ☑ Home, Calendar, Mail, To-do, widgets, notifications, offline reading, agents, Alice's comments
 
-## Phase 7 — Release
-- ☑ インストールスクリプト（`scripts/install.sh`、ソースビルド / バイナリ / アンインストール）
-- ☑ launchd 登録・起動・停止・クラッシュ時の自動再起動・解除を実機確認（macOS）
-- ◐ systemd user unit — 生成コードは実装済み、Linux 実機での確認は未実施
-- ◐ Linux x86_64 / ARM64 ビルド — CI / リリースワークフローを用意、ローカルでは未確認（クロス C コンパイラなし）
-- ☑ ベンチマーク（docs/BENCHMARK.md）
-- ☑ セキュリティレビュー（docs/SECURITY.md）と修正（データディレクトリ保護）
-- ☑ ドキュメント（README / SPEC / ARCHITECTURE）
-- ☑ 結合テスト（Rust 46 件・Swift 5 件）
+## Phase 7 — Scheduled work
+- ☑ Scheduled agents (repeat or daily times, quiet runs, run history)
+- ☑ Background tasks
 
-## 実環境での確認が必要なもの（一緒に確認する項目）
-- 実 API キーでの OpenAI / Anthropic / Gemini 疎通（`alice model test`）
-- Codex CLI（ChatGPT ログイン）での応答
-- 実 Bot での Telegram / Discord
-- 実 Google アカウントでの OAuth と各 API
-- iPhone 実機での画面・操作感
-- Linux（systemd・ARM64）
+## Phase 8 — Release
+- ☑ Install script (`scripts/install.sh`: build from source / binary / uninstall)
+- ☑ launchd registration, start, stop, restart on crash and removal checked on macOS
+- ◐ systemd user unit — implemented; not yet checked on a Linux machine with systemd (containers use the detached process instead)
+- ☑ Linux x86_64 / ARM64 builds and tests (CI), and running on a Linux server
+- ☑ Benchmark (docs/BENCHMARK.md)
+- ☑ Security review (docs/SECURITY.md) and fixes
+- ☑ Documentation (README / SPEC / ARCHITECTURE / SKILLS)
+
+## Still to try for real
+- OpenAI / Anthropic / Gemini with real API keys (`alice model test`)
+- Antigravity CLI with a real Google sign-in
+- Telegram / Discord with real bots
+- systemd on a Linux machine

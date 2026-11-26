@@ -1,139 +1,145 @@
-# Alice Agent (A2) — 仕様
+# Alice Agent (A2) — Specification
 
-Alice Agent は単一ユーザー専用・ローカルファーストの Personal AI Agent である。
-本書は要件定義をレビューした結果を踏まえ、実装の基準となる仕様を定める。
+Alice Agent is a single-user, local-first personal AI agent.
+This document sets the specification the implementation follows, after a review of the original requirements.
 
-- Product Name: Alice Agent / Short Name: A2 / CLI: `alice`
-- 優先順位: Simplicity > Complexity, Lightweight > Feature-rich, Performance > Unnecessary Abstraction, Privacy > Convenience
-
----
-
-## 1. 要件レビュー結果（変更・明確化した点）
-
-| # | 対象 | 指摘 | 決定 |
-|---|------|------|------|
-| R1 | Web Frontend | ビルド時に Node.js を使うとビルド依存が増える | **ビルド工程なしの素の HTML/CSS/JS** を `include_str!` でバイナリに埋め込む。Node.js はビルド時にも不要。 |
-| R2 | CLI コマンド表記 | `alice caht <id>` / `alice chat claer` は誤記と判断 | `alice chat <chat-id>` / `alice chat clear` として実装。 |
-| R3 | ChatGPT Subscription | 公式に許可された経路は Codex CLI (`codex exec --json`) のみ。Codex 自体がエージェントで独自ツールを持ち、Alice のツール呼び出し・ストリーミング粒度・画像以外の添付は制御できない | `codex-cli` Provider として **オプション** 実装。`--ephemeral` + `--sandbox read-only` で起動し、Alice のツールは渡さない（テキスト応答専用）。制約は Capability 表に明記。ツールが必要な場合は OpenAI API にフォールバック。 |
-| R4 | Google AI Subscription | Gemini CLI の個人向け Google ログイン（AI Pro/Ultra）は 2026-06-18 に終了し、公式の後継は Antigravity CLI（`agy`）。`agy` は自前のツール（ファイル編集・コマンド）を持ち、ドキュメント上それを完全に無効化するオプションはない | `antigravity-cli` Provider で `agy -p` を plan モード・`--sandbox`・空の作業フォルダで実行（ヘッドレスでは承認が必要な操作は拒否される）。Alice のツールはテキスト方式。`gemini-cli` は終了扱い（既存設定は読み込むが、使うと移行を案内）。Cookie 抽出や非公開 API は一切使わない。 |
-| R5 | 「派生ユーザープロファイル」 | 独立したプロファイルテーブルは削除整合性の弱点になる | **プロファイルを別に持たない**。ユーザー情報はすべて出典付き Memory として表現し、プロファイル表示は Memory のビューとする。 |
-| R6 | 会話の要約 | スレッド横断の要約は削除済み情報の伝播経路になる | 要約はスレッド内でのみ使用し、スレッドと共に削除。スレッド横断の要約は作らない。 |
-| R7 | 再学習防止 | AI 応答を Memory 抽出の入力にすると、削除済み Memory が別スレッドで再生成されうる | **Memory はユーザー自身の発言（role=user）からのみ抽出**。抽出時に既存 Memory の本文は LLM に渡さない（キー名のみ）。 |
-| R8 | 削除の保証範囲 | SQLite の空きページ・WAL・FTS セグメントに残存しうる | `secure_delete=ON`、削除後 `wal_checkpoint(TRUNCATE)`、FTS `optimize`、全削除時 `VACUUM`。OS のスナップショット (Time Machine, APFS/Btrfs snapshot) と外部サービスは保証範囲外として明記。 |
-| R9 | Telegram/Discord の履歴 | 相手プラットフォーム上のメッセージは Alice の管理外 | スレッド削除時、Bot が送信したメッセージの削除は「ベストエフォート」（Telegram は 48 時間以内のみ可能）。保証範囲外と明記。 |
-| R10 | Google OAuth | Google Cloud で OAuth クライアント作成が必須。「テスト」公開状態ではリフレッシュトークンが 7 日で失効。`gmail.send` 等は機密スコープ | ユーザー自身の OAuth Client (Desktop app) を使用。失効時は再ログインを促す。スコープは機能単位で最小化し、有効化した機能のスコープのみ要求。 |
-| R11 | Web Search | 公式かつ無料の汎用検索 API は存在しない。HTML スクレイピングは規約違反になりうる | 検索 Provider は Brave Search API / SearXNG (セルフホスト) を実装。未設定時は Web Search ツールを無効化。 |
-| R12 | パフォーマンス | CLI 10ms は `--version` やローカル処理では達成可能だが、ネットワーク往復を含むコマンドはサーバー処理時間に依存 | CLI 自体の起動時間と API 往復時間を分けて計測する。 |
-| R13 | Settings UI の Port 変更 | 実行中のソケットは変更できない | 保存後に「再起動が必要」と表示。 |
-| R14 | `alice memory clear` | Memory だけを消してもスレッドは残る | Memory（と出典・使用記録・FTS）のみ削除し、会話履歴は残す。過去メッセージから自動的に再抽出はしない（抽出は新しいターンでのみ発生）。 |
-| R15 | iPhone App 配布 | 実機インストールには Apple Developer 署名が必要 | Xcode プロジェクトを提供。署名チームはユーザーが設定。 |
-| R16 | Codex CLI のサンドボックス | Codex 自体がエージェントで、read-only でもローカルファイルを読める可能性がある | 制約として SECURITY.md に明記。外部コンテンツを扱う用途では API 接続を推奨。 |
-| R17 | ファイルツールと設定 | ルートを広く設定すると LLM が secrets.toml を読める | ルート設定に関係なく Alice のデータディレクトリを常に拒否（workspace を除く）。 |
-| R18 | プロファイル（追加要件） | 「モデル/設定/メモリ/gateway を独立」 | プロファイルごとに独立したデータディレクトリとサーバープロセス。共有状態を持たない。 |
+- Product name: Alice Agent / short name: A2 / CLI: `alice`
+- Priorities: Simplicity > Complexity, Lightweight > Feature-rich, Performance > Unnecessary Abstraction, Privacy > Convenience
 
 ---
 
-## 2. 用語
+## 1. Requirements review (changes and clarifications)
 
-- **Thread**: 会話スレッド。全クライアント共通の ID（12 文字の英数字、例 `t4k2m9xq7ab3`）。
-- **Message**: スレッド内の発言。role は `user` / `assistant` / `tool`。
-- **Memory**: スレッドを横断して共有される、出典付きのユーザー情報。
-- **Memory Source**: Memory の出典。必ず「ユーザーメッセージ」を指す。
-- **Generation**: 1 回のユーザー入力に対する応答生成（ツールループを含む）。
-- **Client / Channel**: `cli` / `web` / `ios` / `telegram` / `discord`。
+| # | Area | Finding | Decision |
+|---|------|---------|----------|
+| R1 | Web frontend | Using Node.js at build time adds a build dependency | **Plain HTML/CSS/JS with no build step**, embedded in the binary with `include_str!`. No Node.js, not even to build. |
+| R2 | CLI command names | `alice caht <id>` / `alice chat claer` read as typos | Implemented as `alice chat <chat-id>` / `alice chat clear`. |
+| R3 | ChatGPT subscription | The only officially allowed route is the Codex CLI. Codex is an agent with its own tools | `codex-cli` provider, **optional**. Runs with Alice's own login, ephemeral, read-only, in an empty directory, with Codex's shell/exec/browser/plugins off. Alice's tools are offered natively through a warm `codex app-server`, or through `alice mcp` after a safety check; otherwise the text protocol. Limits are listed in the capability table. |
+| R4 | Google AI subscription | Gemini CLI's personal Google login (AI Pro/Ultra) ended on 2026-06-18; the official successor is the Antigravity CLI (`agy`). `agy` has its own tools (file edits, commands), and its docs offer no option to turn them all off | `antigravity-cli` provider runs `agy -p` in plan mode with `--sandbox` in an empty directory (headless runs refuse actions that need approval). Alice's tools go through the text protocol. `gemini-cli` is retired (old configs load, and using it explains what to switch to). No cookie extraction or unofficial APIs, ever. |
+| R5 | "Derived user profile" | A separate profile table is a weak point for consistent deletion | **No separate profile.** Everything about the user is a sourced Memory; a profile view is a view over memories. |
+| R6 | Conversation summaries | Cross-thread summaries would carry deleted information along | Summaries live inside their thread only and are deleted with it. No cross-thread summaries. |
+| R7 | Relearning after deletion | Extracting memories from AI replies could recreate a deleted memory in another thread | **Memories are extracted only from the user's own messages (role=user).** Extraction never sees existing memory contents (key names only). |
+| R8 | What deletion guarantees | Data can remain in SQLite free pages, the WAL and FTS segments | `secure_delete=ON`, `wal_checkpoint(TRUNCATE)` after deletes, FTS `optimize`, `VACUUM` on delete-all. OS snapshots (Time Machine, APFS/Btrfs) and outside services are stated as out of scope. |
+| R9 | Telegram/Discord history | Messages on those platforms are outside Alice's control | When a thread is deleted, deleting the bot's messages is best effort (Telegram allows it only within 48 hours). Stated as out of scope. |
+| R10 | Google OAuth | An OAuth client must be created in Google Cloud. In "testing" status, refresh tokens expire after 7 days. `gmail.send` and others are sensitive scopes | Uses the user's own OAuth client (Desktop app). Asks to sign in again when it expires. Scopes are minimal per feature; only enabled features are requested. |
+| R11 | Web search | There is no official, free, general search API; scraping HTML can break terms of service | Search providers: Brave Search API / SearXNG (self-hosted). Without one, the search tool is off. |
+| R12 | Performance | 10 ms for the CLI is reachable for `--version` and local work, but commands that talk to the server depend on the server | CLI startup time and API round trips are measured separately. |
+| R13 | Changing the port in Settings | A running socket cannot change | After saving, says a restart is needed. |
+| R14 | `alice memory clear` | Clearing memories leaves the threads | Deletes memories (and sources, uses, FTS) only; conversations stay. Old messages are not re-extracted (extraction happens only on new turns). |
+| R15 | Installing the iPhone app | Installing on a device needs an Apple developer signature | An Xcode project is provided; the user sets the signing team. |
+| R16 | Codex CLI sandbox | Codex is an agent and may read local files even when read-only | Noted as a limit in SECURITY.md. For untrusted content, an API connection is recommended. |
+| R17 | File tools and settings | A broad root would let the model read secrets.toml | Alice's data directory is always refused whatever the roots (except the workspace). |
+| R18 | Profiles (added requirement) | "Independent models / settings / memory / gateways" | Each profile has its own data directory and server process. No shared state. |
 
-## 3. データと設定の分離
+---
 
-| 種別 | 保存先 | 全スレッド削除時 |
-|------|--------|------------------|
-| サーバー設定・モデル設定・ツール権限・System Prompt | `~/.alice/config.toml` | 維持 |
-| API Key・OAuth Token・Bot Token・API Token | `~/.alice/secrets.toml` (0600) | 維持 |
-| 会話・Memory・添付・チャネル状態 | `~/.alice/alice.db`, `~/.alice/attachments/` | 完全削除 |
-| ツール作業領域 | `~/.alice/workspace/` | 維持（ユーザーのファイル） |
-| ログ | `~/.alice/logs/` | 会話内容は記録しない |
+## 2. Terms
 
-会話由来のデータは **DB と attachments のみ** に存在する。設定ファイルには会話由来の情報を一切書き込まない。
+- **Thread**: a conversation. One ID for every client (12 lowercase letters and digits, e.g. `t4k2m9xq7ab3`).
+- **Message**: one entry in a thread. Role is `user` / `assistant` / `tool`.
+- **Memory**: a sourced fact about the user, shared across threads.
+- **Memory source**: where a memory came from. Always a user message.
+- **Generation**: producing the reply to one user message (tool loop included).
+- **Client / channel**: `cli` / `web` / `ios` / `telegram` / `discord` (plus `agent` and `background` for Alice's own runs).
 
-## 4. Memory 仕様
+## 3. Data and settings kept apart
 
-### 4.1 構造
-- `memories(id, key, content, created_at, updated_at)` — `key` はトピック識別子（例 `home_city`）。
-- `memory_sources(memory_id, message_id, thread_id, content, created_at)` — 出典ごとの主張内容。
-- `memory_uses(message_id, memory_id)` — どの応答がどの Memory をコンテキストに使ったか（監査・出典表示用）。
-- `memories_fts` — FTS5 (trigram tokenizer、日本語対応)。
+| Kind | Stored in | On delete-all-threads |
+|------|-----------|-----------------------|
+| Server, model and tool settings | `~/.alice/config.toml` | Kept |
+| Personality (system prompt) | `~/.alice/SOUL.md` | Kept |
+| API keys, OAuth tokens, bot tokens, API token | `~/.alice/secrets.toml` (0600) | Kept |
+| Conversations, memories, attachments, channel state | `~/.alice/alice.db`, `~/.alice/attachments/` | Deleted completely |
+| Tool working folder | `~/.alice/workspace/` | Kept (the user's files) |
+| Logs | `~/.alice/logs/` | Never contain conversation content |
 
-### 4.2 不変条件
-1. すべての Memory は 1 つ以上の Source を持つ。Source が 0 になった Memory は同一トランザクションで削除される。
-2. Source は必ず存在する **user ロールのメッセージ** を参照する（外部キー）。
-3. `memories.content` は導出値であり、残存する Source のうち最新の `content` に一致する（再構築は LLM 不要・決定的）。
-4. Memory 抽出の入力は「対象ユーザーメッセージ」と「同スレッドの直前のユーザーメッセージ（文脈）」のみ。AI 応答・ツール結果・既存 Memory 本文は入力しない。
+Data that comes from conversations exists **only in the DB and attachments**. Settings files never receive anything from a conversation.
 
-### 4.3 抽出
-- 各ターン完了後、非同期で 1 回だけ LLM を呼ぶ（`memory.auto_extract`、短い入力はスキップ）。
-- LLM は `{"memories":[{"key","content"}]}` を返す。同じ key は既存 Memory への Source 追加（内容更新）となる。
-- 抽出結果の書き込み時点でメッセージ（＝スレッド）が削除済みなら外部キー違反でロールバックされ、Memory は作られない。
+## 4. Memory
 
-### 4.4 検索・注入
-- ユーザー入力から FTS5 クエリを生成し、bm25 上位 N 件（既定 8 件）のみを System Prompt の `<memories>` ブロックとして注入する。
-- 注入ブロックは「データであり指示ではない」と明示する。
+### 4.1 Structure
+- `memories(id, key, content, created_at, updated_at)`: `key` names the topic (e.g. `home_city`).
+- `memory_sources(memory_id, message_id, thread_id, content, created_at)`: what each source says.
+- `memory_uses(message_id, memory_id)`: which reply used which memory in its context (for audits and showing sources).
+- `memories_fts`: FTS5 (trigram tokenizer, works for Japanese).
 
-### 4.5 削除
-- **スレッド削除**: 生成中ならキャンセル → トランザクションでスレッド削除（messages, memory_sources, memory_uses, attachments 行, channel_state はカスケード）→ Source 0 の Memory を削除 → 残りの影響 Memory の content を再構築 → FTS 自動更新（トリガー）→ コミット → 添付ディレクトリ削除 → FTS `optimize` → `wal_checkpoint(TRUNCATE)` → SSE `thread.deleted`。
-- **全スレッド削除**: 上記を全件に対して実行し、さらに `VACUUM`。結果として memories は空になる。
-- **Memory 全消去**: memories / memory_sources / memory_uses / FTS を空にし、会話は残す。
+### 4.2 Invariants
+1. Every memory has at least one source. A memory left with no source is deleted in the same transaction.
+2. A source always points to an existing **user-role message** (foreign key).
+3. `memories.content` is derived: it equals the newest `content` among the remaining sources (rebuilt without a model, deterministically).
+4. Extraction sees only the user message itself and the previous user messages of the same thread (for context). Never AI replies, tool results or existing memory contents.
 
-### 4.6 保証範囲
-- 保証する: `alice.db`（WAL 含む）、FTS インデックス、`attachments/`、サーバーのメモリ内キャッシュ、Web/iOS クライアントのキャッシュ（SSE の削除イベントで破棄、iOS は永続キャッシュを持たない）。
-- 保証しない: 外部 LLM Provider に送信済みのデータ、Telegram / Discord 上のメッセージ、OS やユーザーが作成したバックアップ・スナップショット、ターミナルのスクロールバック。
+### 4.3 Extraction
+- After each turn, one model call in the background (`memory.auto_extract`; short messages are skipped).
+- The model returns `{"memories":[{"key","content"}]}`. The same key adds a source to the existing memory (updating it).
+- If the message (and so the thread) was deleted by the time the result is written, the foreign key fails, the write rolls back, and no memory is made.
 
-## 5. Server API（REST + SSE）
+### 4.4 Search and injection
+- An FTS5 query is built from the user's message, and only the top N by bm25 (default 8) go into the system prompt as a `<memories>` block.
+- The block says plainly that it is data, not instructions.
+- The `recall` skill lets the model search memories and earlier chats itself, with its own keywords.
 
-認証: `Authorization: Bearer <token>`、または Web GUI 用の HttpOnly Cookie（状態変更リクエストは `X-Alice-CSRF: 1` ヘッダ必須）。`/api/health` のみ認証不要。
+### 4.5 Deletion
+- **Delete a thread**: cancel a running generation → in one transaction delete the thread (messages, memory_sources, memory_uses, attachment rows and channel_state cascade) → delete memories left with no source → rebuild the content of the other affected memories → FTS updates by trigger → commit → remove the attachment directory → FTS `optimize` → `wal_checkpoint(TRUNCATE)` → SSE `thread.deleted`.
+- **Delete all threads**: the same for every thread, then `VACUUM`. Memories end up empty.
+- **Clear memories**: empty memories / memory_sources / memory_uses / FTS; conversations stay.
 
-| Method | Path | 説明 |
-|--------|------|------|
-| GET | `/api/health` | 生存確認・バージョン |
-| POST | `/api/login` | トークンを検証し Cookie を発行 |
-| POST | `/api/logout` | Cookie 破棄 |
-| GET | `/api/status` | サーバー状態（CPU・メモリ・DB サイズ・件数） |
-| GET | `/api/events` | SSE（`?thread=<id>` で絞り込み可） |
-| GET/POST | `/api/threads` | 一覧 / 作成 |
-| DELETE | `/api/threads` | 全スレッド削除（`{"confirm":"delete-all"}` 必須） |
-| GET/PATCH/DELETE | `/api/threads/{id}` | 取得 / 名前・モデル変更 / 削除 |
-| GET | `/api/threads/{id}/messages` | メッセージ一覧 |
-| POST | `/api/threads/{id}/messages` | 発言して生成開始（202） |
-| POST | `/api/threads/{id}/stop` | 生成停止 |
-| POST | `/api/approvals/{id}` | ツール実行の承認・拒否 |
-| GET | `/api/models` | モデル一覧・既定モデル・Capability |
-| PUT | `/api/models/default` | 既定モデル変更 |
-| POST | `/api/models/test` | 接続テスト |
-| GET | `/api/memories` | 一覧（`?q=` で検索） |
-| GET | `/api/memories/status` | 件数・ストレージ使用量 |
-| GET | `/api/memories/{id}` | 出典付き詳細 |
-| DELETE | `/api/memories` | Memory 全消去 |
-| GET/PATCH | `/api/config` | 設定（秘密情報は返さない） |
-| PUT | `/api/secrets/{name}` | 秘密情報の設定（読み出し API はない） |
-| GET/PATCH | `/api/tools` | ツール一覧・権限 |
+### 4.6 What is guaranteed
+- Guaranteed: `alice.db` (WAL included), the FTS index, `attachments/`, the server's in-memory caches, and the Web / iPhone caches (dropped on the SSE delete event; the iPhone's offline copy is updated the same way and removed on disconnect).
+- Not guaranteed: data already sent to an outside model provider, messages on Telegram / Discord, backups and snapshots made by the OS or the user, terminal scrollback.
 
-### SSE イベント
-`message.created`, `message.delta`, `message.completed`, `thread.created`, `thread.updated`, `thread.deleted`, `threads.cleared`, `tool.started`, `tool.completed`, `tool.approval_required`, `generation.cancelled`, `memory.updated`, `error`。
-各イベントは `{"type":..., "thread_id":..., ...}` の JSON。
+## 5. Server API (REST + SSE)
 
-## 6. 同時実行
-- 1 スレッドにつき同時に 1 生成のみ。生成中の投稿は 409。
-- スレッド削除は進行中の生成をキャンセルしてから実行。生成タスクのすべての書き込みはスレッドの存在を外部キーで検証するため、削除後に行が復活しない。
-- SQLite は単一接続を Mutex で直列化（個人用途では十分高速で、競合の推論が単純になる）。
+Auth: `Authorization: Bearer <token>`, or the Web UI's HttpOnly cookie (requests that change state need the `X-Alice-CSRF: 1` header). Only `/api/health` needs no auth.
 
-## 7. ツール権限
-- モード: `disabled` / `ask` / `allow`。破壊的操作（ファイル削除・メール送信・予定削除など）の既定は `ask`。
-- 権限は `config.toml` にのみ保存され、LLM から変更する API・ツールは存在しない。
-- 承認要求は SSE で配信し、生成を開始したクライアントに表示する（他クライアントからも承認可能）。タイムアウト（既定 10 分）で拒否扱い。
+| Method | Path | What it does |
+|--------|------|--------------|
+| GET | `/api/health` | Alive check and version |
+| POST | `/api/login` | Checks the token and sets the cookie |
+| POST | `/api/logout` | Drops the cookie |
+| GET | `/api/status` | Server state (CPU, memory, DB size, counts) |
+| GET | `/api/events` | SSE (`?thread=<id>` to narrow) |
+| GET/POST | `/api/threads` | List / create |
+| DELETE | `/api/threads` | Delete all threads (needs `{"confirm":"delete-all"}`) |
+| GET/PATCH/DELETE | `/api/threads/{id}` | Get / rename, change model, star / delete |
+| GET | `/api/threads/{id}/messages` | Messages |
+| POST | `/api/threads/{id}/messages` | Post and start a reply (202) |
+| POST | `/api/threads/{id}/stop` | Stop the reply |
+| POST | `/api/approvals/{id}` | Approve or deny a tool run |
+| GET | `/api/models` | Models, default model, capabilities |
+| PUT | `/api/models/default` | Change the default model |
+| POST | `/api/models/test` | Connection test |
+| GET | `/api/memories` | List (`?q=` to search) |
+| GET | `/api/memories/status` | Counts and storage use |
+| GET | `/api/memories/{id}` | Details with sources |
+| DELETE | `/api/memories` | Clear memories |
+| GET/PATCH | `/api/config` | Settings (secrets are never returned) |
+| PUT | `/api/secrets/{name}` | Set a secret (there is no read API) |
+| GET/PATCH | `/api/tools` | Tools and permissions |
+| GET/POST, PATCH/DELETE | `/api/agents`, `/api/agents/{id}` | Scheduled agents |
+| POST / GET | `/api/agents/{id}/run`, `/api/agents/{id}/runs` | Run now / last ten runs |
+| POST | `/api/blurb` | Alice's one-line comment for an app screen |
+| — | `/api/google/*` | Calendar, mail and tasks for the apps |
 
-## 8. セキュリティ
-- 既定バインドは `127.0.0.1`。すべての API（health を除く）はトークン必須。非ループバックで HTTPS でない場合は起動時に警告。
-- トークン比較は定数時間。Web は CSP `default-src 'self'`、Markdown は HTML をエスケープしてから限定タグのみ生成。
-- 外部コンテンツ（Web・メール・ファイル）は `<untrusted>` で囲み、指示として扱わないよう System Prompt で明示。破壊的ツールは承認必須なので、注入による権限昇格の影響を限定する。
-- ログにはトークン・API Key・メッセージ本文を出力しない。
+### SSE events
+`message.created`, `message.delta`, `message.completed`, `thread.created`, `thread.updated`, `thread.deleted`, `threads.cleared`, `tool.started`, `tool.completed`, `tool.approval_required`, `tool.approval_resolved`, `generation.cancelled`, `turn.done`, `agents.updated`, `memory.updated`, `error`.
+Each event is JSON like `{"type":..., "thread_id":..., ...}`. Every turn ends with exactly one `turn.done`, however it ended.
+
+## 6. Concurrency
+- One generation per thread at a time. Posting while one runs returns 409.
+- Deleting a thread cancels its generation first. Every write of a generation checks the thread through a foreign key, so rows never come back after a delete.
+- SQLite runs on one connection behind a mutex (fast enough for one person, and simple to reason about).
+
+## 7. Tool permissions
+- Modes: `disabled` / `ask` / `allow`. Destructive actions (deleting files, sending mail, deleting events, …) default to `ask`.
+- Permissions live only in `config.toml`; there is no API or tool for the model to change them.
+- Approval requests go out over SSE and show on the client that started the turn (any client can answer). After a timeout (10 minutes by default) they count as denied.
+
+## 8. Security
+- Binds to `127.0.0.1` by default. Every API except health needs the token. A non-loopback address without HTTPS logs a warning at startup.
+- Tokens are compared in constant time. The Web UI uses CSP `default-src 'self'`; Markdown escapes HTML first and then adds a small set of safe tags.
+- Outside content (web, mail, files) is wrapped in `<untrusted>`, and the system prompt says not to follow it. Destructive tools need approval, which limits what an injection could do.
+- Logs never contain tokens, API keys or message text.
 
 ## 9. CLI
-要件 4 のコマンドすべて。CLI はサーバー API のクライアントであり、Agent Runtime を持たない（`alice serve` のみがサーバー本体）。
+Every command from the requirements. The CLI is a client of the server API with no agent runtime of its own (`alice serve` is the only server).

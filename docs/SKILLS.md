@@ -1,93 +1,93 @@
-# Skill システム
+# Skills
 
-Alice の機能拡張はすべて「スキル」として追加する。ファイル操作・Web 検索・Google Workspace も内蔵スキルで、外部スキルと同じ仕組みで動く。Alice 本体を変更せずに、`~/.alice/skills/` にフォルダを置くだけで機能を増やせる。
+Everything Alice can do beyond talking is added as a "skill". Files, web search, Google Workspace, recall and background tasks are built-in skills and work the same way as outside ones. Dropping a folder into `~/.alice/skills/` adds abilities without changing Alice itself.
 
-## 全体像
+## Overview
 
 ```
- ~/.alice/skills/<id>/          内蔵スキル（バイナリに同梱）
-   SKILL.md   skill.toml        files / web / google-workspace
+ ~/.alice/skills/<id>/          built-in skills (shipped in the binary)
+   SKILL.md   skill.toml        files / web / recall / background / google-workspace
         │                              │
         └──────────┬───────────────────┘
                    ▼
-            Skill Manager   検出・検証・依存チェック・有効/無効・設定
+            Skill Manager   discovery, validation, dependency checks, on/off, settings
                    ▼
-            Tool Registry   有効なスキルのツールを一元管理（名前・スキーマ・既定権限・リスク）
+            Tool Registry   one place for the tools of enabled skills (name, schema, default permission, risk)
                    ▼
-            Tool Gate       権限 → 承認 → 実行 → ログ（モデル・経路に依存しない唯一の入口）
+            Tool Gate       permission → approval → run → log (the single entry point, whatever the model or route)
          ┌─────────┼─────────────────┐
          ▼         ▼                 ▼
-  ネイティブ   MCP (stdio)        テキスト方式
-  Tool Calling  alice mcp ⇄ Codex   ```alice-tool``` ブロック
-  OpenAI /      CLI など            Gemini CLI・ツール非対応モデル
-  Anthropic /                       Codex の安全確認に失敗した場合
+  native        MCP (stdio)        text protocol
+  tool calling  alice mcp ⇄ Codex   ```alice-tool``` blocks
+  OpenAI /      CLI and others      Antigravity CLI, models without tools,
+  Anthropic /                       Codex when its safety check fails
   Gemini / Ollama
 ```
 
-- どの経路から呼ばれても、権限確認・承認・実行・ログは **Tool Gate（`skills::gate`）だけ**が行う。
-- 承認は Alice の UI（Web / TUI / iPhone / Telegram / Discord）でのみ行える。モデル・MCP・スキルから承認する API は存在しない。
+- Whichever route a call takes, permission, approval, running and logging happen **only in the Tool Gate (`skills::gate`)**.
+- Approvals can be given only in Alice's own UI (Web / TUI / iPhone / Telegram / Discord). There is no API for a model, MCP or a skill to approve anything.
 
-## スキルの構成
+## What a skill is made of
 
 ```
 ~/.alice/skills/github/
-├── SKILL.md      モデル向けの説明と操作手順（必要なときだけ読まれる）
-├── skill.toml    manifest：ツール・依存関係・必要権限・認証・設定
-└── run.py        （command ツールを使う場合のみ）
+├── SKILL.md      how to use it, for the model (read only when needed)
+├── skill.toml    manifest: tools, dependencies, permissions, auth, settings
+└── run.py        (only for command tools)
 ```
 
 ### SKILL.md
 
-モデルに渡す使い方の説明。毎回のプロンプトには入れず、システムプロンプトには「スキル名 + 1 行説明」の索引だけを入れる。モデルは必要なときに `skill_guide` ツールで全文を読む（トークン節約）。
+Usage notes for the model. They are not put in every prompt: the system prompt holds only an index ("skill name + one line"), and the model reads the full text with the `skill_guide` tool when it needs it (saves tokens).
 
-### skill.toml（manifest）
+### skill.toml (manifest)
 
 ```toml
-id = "github"                      # フォルダ名と同じ。a-z 0-9 -
+id = "github"                      # same as the folder name. a-z 0-9 -
 name = "GitHub"
 version = "0.1.0"
-description = "Issues and pull requests on GitHub"   # 索引に載る 1 行説明
+description = "Issues and pull requests on GitHub"   # the one line in the index
 
 [requires]
-bins = []                          # PATH に必要な実行ファイル（command ツール用）
-settings = ["owner"]               # 必須の設定項目
-auth = true                        # 認証が済んでいないとツールは使えない
+bins = []                          # executables needed on PATH (for command tools)
+settings = ["owner"]               # settings that must be filled in
+auth = true                        # tools are unusable until signed in
 
-[permissions]                      # 有効化するときにユーザーへ表示する宣言
-network = ["api.github.com"]       # http ツールはこのホストにしか接続できない（強制）
-files = false                      # ファイルを扱うか（表示用）
+[permissions]                      # shown to the user when enabling the skill
+network = ["api.github.com"]       # http tools can reach only these hosts (enforced)
+files = false                      # whether it handles files (for display)
 description = "Reads and writes issues in your repositories"
 
 [auth]
 type = "token"                     # none | token | oauth2
 label = "Personal access token"
 
-# type = "oauth2" の場合
+# for type = "oauth2"
 # authorize_url = "https://…/authorize"
 # token_url = "https://…/token"
-# revoke_url = "https://…/revoke"     # 任意
+# revoke_url = "https://…/revoke"     # optional
 # pkce = true
-# params = { access_type = "offline" } # 認可 URL に足すパラメータ
+# params = { access_type = "offline" } # extra parameters for the authorize URL
 
 [settings.owner]
 label = "Default owner (user or org)"
-# secret = true                    # true なら secrets.toml に保存（client_secret など）
+# secret = true                    # stored in secrets.toml when true (client_secret and such)
 
-[[groups]]                         # 任意：ユーザーが個別にオンオフできる機能グループ
+[[groups]]                         # optional: feature groups the user can turn on and off
 id = "issues"
 label = "Issues"
-scopes = []                        # oauth2 で要求するスコープ（有効なグループの分だけ要求）
+scopes = []                        # oauth2 scopes (only the enabled groups' are requested)
 
 [[tools]]
-name = "github_issue_create"       # 全スキルで一意。a-z 0-9 _
+name = "github_issue_create"       # unique across all skills. a-z 0-9 _
 description = "Create an issue."
-group = "issues"                   # 任意
-permission = "ask"                 # 既定の権限 disabled | ask | allow
-risk = "write"                     # read | write（MCP の注釈と UI 表示に使う）
+group = "issues"                   # optional
+permission = "ask"                 # default permission: disabled | ask | allow
+risk = "write"                     # read | write (MCP annotations and the UI)
 handler = "http"                   # builtin | http | command
 method = "POST"
 url = "https://api.github.com/repos/{{owner}}/{{repo}}/issues"
-body = ["title", "body"]           # JSON ボディにする引数
+body = ["title", "body"]           # arguments that go into the JSON body
 [tools.input_schema]               # JSON Schema
 type = "object"
 required = ["repo", "title"]
@@ -96,102 +96,104 @@ properties.title = { type = "string" }
 properties.body = { type = "string" }
 ```
 
-### ハンドラ
+### Handlers
 
-| handler | 実行内容 | 本体変更 |
+| handler | What it runs | Changes to Alice |
 |---|---|---|
-| `builtin` | Alice 内蔵の実装（`builtin = "fs" \| "web" \| "google"`） | 内蔵スキル用 |
-| `http` | 宣言した HTTP リクエストを送る。`{{arg}}` / `{{settings.x}}` を URL に埋め込み（URL エンコード）、`query` / `body` に引数を割り当て、認証トークンを `Authorization: Bearer` で付ける。**接続先は `permissions.network` のホストに限定** | 不要 |
-| `command` | スキルフォルダ内で `command = ["python3", "run.py"]` を実行。stdin に `{"tool", "arguments", "settings"}`、stdout が結果。環境変数は PATH / HOME / LANG と、そのスキル自身のトークン（`ALICE_SKILL_TOKEN`）だけ。60 秒・出力 256 KB まで | 不要 |
+| `builtin` | code inside Alice (`builtin = "fs" \| "web" \| "google" \| "recall" \| "background"`) | for built-in skills |
+| `http` | the declared HTTP request. `{{arg}}` / `{{settings.x}}` are filled into the URL (URL-encoded), arguments go to `query` / `body`, and the skill's token is sent as `Authorization: Bearer`. **Only hosts in `permissions.network` can be reached** | none |
+| `command` | runs `command = ["python3", "run.py"]` inside the skill folder. stdin gets `{"tool", "arguments", "settings"}`; stdout is the result. The environment holds only PATH / HOME / LANG and the skill's own token (`ALICE_SKILL_TOKEN`). 60 seconds and 256 KB of output at most | none |
 
 ## Skill Manager
 
-- 起動時と、スキルフォルダが変わったとき（更新時刻を見て自動）にスキルを検出する。`alice skill rescan` でも再検出できる。
-- manifest を検証し、各スキルの状態を決める：`ready` / `needs_setup`（設定・認証が足りない） / `missing_dependency` / `invalid`（manifest エラー） / `disabled`。
-- **新しく見つかった外部スキルは無効のまま**。ユーザーが宣言された権限（ネットワーク先・ファイル・認証）を確認して有効化する。
-- 同じ id のフォルダがあれば内蔵スキルより優先する（内蔵スキルの上書き）。
-- スキルフォルダは `~/.alice` 配下なので、ファイルツールからは読み書きできない。モデルがスキルを作ったり書き換えたりすることはできない。
+- Finds skills at startup and whenever the skills folder changes (by modification time). `alice skill rescan` does it on demand.
+- Validates manifests and gives each skill a state: `ready` / `needs_setup` (settings or sign-in missing) / `missing_dependency` / `invalid` (manifest error) / `disabled`.
+- **Newly found outside skills stay disabled.** The user enables them after seeing what they declare (network hosts, files, auth).
+- A folder with the same id as a built-in skill takes its place (overriding the built-in).
+- Skill folders are under `~/.alice`, which the file tools cannot read or write, so a model cannot create or change skills.
 
 ## Tool Registry
 
-- 有効で依存関係を満たすスキルのツールだけを登録する。名前が衝突した場合は後から読み込んだスキルを `invalid` にする。
-- 実効権限：設定のツール名 → スキル id（旧グループ名を含む）→ manifest の既定値。
-- 権限は `config.toml` の `tools.permissions` にだけ保存され、ユーザーの API トークンでしか変更できない。
+- Registers the tools of enabled skills whose dependencies are met. If two tools share a name, the skill loaded later becomes `invalid`.
+- Effective permission: the tool's own setting → the skill id (older group names included) → the manifest default.
+- Permissions are stored only in `tools.permissions` in `config.toml`, and only the user's API token can change them.
 
-## Tool Gate（権限・承認・実行・ログ）
+## Tool Gate (permission, approval, running, logging)
 
-1. ツールを Registry から引く。無い・スキル無効・未設定 → エラーをモデルに返す
-2. 権限が `disabled` → 拒否
-3. `ask` → 承認待ちイベントを全クライアントに送り、ユーザーの決定（最大 10 分）を待つ
-4. 実行（ハンドラ）。結果は `<untrusted>` で包む
-5. 出力・エラーから認証トークンの文字列を除去する
-6. `tool_runs` に記録（スキル・ツール・経路・結果・所要時間・エラー）。引数と結果本文は記録しない（本文はスレッドのメッセージとして残り、スレッド削除で消える）
+1. Look the tool up in the registry. Missing, skill off or not set up → an error goes back to the model
+2. `disabled` → refused
+3. `ask` → an approval request goes to every client; wait for the user's decision (up to 10 minutes)
+4. Run it (the handler). The result is wrapped in `<untrusted>`
+5. Remove token strings from output and errors
+6. Record it in `tool_runs` (skill, tool, route, result, duration, error). Arguments and results are not recorded (they stay as messages in the thread and go when it is deleted)
 
-## MCP サーバー（`alice mcp`）
+A tool that panics returns an error instead of taking the turn down.
 
-- ローカルの **stdio** で動く MCP サーバー。外部公開は不要。
-- 中身は Alice サーバーへの中継だけで、自分ではツールを実行しない。秘密情報（API キー・OAuth トークン・Alice の API トークン）を持たない。
-- 認証は **ターントークン**：Alice がそのターンのためだけに発行する使い捨てトークンで、`/api/mcp/*`（ツール一覧と実行）にしか使えない。ターンが終わる・停止される・スレッドが消えると即無効。承認 API や設定 API には使えない。
-- `tools/call` は Tool Gate を通る。承認が必要なツールは、ユーザーが Alice の UI で許可するまで MCP の応答を返さない。
+## MCP server (`alice mcp`)
 
-### Codex CLI との接続
+- An MCP server over local **stdio**. Nothing is exposed to the network.
+- It only relays to the Alice server and never runs tools itself. It holds no secrets (API keys, OAuth tokens, Alice's API token).
+- Auth is a **turn token**: a single-use token Alice issues for one turn, usable only for `/api/mcp/*` (listing and calling tools). It dies when the turn ends, is stopped, or its thread is deleted. It cannot reach the approval or settings APIs.
+- `tools/call` goes through the Tool Gate. For tools that need approval, the MCP reply waits until the user allows it in Alice's UI.
 
-Alice は Codex を **Alice 専用の CODEX_HOME（`~/.alice/codex/`）** で起動する。
+### Connecting the Codex CLI
 
-- **通常の経路（速い）**：`codex app-server` を 1 つ常駐させ（サーバー起動時に立ち上げる）、Alice のターンごとに使い捨て（ephemeral）の Codex スレッドを作って、Alice が組み立てたプロンプト全体を渡す。返答は生成されたそばからストリーミングされる。`codex exec` のように毎回プロセスを起動しないので、最初の文字が出るまでが数秒短くなる。
-- ツールは **dynamic tools**（app-server の実験的 API）として渡す。Codex はツールを使うとき同じ接続で `item/tool/call` を送り、Alice はプロセス内で Tool Gate を通してから結果を返す。MCP 子プロセスもトークンもないので、迂回できる経路がない。
-- **フォールバック**：app-server が起動できない Codex では、従来どおり `codex exec` ＋ `alice mcp`（下記）で動く。環境変数 `ALICE_CODEX_EXEC=1` でも強制できる。
+Alice starts Codex with **its own CODEX_HOME (`~/.alice/codex/`)**.
 
-- ユーザー普段の `~/.codex`（プラグイン・MCP サーバー・フック・履歴・記憶）は読み込まない。ログインも Alice 専用（`alice model login codex-cli`）。
-- `config.toml` は Alice が毎回書き出す：シェル・統合 exec・ブラウザ・コンピューター操作・画像生成・アプリ・プラグイン・フック・Web 検索を無効化、サンドボックスは読み取り専用、承認ポリシーは never、作業フォルダは空の一時ディレクトリ、MCP サーバーは `alice mcp` だけ。
-- Codex は MCP ツールを code mode の `exec`（ファイル・ネットワーク・Node のない V8 isolate）の中からしか呼べないため、`code_mode_host` だけは有効にする。isolate から呼べるのは `exec` の説明に列挙されたツールだけで、それも安全確認の対象。`codex-code-mode-host` が無ければ MCP は使えないので、テキスト方式に切り替える。
-- MCP の承認は Codex 側では行わず（`default_tools_approval_mode = "approve"`）、Alice の Tool Gate が行う。
-- **安全確認**：ツールを渡す前に `codex debug prompt-input` でモデルに見えるツール一覧を取り出し、許可リスト外のツール（シェルなど）が 1 つでもあれば MCP を使わず、テキスト方式に切り替える。結果は Codex のバージョンごとにキャッシュする。
+- **Usual route (fast)**: one `codex app-server` stays running (started with the server). Each Alice turn gets an ephemeral Codex thread with the whole prompt Alice built, and the reply streams as it is written. No process starts per turn as with `codex exec`, which saves a few seconds before the first word.
+- Tools are given as **dynamic tools** (an experimental app-server API). When Codex uses one, it sends `item/tool/call` on the same connection and Alice answers in process after the Tool Gate. No MCP child process and no token, so there is nothing to go around.
+- **Fallback**: if the app-server cannot start, `codex exec` + `alice mcp` (below) is used. `ALICE_CODEX_EXEC=1` forces it.
 
-### Codex から承認を迂回できない理由
+- The user's own `~/.codex` (plugins, MCP servers, hooks, history, memories) is never loaded. The login is Alice's own too (`alice model login codex-cli`).
+- Alice writes `config.toml` every time: shell, unified exec, browser, computer use, image generation, apps, plugins, hooks and web search off; a read-only sandbox; approval policy never; an empty temporary working directory; `alice mcp` as the only MCP server.
+- Codex can call MCP tools only from code mode's `exec` (a V8 isolate without files, network or Node), so `code_mode_host` alone is left on. The isolate can call only the tools listed in `exec`'s description, and those are part of the safety check. Without `codex-code-mode-host`, MCP cannot work and Alice switches to the text protocol.
+- MCP approvals are not done on the Codex side (`default_tools_approval_mode = "approve"`); Alice's Tool Gate decides.
+- **Safety check**: before giving tools, Alice reads the tools the model would see with `codex debug prompt-input`. If even one tool outside the allow list (a shell, say) is there, MCP is not used and the text protocol takes over. The result is cached per Codex version.
 
-| 迂回の手段 | 対策 |
+### Why Codex cannot get around approvals
+
+| Way around | Countermeasure |
 |---|---|
-| Alice の承認 API を直接呼ぶ | app-server 経路ではツール呼び出しは Alice のプロセス内で処理され、トークン自体が存在しない。MCP 経路でも中継が持つのはターントークンだけで、承認 API には使えない。Alice の API トークンは Codex に渡さない |
-| secrets.toml などを読んでトークンを盗む | Codex のシェル・コード実行・プラグイン・他の MCP を無効化し、安全確認で検証。ファイルツールは `~/.alice` を常に拒否 |
-| MCP 経由で別のツールを装う | ツール名は Registry で解決し、権限は Alice の設定で判定する。MCP の引数に承認フラグは存在しない |
-| スキルを書き換えて権限を変える | スキルと設定は `~/.alice` 配下で、モデルからは書けない。権限変更はユーザーの API トークンが必要 |
-| Codex 側の自動承認 | Codex が承認しても Alice の Gate は独立して判定する |
+| Calling Alice's approval API directly | On the app-server route, tool calls are handled inside Alice's process and no token exists. On the MCP route, the relay holds only the turn token, which cannot reach the approval API. Alice's API token is never given to Codex |
+| Reading secrets.toml to steal a token | Codex's shell, code execution, plugins and other MCP servers are off, verified by the safety check. The file tools always refuse `~/.alice` |
+| Posing as another tool through MCP | Tool names are resolved in the registry and permissions come from Alice's settings. MCP arguments carry no approval flag |
+| Rewriting a skill to change permissions | Skills and settings live under `~/.alice`, which models cannot write. Changing permissions needs the user's API token |
+| Auto-approval on the Codex side | Whatever Codex approves, Alice's Gate decides on its own |
 
-## テキスト方式（ハイブリッドのもう半分）
+## Text protocol (the other half of the hybrid)
 
-ネイティブ Tool Calling も MCP も使えないモデル（Gemini CLI、Codex の安全確認に失敗した場合など）向け。Registry のツール一覧をプロンプトに入れ、モデルが
+For models that have neither native tool calling nor MCP (the Antigravity CLI, Codex when its safety check fails, …). The registry's tools go into the prompt, and when the model writes
 
 ````
 ```alice-tool
-{"name": "calendar_create", "arguments": {"summary": "歯医者", "start": "…", "end": "…"}}
+{"name": "calendar_create", "arguments": {"summary": "Dentist", "start": "…", "end": "…"}}
 ```
 ````
 
-と書いたら Alice が取り出して Tool Gate で実行し、結果を渡して続きを書かせる。
+Alice picks it up, runs it through the Tool Gate, and hands the result back for the model to continue.
 
-## 認証とトークンの保存
+## Auth and token storage
 
-- `token`：ユーザーが貼り付けたトークンを `secrets.toml`（0600）に `skill.<id>.token` として保存。
-- `oauth2`：PKCE + ループバックリダイレクト（`http://127.0.0.1:<port>/oauth/callback`）。state は使い捨てで 15 分有効。リフレッシュトークンは `skill.<id>.refresh_token` に保存し、アクセストークンはメモリにだけ置く。ログアウト時は失効 API を呼んでから削除する。
-- トークンはモデル・MCP 中継・ログ・Web API の応答に出さない。command ツールには、そのスキル自身のアクセストークンだけを環境変数で渡す。
-- クライアント ID などの設定は `config.toml` の `[skills.<id>.settings]`、`secret = true` の設定は `secrets.toml` に入る。
+- `token`: the token the user pastes goes to `secrets.toml` (0600) as `skill.<id>.token`.
+- `oauth2`: PKCE + a loopback redirect (`http://127.0.0.1:<port>/oauth/callback`). `state` is single-use and valid for 15 minutes. The refresh token is stored as `skill.<id>.refresh_token`; access tokens stay in memory only. Signing out calls the revoke endpoint, then deletes.
+- Tokens never appear to the model, the MCP relay, the logs or Web API responses. A command tool gets only its own skill's access token, through the environment.
+- Settings such as the client ID go to `[skills.<id>.settings]` in `config.toml`; settings with `secret = true` go to `secrets.toml`.
 
-## スキル単位の有効化・無効化
+## Turning skills on and off
 
 ```sh
-alice skill                       # 一覧と状態
-alice skill info google-workspace # 説明・ツール・宣言された権限
-alice skill enable github         # 有効化（宣言された権限を表示して確認）
+alice skill                       # list and state
+alice skill info google-workspace # description, tools, declared permissions
+alice skill enable github         # enable (shows the declared permissions to confirm)
 alice skill disable github
 alice skill login google-workspace / logout
 alice skill set github owner my-org
-alice skill log                   # ツール実行ログ
+alice skill log                   # tool run log
 ```
 
-Web の「設定 → スキル」でも同じ操作ができる。
+The Web UI's "Settings → Skills" does the same.
 
-## ログ
+## Logs
 
-- `tool_runs` テーブル：時刻・スレッド・スキル・ツール・経路（native / mcp / text）・結果（ok / error / denied / declined / cancelled）・所要時間・エラー概要。スレッド削除で一緒に消え、全削除で全消去。
-- サーバーログ（`alice log`）：同じ内容を 1 行で。引数・結果本文・トークンは出さない。
+- The `tool_runs` table: time, thread, skill, tool, route (native / mcp / text), result (ok / error / denied / declined / cancelled), duration, error summary. Deleted with the thread, and all of it with delete-all.
+- The server log (`alice log`): the same on one line. No arguments, result text or tokens.

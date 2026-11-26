@@ -1,68 +1,70 @@
-# Alice Agent — セキュリティレビュー
+# Alice Agent — Security review
 
-対象バージョン: 0.1.0。単一ユーザー・自己ホストを前提とした脅威モデルとその対策、残存リスクを記す。
+Version 0.1.0. The threat model for a single-user, self-hosted agent, what is done about each threat, and the risks that remain.
 
-## 1. 脅威モデル
+## 1. Threat model
 
-| 脅威 | 例 |
+| Threat | Examples |
 |---|---|
-| ネットワーク上の第三者 | LAN / インターネットからの API アクセス |
-| 悪意あるWebサイト（ブラウザ経由） | CSRF、DNS リバインディング、XSS |
-| プロンプトインジェクション | Web ページ・メール・ファイル・添付に埋め込まれた指示 |
-| チャット基盤上の第三者 | Bot を見つけた他人からの Telegram / Discord メッセージ |
-| 同一マシンの他ユーザー | 設定・DB ファイルの読み取り |
+| Others on the network | API access from the LAN or the internet |
+| Malicious websites (through the browser) | CSRF, DNS rebinding, XSS |
+| Prompt injection | Instructions hidden in web pages, mail, files or attachments |
+| Others on chat platforms | Telegram / Discord messages from people who found the bot |
+| Other users on the same machine | Reading the settings or the DB file |
 
-## 2. 対策
+## 2. Countermeasures
 
-### 認証・ネットワーク
-- 既定バインドは `127.0.0.1`（ループバックは常に待ち受け、`server.bind` で LAN / Tailscale の IP を追加できる）。非ループバック時は起動ログで警告し、Tailscale または HTTPS リバースプロキシを推奨。
-- API トークンは既定でランダム 256bit。自分で決める場合（`alice token --set`）は 12 文字以上、ヘッダ・Cookie に安全な ASCII のみ。
-- 間違ったトークンは接続元アドレスごとに数え、1 分に 30 回で その接続元を 1 分間拒否（推測対策）。
-- `/api/health` と OAuth コールバック以外の全 API がトークン必須（ローカル接続も例外なし）。トークンは 256 bit 乱数、比較は定数時間、失敗時は 500 ms 遅延。
-- Web GUI は HttpOnly + `SameSite=Strict` の Cookie（HTTPS 時 `Secure`）。Cookie 認証での状態変更は `X-Alice-CSRF` ヘッダ必須（クロスサイトからは付与できない）。
-- Cookie 名はプロファイルごとに異なる（Cookie はポートで分離されないため）。
-- DNS リバインディング: 攻撃者ドメインには Cookie が送られず、トークンも知り得ないため API に到達できない。
+### Auth and network
+- Binds to `127.0.0.1` by default (loopback is always on; `server.bind` adds LAN / Tailscale addresses). A non-loopback address logs a warning at startup; Tailscale or an HTTPS reverse proxy is recommended.
+- The API token is 256 random bits by default. A self-chosen one (`alice token --set`) must be 12+ characters of ASCII that is safe in headers and cookies.
+- Wrong tokens are counted per address; 30 in a minute locks that address out for a minute (against guessing).
+- Every API except `/api/health` and the OAuth callback needs the token (local connections included). Comparison is constant time, and a failure waits 500 ms.
+- The Web UI uses an HttpOnly `SameSite=Strict` cookie (`Secure` over HTTPS). Cookie requests that change state need the `X-Alice-CSRF` header, which other sites cannot add.
+- The cookie name differs per profile (cookies are not separated by port).
+- DNS rebinding: the attacker's domain gets no cookie and does not know the token, so it cannot reach the API.
 
-### Web GUI
-- CSP `default-src 'self'`（インラインスクリプト・スタイル不可）、`frame-ancestors 'none'`、`nosniff`、`no-referrer`。
-- Markdown は全文を HTML エスケープしてから限定タグのみ生成。リンクは http(s) のみ。テストで XSS ペイロードを検証済み。
-- 添付ファイルは画像（SVG 除く）以外を `application/octet-stream` + `Content-Disposition: attachment` で返す。
+### Web UI
+- CSP `default-src 'self'` (no inline scripts or styles), `frame-ancestors 'none'`, `nosniff`, `no-referrer`.
+- Markdown escapes all HTML first, then adds a small set of tags; links must be http(s). Code highlighting cuts code into tokens before escaping, so it adds only its own spans. Tests cover XSS payloads.
+- HTML mail is served from its own URL under a strict CSP (inline styles only, no scripts or forms, remote images only on request) inside a sandboxed frame.
+- Attachments other than images (SVG excluded) are served as `application/octet-stream` with `Content-Disposition: attachment`.
 
-### ツール・プロンプトインジェクション
-- ツール権限（disabled / ask / allow）は `config.toml` にのみ存在し、LLM から変更するツールや API はない。
-- 破壊的・外部送信を伴う操作は既定で確認必須: ファイル書き込み/編集/移動/削除、`web_fetch`（URL 経由の情報流出を防ぐ）、メール送信、予定の作成/削除、Docs/Sheets 書き込み。
-- 外部コンテンツ（Web、メール、ファイル、添付、検索結果、ツール結果）は `<untrusted>` で囲み、指示として扱わないよう System Prompt で明示。
-- ファイルツール: 設定したルート内に限定。`..` 拒否、シンボリックリンクは解決後に判定、走査中はリンクを辿らない。**ルート設定に関係なく Alice のデータディレクトリ（`~/.alice`、各プロファイル）は workspace を除き常に拒否**（API キーの読み取りや権限設定の書き換えを防ぐ）。
-- `web_fetch`: http(s) のみ、リダイレクトを手動で辿り、各ホップでプライベート/ループバック/リンクローカル/CGNAT アドレスへの接続を拒否（SSRF 対策）。
-- Memory はユーザー本人の発言からのみ抽出（Web やメールの内容が記憶に入らない）。注入時は「指示ではなくデータ」と明示。
-- Gmail 送信はヘッダインジェクション（改行）を拒否。
+### Tools and prompt injection
+- Tool permissions (disabled / ask / allow) live only in `config.toml`; no tool or API lets the model change them.
+- Destructive actions and anything that sends data out need confirmation by default: writing, editing, moving or deleting files, `web_fetch` (so a URL cannot leak information), sending mail, creating or deleting events, writing Docs/Sheets.
+- Outside content (web, mail, files, attachments, search results, tool results, earlier chats found by recall) is wrapped in `<untrusted>`, and the system prompt says not to follow it.
+- File tools stay inside the configured roots. `..` is refused, symlinks are judged after resolving, and walks do not follow links. **Alice's data directory (`~/.alice`, every profile) is always refused, except the workspace, whatever the roots** (so API keys cannot be read and permissions cannot be rewritten). New paths are checked in full, not only their existing parent.
+- `web_fetch`: http(s) only, redirects followed by hand, and every hop refused for private / loopback / link-local / CGNAT addresses (against SSRF).
+- Memories come only from the user's own messages (web or mail content never becomes a memory) and are marked as data, not instructions, when injected.
+- Sending Gmail refuses header injection (line breaks).
 
-### チャネル
-- Telegram / Discord は許可リストのユーザー ID のみ処理し、それ以外は無視（ログに ID のみ記録）。承認ボタンも同じ許可リストで検証。
-- Bot トークンを含む URL はエラーメッセージから除去（`without_url`）。
+### Channels
+- Telegram / Discord handle only allow-listed user IDs and ignore everyone else (only the ID is logged). Approval buttons check the same list.
+- URLs that contain the bot token are stripped from error messages (`without_url`).
 
-### 秘密情報・データ
-- `secrets.toml`・`config.toml`・`alice.db` は 0600、データディレクトリは 0700。API から秘密情報を読み出す手段はない（設定・削除のみ）。
-- ログにはトークン・API キー・メッセージ本文を出力しない（スレッド ID、時間、エラー種別のみ）。
-- スキルの認証: PKCE (S256) + 使い捨て `state` + ループバックリダイレクト。リフレッシュトークン・トークンは `secrets.toml`（`skill.<id>.*`）のみ、アクセストークンはメモリのみ。切断時に提供元で revoke。ツール出力・エラー・ログからはトークン文字列を除去する。
-- スキル: 外部スキルは検出されても無効のまま。有効化時に宣言された権限（ネットワーク先・ファイル・ローカル実行）を表示。`http` ツールは宣言したホストにしか接続できず、引数は URL エンコードしてパスやホストを変えられない。`command` ツールは環境変数を空にして PATH/HOME/LANG/TMPDIR と自分のトークンだけを渡す。スキルフォルダは `~/.alice` 配下なのでモデルからは書き換えられない。
-- Codex（MCP）: Alice 専用の CODEX_HOME で、シェル・ブラウザ・プラグイン・サブエージェント・フック・Web 検索を無効化し（MCP ツールを呼ぶための code mode の `exec` は、ファイル・ネットワークのない V8 isolate なので有効のまま）、読み取り専用サンドボックス・空の作業フォルダで実行。ツールを渡す前にモデルに見えるツール一覧を検査し、許可リスト外があればテキスト方式に切り替える（fail closed）。`alice mcp` はターントークンしか持たず、そのトークンは `/api/mcp/*` 以外（承認・設定・秘密情報）に使えない。承認は Alice の UI でのみ行える。
-- 削除: `secure_delete`、WAL の `TRUNCATE` チェックポイント、FTS の `optimize`、全削除時 `VACUUM`。テストで DB ファイルに削除済み文字列が残らないことを確認。
-- iPhone: 接続情報は Keychain（`AfterFirstUnlockThisDeviceOnly`）、URLSession はエフェメラル（ディスクキャッシュ・Cookie なし）、画像はメモリのみ。オフライン表示用に、最後に読み込んだ予定・メール（一覧と最近の本文）・ToDo・チャット履歴（最近 20 スレッド）を Application Support に保存する（Complete Data Protection でロック中は読めない、バックアップ対象外、サーバー切り替え時に削除）。
+### Secrets and data
+- `secrets.toml`, `config.toml` and `alice.db` are 0600; the data directory is 0700. No API can read a secret back (set and delete only).
+- Logs never contain tokens, API keys or message text (thread IDs, timings and error kinds only).
+- Skill sign-in: PKCE (S256) + single-use `state` + a loopback redirect. Refresh tokens and tokens live only in `secrets.toml` (`skill.<id>.*`), access tokens only in memory. Disconnecting revokes them at the provider. Token strings are removed from tool output, errors and logs.
+- Skills: outside skills stay disabled when found. Enabling shows what they declare (network hosts, files, local execution). `http` tools can reach only the declared hosts, and arguments are URL-encoded so they cannot change the path or host. `command` tools get an empty environment except PATH/HOME/LANG/TMPDIR and their own token. Skill folders are under `~/.alice`, so models cannot rewrite them.
+- Codex: its own CODEX_HOME with shell, browser, plugins, subagents, hooks and web search off (code mode's `exec`, needed for MCP tools, stays on: it is a V8 isolate without files or network). Read-only sandbox, empty working directory. Before tools are given, the tools the model would see are checked, and anything outside the allow list switches to the text protocol (fail closed). `alice mcp` holds only a turn token, which works for nothing but `/api/mcp/*` (not approvals, settings or secrets). Approvals happen only in Alice's UI.
+- Antigravity CLI: plan mode, `--sandbox`, an empty working directory; headless runs refuse actions that need approval. Alice's tools go through the Tool Gate with the text protocol.
+- Deletion: `secure_delete`, `TRUNCATE` WAL checkpoints, FTS `optimize`, `VACUUM` on delete-all. A test checks that deleted strings do not remain in the DB file.
+- iPhone: connection details in the Keychain (`AfterFirstUnlockThisDeviceOnly`), an ephemeral URLSession (no disk cache or cookies), images in memory only. For offline reading, the last loaded events, mail (list and recent bodies), tasks and chats (the 20 most recent threads) are kept in Application Support with complete data protection (unreadable while locked), excluded from backups, and removed when switching servers. Alice's screen comments send only counts and times unless the user allows titles and senders.
 
-## 3. 残存リスク（設計上の限界）
+## 3. Remaining risks (limits of the design)
 
-| リスク | 内容 | 推奨 |
+| Risk | What it means | Advice |
 |---|---|---|
-| 外部へ送信済みのデータ | LLM Provider、Telegram/Discord、Google に渡ったデータは Alice の削除範囲外 | 機密性の高い内容はローカル LLM（Ollama）を使う |
-| Codex CLI / Gemini CLI | これらはそれ自体がエージェントで、`--sandbox read-only` でもローカルファイルを**読める**可能性がある。Alice のツールゲートの外側で動く | 信頼できる入力にのみ使う。Web やメールの内容を扱う場合は API 接続を使う |
-| `allow` に変更したツール | 確認なしで実行されるため、インジェクションの影響を受けやすい | 外部送信系（`web_fetch`, `gmail_send`）は `ask` のまま使う |
-| ファイルルートを広く設定 | `~` を許可すると `~/.ssh` 等も読める（書き込みは既定で確認あり） | 必要なディレクトリだけを許可する |
-| ローカル特権 | 同じ OS ユーザーで動くプロセスは `secrets.toml` を読める | OS のアカウント分離・ディスク暗号化に依存 |
-| バックアップ / スナップショット | Time Machine 等に残ったデータは消せない | 必要なら `~/.alice` をバックアップ対象から除外 |
-| 承認の主体 | 認証済みのどのクライアントからでも承認できる | 単一ユーザー前提の仕様 |
+| Data already sent out | Whatever reached a model provider, Telegram/Discord or Google is beyond Alice's deletion | Use a local model (Ollama) for very sensitive content |
+| Codex CLI / Antigravity CLI | These are agents themselves and may **read** local files even when sandboxed. They run outside Alice's Tool Gate | Use them with trusted input; for web or mail content, prefer an API connection |
+| Tools switched to `allow` | Run without asking, so injection affects them more | Keep tools that send data out (`web_fetch`, `gmail_send`) on `ask` |
+| Broad file roots | Allowing `~` makes `~/.ssh` and the like readable (writes still ask by default) | Allow only the folders you need |
+| Local privileges | Any process running as the same OS user can read `secrets.toml` | Relies on OS account separation and disk encryption |
+| Backups and snapshots | Data left in Time Machine and the like cannot be erased | Exclude `~/.alice` from backups if needed |
+| Who approves | Any signed-in client can approve | By design, for a single user |
 
-## 4. 確認方法
+## 4. How it is checked
 
-自動テスト（`cargo test`）で以下を検証している:
-未認証拒否・Cookie+CSRF・秘密情報が API に出ないこと・CSP ヘッダ / ツール権限（disabled・ask・allow）/ パストラバーサル・シンボリックリンク脱出・データディレクトリ保護 / SSRF（プライベートアドレス拒否）/ Markdown の XSS / メールのヘッダインジェクション / PKCE と state 検証 / 許可リスト外のチャットユーザーの無視 / 削除後に DB ファイルへ文字列が残らないこと。
+Automated tests (`cargo test`) cover:
+unauthenticated requests refused, cookie + CSRF, no secrets in API responses, CSP headers, the mail frame's CSP / tool permissions (disabled, ask, allow) / path traversal, symlink escapes, data directory protection / SSRF (private addresses refused) / XSS in Markdown / mail header injection / PKCE and `state` checks / chat users outside the allow list ignored / no deleted strings left in the DB file / the wrong-token lockout.

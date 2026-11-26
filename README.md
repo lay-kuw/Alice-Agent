@@ -5,262 +5,262 @@
 <h1 align="center">✦ Alice Agent ✦</h1>
 
 <p align="center">
-  自分ひとりのための、ちいさくて速い AI エージェント ₍ᐢ. .ᐢ₎♡<br>
-  単一バイナリ · ローカルファースト · SQLite だけで動きます
+  A tiny, speedy AI agent just for you ₍ᐢ. .ᐢ₎♡<br>
+  One binary · local first · nothing but SQLite
 </p>
 
 <p align="center">
-  <a href="#-インストール"><img src="https://img.shields.io/badge/macOS-Apple%20Silicon-f5c2e7?logo=apple&logoColor=white" alt="macOS"></a>
-  <a href="#-インストール"><img src="https://img.shields.io/badge/Linux-x86__64%20%7C%20arm64-cba6f7?logo=linux&logoColor=white" alt="Linux"></a>
+  <a href="#-install"><img src="https://img.shields.io/badge/macOS-Apple%20Silicon-f5c2e7?logo=apple&logoColor=white" alt="macOS"></a>
+  <a href="#-install"><img src="https://img.shields.io/badge/Linux-x86__64%20%7C%20arm64-cba6f7?logo=linux&logoColor=white" alt="Linux"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Rust-2024-f38ba8?logo=rust&logoColor=white" alt="Rust"></a>
-  <a href="#-iphone-アプリ"><img src="https://img.shields.io/badge/iPhone-SwiftUI-fab387?logo=swift&logoColor=white" alt="iPhone app"></a>
-  <a href="#-データ"><img src="https://img.shields.io/badge/storage-SQLite%20only-b4befe" alt="SQLite only"></a>
+  <a href="#-iphone-app"><img src="https://img.shields.io/badge/iPhone-SwiftUI-fab387?logo=swift&logoColor=white" alt="iPhone app"></a>
+  <a href="#-your-data"><img src="https://img.shields.io/badge/storage-SQLite%20only-b4befe" alt="SQLite only"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a6e3a1" alt="MIT License"></a>
 </p>
 
-<p align="center">｡･:*:･ﾟ★ CLI · Web · iPhone · Telegram · Discord で、同じ Alice とおしゃべり ★ﾟ･:*:･｡</p>
+<p align="center">｡･:*:･ﾟ★ chat with the same Alice from the CLI, Web, iPhone, Telegram and Discord ★ﾟ･:*:･｡</p>
 
 ---
 
-## 🌸 もくじ
+## 🌸 Contents
 
-- [できること](#-できること)
-- [インストール](#-インストール)
-- [はじめかた](#-はじめかた)
-- [コマンド](#-コマンド)
-- [モデルとサブスク](#-モデルとサブスク)
-- [つながるもの](#-つながるもの)
-- [iPhone アプリ](#-iphone-アプリ)
-- [人格（SOUL.md）](#-人格soulmd)
-- [プロファイル](#-プロファイル)
-- [データ](#-データ)
-- [リモートアクセス](#-リモートアクセス)
-- [開発](#-開発)
+- [What she can do](#-what-she-can-do)
+- [Install](#-install)
+- [Getting started](#-getting-started)
+- [Commands](#-commands)
+- [Models and subscriptions](#-models-and-subscriptions)
+- [Connections](#-connections)
+- [iPhone app](#-iphone-app)
+- [Personality (SOUL.md)](#-personality-soulmd)
+- [Profiles](#-profiles)
+- [Your data](#-your-data)
+- [Remote access](#-remote-access)
+- [Development](#-development)
 
-## ✨ できること
+## ✨ What she can do
 
-- **🪄 ひとつのバイナリ**: `alice`（Rust）にサーバー・CLI・TUI・Web 画面が全部入り。Docker / Node.js / Redis / 外部 DB は不要
-- **💬 どこからでも同じ会話**: CLI / Web / iPhone / Telegram / Discord で、スレッドも記憶も共有
-- **🧠 出典つきの記憶**: 覚えたことには必ず元の会話が付きます。スレッドを消せば、そこから覚えたことも消えます
-- **🔎 思い出す**: 「前に話したカフェ」みたいな聞き方でも、Alice がキーワードを考えて記憶と過去の会話を探します（検索はぜんぶ手元で）
-- **📅 Google とつながる**: カレンダー・Gmail・ToDo を見たり、追加したり。トークンはサーバーだけが持ちます
-- **⏰ エージェント**: 「毎朝 8 時にメールをまとめて」のように、決まった時間に Alice が自分から動きます。報告がなければ何も残さず静かに終了
-- **🌙 裏で動くタスク**: 「時間かかるから裏でやっておいて」で、別のチャットでじっくり作業 → 終わったら通知
-- **📱 かわいい iPhone アプリ**: ホーム・チャット・カレンダー・メール・やること、ウィジェット、通知、オフライン表示つき
-- **🛡️ 安全第一**: ツールは承認制、HTML メールはスクリプトなしで表示、ログに会話や秘密は出しません
-- **⚡ 軽い**: 待機中のメモリは十数 MB。返答はストリーミングで、長い会話は古い部分を要約して覚えておきます
+- **🪄 One binary**: `alice` (Rust) holds the server, CLI, TUI and Web UI. No Docker, Node.js, Redis or outside database
+- **💬 The same conversation everywhere**: CLI / Web / iPhone / Telegram / Discord share threads and memories
+- **🧠 Memories with sources**: everything Alice remembers points back to where you said it. Delete the thread, and what she learned from it goes too
+- **🔎 Recall**: ask "that café we talked about?" and Alice picks keywords and searches her memories and earlier chats (all on your machine)
+- **📅 Google**: read and add calendar events, Gmail and tasks. Only the server holds the tokens
+- **⏰ Agents**: "summarize my mail every morning at 8" and Alice speaks up on her own. With nothing to report, she quietly leaves no trace
+- **🌙 Background tasks**: "take your time on this" starts the work in its own chat and lets you know when it's done
+- **📱 A cute iPhone app**: home, chat, calendar, mail, to-do, widgets, notifications, offline reading
+- **🛡️ Safety first**: tools ask for approval, HTML mail shows without scripts, logs never hold conversations or secrets
+- **⚡ Light**: about a dozen MB of memory while idle. Replies stream, and long chats keep a summary of their beginning
 
-## 🍓 インストール
+## 🍓 Install
 
 ```sh
 git clone https://github.com/lay-kuw/Alice-Agent.git
 cd Alice-Agent
-scripts/install.sh            # ビルドして ~/.local/bin/alice に配置
+scripts/install.sh            # build and put it in ~/.local/bin/alice
 scripts/install.sh --uninstall
 ```
 
-対応: macOS（Apple Silicon）、Linux（x86_64 / ARM64）。[Rust](https://rustup.rs) が必要です。
+Runs on macOS (Apple Silicon) and Linux (x86_64 / ARM64). Needs [Rust](https://rustup.rs).
 
-## 🎀 はじめかた
+## 🎀 Getting started
 
 ```sh
-alice setup      # 対話型セットアップ（サーバー・API トークン・モデル・自動起動）
-alice start      # サーバー起動（launchd / systemd 登録済みならサービス経由）
-alice chat       # TUI でおしゃべり（/ でコマンド候補、Esc で応答停止、--plain で行表示）
+alice setup      # guided setup (server, API token, model, start at login)
+alice start      # start the server (through launchd / systemd when registered)
+alice chat       # chat in the TUI (/ for commands, Esc stops a reply, --plain for line mode)
 ```
 
-Web 画面は `http://127.0.0.1:7878/` を開いて、`alice token` で出てくるトークンでサインインします。やった〜 ٩(ˊᗜˋ*)و
+For the Web UI, open `http://127.0.0.1:7878/` and sign in with the token from `alice token`. Yay ٩(ˊᗜˋ*)و
 
-左のアイコン（スマホ幅では下のタブ）で、チャット・カレンダー・メール・タスク・エージェント・設定を切り替えます。`#calendar`・`#mail`・`#tasks`・`#agents` の URL で直接開けます。
+The icons on the left (tabs at the bottom on a phone) switch between Chat, Calendar, Mail, Tasks, Agents and Settings. `#calendar`, `#mail`, `#tasks` and `#agents` open a view directly.
 
-## 🐾 コマンド
+## 🐾 Commands
 
-| コマンド | 説明 |
+| Command | What it does |
 |---|---|
-| `alice chat "質問"` | 新しいスレッドで 1 回だけ質問 |
-| `alice chat list` / `alice chat <id>` | スレッド一覧 / 再開 |
-| `alice chat rename <id>` / `delete <id>` / `clear` | 名前変更 / 削除 / 全削除（設定は維持） |
-| `alice model [list\|refresh\|add\|remove\|use\|login\|logout\|test]` | モデル管理（`use 1` のように番号でも、`use 2 high` で推論の深さも指定可） |
-| `alice soul [edit\|show\|reset]` | 人格ファイル SOUL.md |
-| `alice usage` | ChatGPT サブスクの 5 時間枠・週間枠の残量と、モデル別の使用トークン |
-| `alice memory [list\|search "語"\|show <id>\|status\|clear]` | 記憶の管理（出典は `show` で） |
-| `alice tool [list\|enable <tool> [ask\|allow]\|disable <tool>]` | ツールの権限 |
-| `alice skill [list\|info\|enable\|disable\|setup\|login\|logout\|log]` | スキル（機能拡張）の管理・認証・実行ログ |
-| `alice google [setup\|login\|logout\|status]` | google-workspace スキルの短縮形 |
+| `alice chat "question"` | Ask once in a new thread |
+| `alice chat list` / `alice chat <id>` | List threads / pick one up again |
+| `alice chat rename <id>` / `delete <id>` / `clear` | Rename / delete / delete all (settings stay) |
+| `alice model [list\|refresh\|add\|remove\|use\|login\|logout\|test]` | Models (numbers work too, like `use 1`; `use 2 high` sets the reasoning effort) |
+| `alice soul [edit\|show\|reset]` | The personality file, SOUL.md |
+| `alice usage` | ChatGPT subscription limits (5-hour and weekly) and tokens used per model |
+| `alice memory [list\|search "word"\|show <id>\|status\|clear]` | Memories (`show` for sources) |
+| `alice tool [list\|enable <tool> [ask\|allow]\|disable <tool>]` | Tool permissions |
+| `alice skill [list\|info\|enable\|disable\|setup\|login\|logout\|log]` | Skills (add-ons), sign-in and run log |
+| `alice google [setup\|login\|logout\|status]` | Shortcut for the google-workspace skill |
 | `alice gateway [list\|setup [telegram\|discord]\|delete <id>]` | Telegram / Discord |
-| `alice profile [list\|<name>\|use <name>\|delete <name>]` | プロファイル |
-| `alice config [get\|set <key> <value>\|secret <name>]` | 設定・秘密情報 |
-| `alice service [install\|uninstall\|status]` | 自動起動（launchd / systemd） |
-| `alice status` / `log -f` / `start` / `stop` / `restart` / `token` | サーバー管理 |
+| `alice profile [list\|<name>\|use <name>\|delete <name>]` | Profiles |
+| `alice config [get\|set <key> <value>\|secret <name>]` | Settings and secrets |
+| `alice service [install\|uninstall\|status]` | Start at login (launchd / systemd) |
+| `alice status` / `log -f` / `start` / `stop` / `restart` / `token` | Server |
 
-どのコマンドも `-p <profile>` で、一時的に別のプロファイルを対象にできます。
+Every command takes `-p <profile>` to act on another profile just once.
 
-## 🧁 モデルとサブスク
+## 🧁 Models and subscriptions
 
-API キーのほか、公式 CLI を通してサブスクのまま使えます。両方につないでおけば、チャットごとに Web・TUI・iPhone のモデル選択から切り替えられます。
+Use API keys, or your subscriptions through the official CLIs. Connect several and switch per chat from the model picker in the Web UI, TUI and iPhone app.
 
 <details>
-<summary><b>💬 ChatGPT サブスク（codex-cli）</b></summary>
+<summary><b>💬 ChatGPT subscription (codex-cli)</b></summary>
 
 - `alice model add` → `codex-cli` → `alice model login codex-cli`
-- Alice 専用のログインで、普段の `~/.codex` は使いません。ブラウザのないサーバーでは `alice model login codex-cli --device-auth`
-- サーバーに [Codex CLI](https://github.com/openai/codex) を入れておく必要があります（ChatGPT のサブスクを使う公式の経路が CLI だけなので）
-- スキルは内蔵の MCP サーバー経由で使え、承認は Alice の画面で行います
+- Alice's own login; your usual `~/.codex` is not used. On a server without a browser: `alice model login codex-cli --device-auth`
+- Needs the [Codex CLI](https://github.com/openai/codex) on the server (the CLI is the only official way to use a ChatGPT subscription)
+- Skills are reached through Alice's built-in MCP server, and approvals happen in Alice's UI
 
 </details>
 
 <details>
-<summary><b>✨ Google AI サブスク（antigravity-cli）</b></summary>
+<summary><b>✨ Google AI subscription (antigravity-cli)</b></summary>
 
-- サーバーに Antigravity CLI を入れます: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
-- `alice model add` → `antigravity-cli` → `alice model login antigravity-cli`（中身は `agy` の起動）で一度サインイン
-- ブラウザのないサーバーでは、表示された URL を手元のブラウザで開き、出てきたコードを貼り戻します
-- `agy` は plan モード・サンドボックス・空の作業フォルダで動かし、スキルは Alice のテキスト方式で使います
-- Gemini CLI のサブスクログインは 2026-06-18 に終了したので、`gemini-cli` は追加できなくなりました
-
-</details>
-
-<details>
-<summary><b>🔑 API キー / ローカル</b></summary>
-
-- OpenAI / Anthropic / Gemini / OpenAI 互換サーバー / Ollama
-- モデル一覧は起動時と 6 時間ごとに取り直します（`alice model refresh` で今すぐ）
-- 推論の深さは `codex-cli/gpt-6.2-sol#high` のように、モデル ID の後ろに付けて指定します
-
-</details>
-
-## 🧸 つながるもの
-
-<details>
-<summary><b>📅 Google（カレンダー・Gmail・ToDo）</b></summary>
-
-- Google Cloud で「デスクトップ アプリ」の OAuth クライアントを作成 → `alice skill setup google-workspace` → `alice skill login google-workspace`
-- 有効にしたサービスのスコープだけを要求します。ToDo は `alice skill groups google-workspace` で Tasks をオンにして再接続
-- メールの既読切り替えには Gmail の変更権限（`gmail.modify`）が要ります。以前に接続した場合は一度再接続してください
+- Install the Antigravity CLI on the server: `curl -fsSL https://antigravity.google/cli/install.sh | bash`
+- `alice model add` → `antigravity-cli` → `alice model login antigravity-cli` (it starts `agy`) to sign in once
+- On a server without a browser, open the URL it prints on another device and paste the code back
+- `agy` runs in plan mode, sandboxed, in an empty directory; skills work through Alice's text protocol
+- Gemini CLI's subscription login ended on 2026-06-18, so `gemini-cli` can no longer be added
 
 </details>
 
 <details>
-<summary><b>🧩 スキル（機能拡張）</b></summary>
+<summary><b>🔑 API keys / local models</b></summary>
 
-- 内蔵スキル: Google Workspace・ファイル・Web・思い出す（Recall）・裏で動くタスク（Background）
-- `~/.alice/skills/<id>/` にフォルダ（`skill.toml` + `SKILL.md`）を置けば、Alice 本体を変えずに機能を追加できます（例: `skills/examples/github`）
-- 作業フォルダ: `alice config set tools.fs.workspace ~/AliceWork`（ほかのフォルダは `tools.fs.roots` で追加）
-- Web 検索: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key`（または SearXNG）
-- 詳しくは [SKILLS](docs/SKILLS.md)
+- OpenAI / Anthropic / Gemini / OpenAI-compatible servers / Ollama
+- Model lists refresh at start and every 6 hours (`alice model refresh` for now)
+- Set the reasoning effort after the model ID, like `codex-cli/gpt-6.2-sol#high`
+
+</details>
+
+## 🧸 Connections
+
+<details>
+<summary><b>📅 Google (Calendar, Gmail, Tasks)</b></summary>
+
+- Create a "Desktop app" OAuth client in Google Cloud → `alice skill setup google-workspace` → `alice skill login google-workspace`
+- Only the scopes of the services you turn on are requested. For Tasks, turn it on with `alice skill groups google-workspace` and sign in again
+- Marking mail as read needs Gmail's modify scope (`gmail.modify`). If you connected before it was added, sign in once more
+
+</details>
+
+<details>
+<summary><b>🧩 Skills (add-ons)</b></summary>
+
+- Built in: Google Workspace, Files, Web, Recall, Background tasks
+- Drop a folder (`skill.toml` + `SKILL.md`) into `~/.alice/skills/<id>/` to add abilities without changing Alice (example: `skills/examples/github`)
+- Working folder: `alice config set tools.fs.workspace ~/AliceWork` (more folders with `tools.fs.roots`)
+- Web search: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key` (or SearXNG)
+- More in [SKILLS](docs/SKILLS.md)
 
 </details>
 
 <details>
 <summary><b>💌 Telegram / Discord</b></summary>
 
-- `alice gateway setup`。許可したユーザー ID 以外は無視します
-- Telegram は `/new /threads /model /delete /stop /status`、Discord は DM かメンションで同じコマンドが使えます
+- `alice gateway setup`. Anyone not on the allow list is ignored
+- Telegram has `/new /threads /model /delete /stop /status`; on Discord, the same commands work in DMs or by mention
 
 </details>
 
 <details>
-<summary><b>⏰ エージェント（自動実行）</b></summary>
+<summary><b>⏰ Agents (scheduled)</b></summary>
 
-- タイミングは「繰り返し」（N 分・時間・日・週ごと、最短 5 分。保存したらすぐ 1 回目）か「時刻指定」（毎日 12:00 と 18:00 など、サーバーの時刻で）
-- 結果は指定したチャットに、Alice が自分から話しかけたように届きます（お願いの文はチャットに出ません）。指定しなければ最初の実行でチャットを作り、そのチャットを消すと「新しいチャット」に戻ります
-- 「新しいメールがなければ何もしない」と書いておけば、報告がないときはチャットに何も残しません
-- Web の「エージェント」で直近 10 回の実行履歴（時刻・結果・送り先・失敗理由）が見られます
-- サーバーが止まっていた間の分はまとめて実行せず、次の時刻から再開します。API は `/api/agents`
+- Choose "repeat" (every N minutes, hours, days or weeks; at least 5 minutes; the first run right after saving) or "set times" (every day at 12:00 and 18:00, say, in the server's time)
+- Results arrive in the chat you pick, as if Alice reached out on her own (the instruction itself is not shown). Without a chat, the first run makes one, and deleting that chat sends the agent back to "a new chat"
+- Write "if there is no new mail, do nothing" and a run with nothing to report leaves no trace
+- The Web UI's Agents view shows the last ten runs (time, result, chat, why one failed)
+- Runs missed while the server was down are not replayed; the next one comes at its time. API: `/api/agents`
 
 </details>
 
 <details>
-<summary><b>🌙 裏で動くタスク・長い会話・通知</b></summary>
+<summary><b>🌙 Background tasks, long chats, notifications</b></summary>
 
-- **裏で動くタスク**: 「時間かかるから裏でやっておいて」と頼むと、新しいチャットで作業して、終わったら通知します（同時に 3 件まで）
-- **長い会話**: 送れる分（`agent.history_chars`、既定 6 万字）を超えたら、古い部分を数行の要約にして覚えておきます。履歴自体は消えません
-- **チャットの通知**: 開いていないチャットに返事が届くと通知します。Web はエージェント画面の「通知」をオンに（HTTPS か localhost のときのみ）
+- **Background tasks**: "do this in the background" starts the work in a new chat and notifies you when it is done (three at a time)
+- **Long chats**: past what can be sent (`agent.history_chars`, 60,000 characters by default), the oldest part is folded into a short summary Alice keeps. The history itself stays
+- **Chat notifications**: a reply in a chat you are not looking at notifies you. In the Web UI, turn on "Notifications" in Agents (HTTPS or localhost only)
 
 </details>
 
-## 📱 iPhone アプリ
+## 📱 iPhone app
 
-`ios/Alice.xcodeproj` を Xcode で開き、Signing の Team を両ターゲット（Alice / AliceWidgets）に設定して実機に入れます。サーバー URL と `alice token` のトークンで接続します（外からは Tailscale の `tailscale serve` などの HTTPS がおすすめ）。
+Open `ios/Alice.xcodeproj` in Xcode, set the signing team on both targets (Alice / AliceWidgets) and install it on your iPhone. Connect with the server URL and the token from `alice token` (from outside, HTTPS through `tailscale serve` or similar is best).
 
-- **🏠 ホーム**: Alice のあいさつ、今日の予定とやること、そのまま相談できる入力欄（設定でオン/オフ）
-- **💬 チャット**: 左上 ≡ でチャット一覧、右上 ✨ で設定・エージェント・モデル。左から右へスワイプで最初の画面へ。長押しでスター（スター付きは削除されません）
-- **📅 カレンダー**: 週・月表示、11 色の色タグ、日付の横の「今日」ボタン
-- **✉️ メール**: すべて / 未読 / 重要、右スワイプで既読、返信。HTML メールは「元のレイアウトで表示」を押したときだけ（スクリプトなし、外部画像は押すまで読み込みません）
-- **✅ やること**: すべて / 今日 / 今週、進み具合のバー、長押しで編集、完了でハートがぽんっ
-- **🗨️ Alice のひとこと**: 各画面の上で Alice がひとこと。口調は自由に決められて、オフにもできます。最初は件数と時刻だけをモデルに送り、件名なども使うかは設定で選べます
-- **🌗 ことば**: ライトモードは日本語、ダークモードは英語の表示
+- **🏠 Home**: Alice's greeting, today's events and to-dos, and a box to ask her something (can be turned off)
+- **💬 Chat**: ≡ at the top left for your chats, ✨ at the top right for settings, agents and the model. Swipe right to go back to the start. Long-press to star (starred chats can't be deleted)
+- **📅 Calendar**: week and month views, 11 color tags, a "Today" button beside the date
+- **✉️ Mail**: All / Unread / Important, swipe right to mark read, reply. HTML mail only when you tap "Show the original layout" (no scripts; remote images only when you ask)
+- **✅ To-do**: All / Today / Week, a progress bar, long-press to edit, and a little burst of hearts when you finish one
+- **🗨️ Alice's comments**: Alice says a line at the top of each screen, in a tone you choose, or not at all. By default only counts and times go to the model; titles and senders only if you allow them
+- **🌗 Language**: Japanese in light mode, English in dark mode
 
 <details>
-<summary><b>🔔 通知・🧩 ウィジェット・📴 オフライン</b></summary>
+<summary><b>🔔 Notifications · 🧩 Widgets · 📴 Offline</b></summary>
 
-- **通知**: 予定（10 分前、終日の予定は当日 9 時）、やることの期日（当日 9 時）、新着メール、チャットの返事。どれも iPhone の中で作るローカル通知で、プッシュサーバーは使いません。新着メールとチャットは、アプリを閉じている間は iOS のバックグラウンド更新のときに届くので、遅れることがあります。種類ごとのオン/オフは ✨ → 設定 → 通知
-- **ウィジェット**: Today / Month / Tasks / Today + Tasks（ロック画面用もあり）。ウィジェットはサーバーにもトークンにも触れず、アプリが App Group（`group.local.alice.app`）に書いたスナップショットを表示するだけです。Bundle ID を変える場合は、App Group 名を `Alice.entitlements`・`AliceWidgets.entitlements`・`WidgetSnapshot.appGroup` の 3 か所で揃えます
-- **オフライン**: つながらないときも、最後に読み込んだ予定・メール・やること・最近のチャットを表示します（見るだけ）。iPhone 内に暗号化して保存し（ロック中は読めない、バックアップ対象外）、サーバーを切り替えると消えます
+- **Notifications**: events (10 minutes before; all-day events at 9:00), to-do due dates (9:00), new mail and chat replies. All are local notifications made on the iPhone, with no push server. While the app is closed, mail and chat notifications come with iOS background refresh, so they can be late. Turn each kind on or off in ✨ → Settings → Notifications
+- **Widgets**: Today / Month / Tasks / Today + Tasks (lock screen ones too). Widgets never touch the server or the token; they show a snapshot the app writes to the App Group (`group.local.alice.app`). If you change the bundle ID, change the App Group in `Alice.entitlements`, `AliceWidgets.entitlements` and `WidgetSnapshot.appGroup` alike
+- **Offline**: without a connection, the last loaded events, mail, to-dos and recent chats still show (read only). They are kept encrypted on the iPhone (unreadable while locked, not backed up) and removed when you switch servers
 
 </details>
 
-## 💖 人格（SOUL.md）
+## 💖 Personality (SOUL.md)
 
-`~/.alice/SOUL.md`（プロファイルごと）が、Alice に渡す指示のすべてです。役割・言語・性格・話し方・仕事の進め方・安全のための約束まで、このファイルに書かれていて、書き換えればぜんぶ上書きできます。Alice が自動で足すのは、現在時刻・作業フォルダ・使えるスキルの一覧・話題に関係する記憶（最大 8 件）だけ。`{{name}}` はエージェント名に置き換わります。
+`~/.alice/SOUL.md` (one per profile) is everything Alice is told: her role, language, character, way of talking, way of working and safety promises all live in this file, and rewriting it changes all of it. Alice adds only the current time, the working folder, a one-line list of usable skills and up to 8 related memories. `{{name}}` becomes the agent's name.
 
-`alice soul` か Web の「設定 → 人格」で編集でき、次の返答から反映されます。会話をぜんぶ消しても残り、AI 自身は書き換えられません。
+Edit it with `alice soul` or in the Web UI's "Settings → Personality"; it applies from the next reply. It survives deleting every conversation, and the AI cannot rewrite it.
 
-## 🎈 プロファイル
+## 🎈 Profiles
 
 ```sh
-alice profile eve        # "eve" を作って切り替え（別ポートで独立して動きます）
-alice model add          # eve 専用のモデル
-alice start              # eve のサーバーを起動
-alice -p default chat    # 一時的に default を使う
-alice profile default    # default に戻す
+alice profile eve        # create "eve" and switch to it (runs on its own port)
+alice model add          # models just for eve
+alice start              # start eve's server
+alice -p default chat    # use default just this once
+alice profile default    # back to default
 ```
 
-`default` は `~/.alice`、ほかは `~/.alice/profiles/<name>/` に、まるごと分かれて保存されます。
+`default` lives in `~/.alice`, and others in `~/.alice/profiles/<name>/`, completely apart.
 
-## 🍬 データ
+## 🍬 Your data
 
 ```
 ~/.alice/
-├── config.toml     設定（会話由来の情報は含まない）
-├── SOUL.md         人格
-├── secrets.toml    API キー・トークン（0600）
-├── alice.db        会話・記憶・エージェント（SQLite, FTS5）
-├── attachments/    添付ファイル（スレッド単位）
-├── workspace/      ファイルツールの既定の作業フォルダ
-├── skills/         追加スキル（<id>/skill.toml + SKILL.md）
-├── codex/          Alice 専用の Codex 設定・ログイン
-├── logs/           ログ（会話本文・秘密情報は出しません）
-└── profiles/<name>/ ほかのプロファイル（同じ構成）
+├── config.toml     settings (nothing from conversations)
+├── SOUL.md         personality
+├── secrets.toml    API keys and tokens (0600)
+├── alice.db        conversations, memories, agents (SQLite, FTS5)
+├── attachments/    attachments (per thread)
+├── workspace/      the file tools' default working folder
+├── skills/         added skills (<id>/skill.toml + SKILL.md)
+├── codex/          Alice's own Codex settings and login
+├── logs/           logs (no conversation text or secrets)
+└── profiles/<name>/ other profiles (same layout)
 ```
 
-お引っ越しは `~/.alice` をまるごとコピーすれば OK です（サブスクの CLI だけは、新しいマシンでログインし直してください）。
+To move to another machine, copy `~/.alice` as a whole (sign in to the subscription CLIs again on the new one).
 
-## 🌐 リモートアクセス
+## 🌐 Remote access
 
-既定は `127.0.0.1` だけ。同じ Wi-Fi や Tailscale の端末からつなぐときは、そのマシンの IP を足します（`127.0.0.1` は常に有効。複数はカンマ区切り。コンテナの中なら `0.0.0.0`）:
+Only `127.0.0.1` by default. To connect from devices on the same Wi-Fi or Tailscale, add this machine's address (`127.0.0.1` is always on; separate several with commas; `0.0.0.0` inside a container):
 
 ```sh
-alice config set server.bind 192.168.1.20          # LAN の IP
-alice config set server.bind 192.168.1.20,100.x.y.z # LAN と Tailscale
-alice restart && alice token                       # つなぐ URL を表示
+alice config set server.bind 192.168.1.20          # LAN address
+alice config set server.bind 192.168.1.20,100.x.y.z # LAN and Tailscale
+alice restart && alice token                       # shows the URLs to connect to
 ```
 
-- その IP が今ない（Wi-Fi が変わった等）ときは、警告して飛ばし、Alice 自体は起動します
-- 通信は平文 HTTP なので、信頼できるネットワークだけで。外から使うなら Tailscale（例: `tailscale serve 7878`）か HTTPS リバースプロキシ経由にして、`alice config set server.public_url https://...` を設定します
-- API トークンは `alice token --set` で自分で決められます（12 文字以上）。`alice token --rotate` でランダムに作り直し。どちらも再起動なしですぐ有効です
-- 間違ったトークンが 1 分に 30 回続いた接続元は、1 分間おやすみしてもらいます
+- If an address isn't there right now (another Wi-Fi, say), Alice warns, skips it and starts anyway
+- Traffic is plain HTTP, so use trusted networks only. From outside, go through Tailscale (e.g. `tailscale serve 7878`) or an HTTPS reverse proxy and set `alice config set server.public_url https://...`
+- Choose your own API token with `alice token --set` (12+ characters), or make a random one with `alice token --rotate`. Both apply at once, without a restart
+- An address that sends 30 wrong tokens in a minute gets a one-minute nap
 
-## 🛠️ 開発
+## 🛠️ Development
 
 ```sh
-cargo test                                  # Rust（LLM・各サービスはローカルの偽サーバーで代替）
-(cd ios/AliceKit && swift test)             # iOS クライアント層
-scripts/bench.py target/release/alice 30    # ベンチマーク
+cargo test                                  # Rust (models and services replaced by local fake servers)
+(cd ios/AliceKit && swift test)             # iOS client layer
+scripts/bench.py target/release/alice 30    # benchmark
 ```
 
-設計のくわしい話: [SPEC](docs/SPEC.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [SKILLS](docs/SKILLS.md) · [SECURITY](docs/SECURITY.md) · [BENCHMARK](docs/BENCHMARK.md) · [ROADMAP](docs/ROADMAP.md)
+Design notes: [SPEC](docs/SPEC.md) · [ARCHITECTURE](docs/ARCHITECTURE.md) · [SKILLS](docs/SKILLS.md) · [SECURITY](docs/SECURITY.md) · [BENCHMARK](docs/BENCHMARK.md) · [ROADMAP](docs/ROADMAP.md)
 
-## 📜 ライセンス
+## 📜 License
 
 [MIT](LICENSE) ♡

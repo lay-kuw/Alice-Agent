@@ -8,6 +8,7 @@ pub mod markdown;
 pub mod profile;
 pub mod service;
 pub mod tui;
+pub mod ui;
 
 use crate::config::{Config, Paths, Permission, ProviderConfig, ProviderKind, Secrets};
 use chat::{dim, green, red, yellow};
@@ -137,11 +138,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
 // ---------------------------------------------------------------- prompts
 
 pub fn ask(prompt: &str, default: &str) -> String {
-    if default.is_empty() {
-        print!("{prompt}: ");
-    } else {
-        print!("{prompt} [{default}]: ");
-    }
+    print!("{}", ui::question(prompt, default));
     let _ = std::io::stdout().flush();
     let mut s = String::new();
     let _ = std::io::stdin().read_line(&mut s);
@@ -150,7 +147,7 @@ pub fn ask(prompt: &str, default: &str) -> String {
 }
 
 pub fn ask_secret(prompt: &str) -> String {
-    print!("{prompt}: ");
+    print!("{}{}", ui::question(prompt, ""), ui::dim("(hidden) "));
     let _ = std::io::stdout().flush();
     use std::io::IsTerminal;
     let tty = std::io::stdin().is_terminal()
@@ -170,7 +167,7 @@ pub fn ask_secret(prompt: &str) -> String {
 }
 
 pub fn confirm(prompt: &str, default: bool) -> bool {
-    let a = ask(&format!("{prompt} ({})", if default { "Y/n" } else { "y/N" }), "");
+    let a = ask(&format!("{} {}", prompt.trim(), ui::dim(if default { "(Y/n)" } else { "(y/N)" })), "");
     match a.to_lowercase().as_str() {
         "" => default,
         "y" | "yes" => true,
@@ -178,9 +175,12 @@ pub fn confirm(prompt: &str, default: bool) -> bool {
     }
 }
 
-fn choose(prompt: &str, options: &[&str], default: usize) -> usize {
-    for (i, o) in options.iter().enumerate() {
-        println!("  {}) {o}", i + 1);
+/// Numbered options, each with a short note.
+fn choose_with(prompt: &str, options: &[(&str, &str)], default: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let w = options.iter().map(|(l, _)| l.width()).max().unwrap_or(0);
+    for (i, (label, note)) in options.iter().enumerate() {
+        ui::option(i + 1, label, note, w, i == default);
     }
     loop {
         let a = ask(prompt, &(default + 1).to_string());
@@ -188,6 +188,7 @@ fn choose(prompt: &str, options: &[&str], default: usize) -> usize {
             && n >= 1 && n <= options.len() {
                 return n - 1;
             }
+        ui::warn(&format!("pick a number from 1 to {}", options.len()));
     }
 }
 
@@ -236,53 +237,58 @@ fn local_add_provider(paths: &Paths, p: ProviderConfig, api_key: Option<&str>) -
 // ---------------------------------------------------------------- setup
 
 async fn setup(paths: &Paths) -> CliResult<()> {
-    println!("Alice Agent setup (profile: {})\n", paths.profile);
-    println!("1. Data directory: {}", paths.home.display());
+    const STEPS: usize = 5;
+    ui::card("✦ Alice Agent · setup", &[format!("profile {} · {}", paths.profile, ui::path(&paths.home)), "Enter keeps the value in [brackets] ♡".into()]);
     paths.ensure().map_err(|e| e.to_string())?;
     let mut cfg = Config::load(paths)?;
 
-    println!("\n2. Server");
-    println!("   127.0.0.1 is always on. Add this machine's LAN or Tailscale IP to reach Alice from other devices");
-    println!("   (several: comma-separated, e.g. 127.0.0.1,192.168.1.20). Plain HTTP: use trusted networks only.");
-    cfg.server.bind = ask("   Listen addresses", &cfg.server.bind);
+    ui::step(1, STEPS, "Server");
+    ui::note("127.0.0.1 is always on. Add this machine's LAN or Tailscale IP to reach Alice\nfrom other devices (comma-separated; 0.0.0.0 inside a container).\nPlain HTTP: use trusted networks only.");
+    cfg.server.bind = ask("Listen addresses", &cfg.server.bind);
     loop {
-        let p = ask("   Port", &cfg.server.port.to_string());
+        let p = ask("Port", &cfg.server.port.to_string());
         if let Ok(n) = p.parse::<u16>() {
             cfg.server.port = n;
             break;
         }
+        ui::warn("a port is a number from 1 to 65535");
     }
-    cfg.server.public_url = ask("   Public URL for other devices (optional, e.g. https://host.tailnet.ts.net)", &cfg.server.public_url);
-    cfg.agent.language = ask("   Default reply language", &cfg.agent.language);
+    cfg.server.public_url = ask("Public URL for other devices (optional)", &cfg.server.public_url);
+    cfg.agent.language = ask("Reply language", &cfg.agent.language);
     cfg.save(paths)?;
+    ui::ok(&format!("saved {}", ui::path(&paths.config())));
 
-    println!("\n3. Authentication");
+    ui::step(2, STEPS, "Sign-in token");
     let mut secrets = Secrets::load(paths)?;
     if secrets.get("server.token").is_none() {
         secrets.set("server.token", &crate::util::new_token());
         secrets.save(paths)?;
-        println!("   Generated an API token (stored in {} with mode 600).", paths.secrets().display());
+        ui::ok("made a new API token (stored with mode 600)");
     } else {
-        println!("   API token already exists.");
+        ui::ok("API token already set");
     }
-    println!("   Show it any time with `alice token` (used to log in from the Web GUI and the iPhone app).");
+    ui::note("Show it any time with `alice token`: the Web UI and the iPhone app sign in with it.");
 
+    ui::step(3, STEPS, "Personality");
     crate::config::ensure_soul(paths);
-    println!("   Personality: {} (edit any time with `alice soul`)", paths.soul().display());
+    ui::ok(&ui::path(&paths.soul()));
+    ui::note("Alice's voice and manners. Edit any time with `alice soul`.");
 
-    println!("\n4. Model provider");
-    if cfg.providers.is_empty() || confirm("   Add a model provider now?", cfg.providers.is_empty()) {
+    ui::step(4, STEPS, "Model");
+    if cfg.providers.is_empty() || confirm("Add a model provider now?", cfg.providers.is_empty()) {
         model_add(paths).await?;
+    } else {
+        ui::ok(&format!("default model: {}", cfg.agent.default_model));
     }
 
-    println!("\n5. Service");
-    if cfg!(any(target_os = "macos", target_os = "linux")) && confirm("   Register Alice to start automatically (launchd/systemd)?", true) {
+    ui::step(5, STEPS, "Start automatically");
+    if cfg!(any(target_os = "macos", target_os = "linux")) && confirm("Start Alice at login (launchd / systemd)?", true) {
         match service::register(paths) {
-            Ok(m) => println!("   {m}"),
-            Err(e) => println!("   could not register service: {e}"),
+            Ok(m) => ui::ok(&m),
+            Err(e) => ui::warn(&format!("could not register the service: {e}")),
         }
     }
-    println!("\nDone. Next: `alice start`, then `alice chat`.");
+    ui::done("✦ All set! ₍ᐢ. .ᐢ₎♡", &[("alice start", "start the server"), ("alice chat", "talk with Alice"), ("alice token", "sign in from Web / iPhone")]);
     Ok(())
 }
 
@@ -701,13 +707,28 @@ fn model_hint(kind: ProviderKind) -> &'static str {
     }
 }
 
-async fn model_add(paths: &Paths) -> CliResult<()> {
-    let kinds: Vec<&str> = ProviderKind::ADDABLE.iter().map(|k| k.as_str()).collect();
-    println!("Provider type:");
-    let kind = ProviderKind::ADDABLE[choose("Select", &kinds, 0)];
+/// One line about each provider type, for the picker.
+fn kind_note(kind: ProviderKind) -> &'static str {
     match kind {
-        ProviderKind::CodexCli => println!("Uses your ChatGPT subscription through the official Codex CLI, with Alice's own login. Alice's skills are reached through its built-in MCP server."),
-        ProviderKind::AntigravityCli => println!("Uses your Google AI subscription through the official Antigravity CLI (agy). Sign in once by running `agy` on this machine. Text only; Alice's skills work through its text protocol."),
+        ProviderKind::Openai => "API key · GPT models",
+        ProviderKind::Anthropic => "API key · Claude models",
+        ProviderKind::Gemini => "API key · Gemini models",
+        ProviderKind::OpenaiCompatible => "any OpenAI-style server (vLLM, LM Studio…)",
+        ProviderKind::Ollama => "local models on this machine",
+        ProviderKind::CodexCli => "ChatGPT subscription · official Codex CLI",
+        ProviderKind::AntigravityCli => "Google AI subscription · Antigravity CLI",
+        ProviderKind::GeminiCli => "retired",
+    }
+}
+
+async fn model_add(paths: &Paths) -> CliResult<()> {
+    ui::heading("Add a model provider");
+    let rows: Vec<(&str, &str)> = ProviderKind::ADDABLE.iter().map(|k| (k.as_str(), kind_note(*k))).collect();
+    let kind = ProviderKind::ADDABLE[choose_with("Provider", &rows, 0)];
+    match kind {
+        ProviderKind::CodexCli => ui::note("Uses your ChatGPT subscription through the official Codex CLI, with Alice's own login.\nSkills are reached through Alice's built-in MCP server."),
+        ProviderKind::AntigravityCli => ui::note("Uses your Google AI subscription through the official Antigravity CLI (agy).\nSign in once with `alice model login <id>`. Text only; skills work through Alice's text protocol."),
+        ProviderKind::Ollama => ui::note("Start Ollama first (`ollama serve`) and pull a model (`ollama pull <name>`)."),
         _ => {}
     }
     let id = ask("Provider id", kind.as_str());
@@ -724,8 +745,8 @@ async fn model_add(paths: &Paths) -> CliResult<()> {
         return Err("at least one model name is required".into());
     }
     let api_key = match kind {
-        ProviderKind::Openai | ProviderKind::Anthropic | ProviderKind::Gemini => Some(ask_secret("API key (input hidden)")),
-        ProviderKind::OpenaiCompatible => Some(ask_secret("API key (optional, input hidden)")).filter(|k| !k.is_empty()),
+        ProviderKind::Openai | ProviderKind::Anthropic | ProviderKind::Gemini => Some(ask_secret("API key")),
+        ProviderKind::OpenaiCompatible => Some(ask_secret("API key (optional)")).filter(|k| !k.is_empty()),
         _ => None,
     };
     let api_key = api_key.filter(|k| !k.is_empty());
@@ -742,9 +763,12 @@ async fn model_add(paths: &Paths) -> CliResult<()> {
             api_key.as_deref(),
         )?,
     };
-    println!("Added provider '{id}'. Default model: {default}");
+    ui::ok(&format!("added {}  {}", ui::bold(&id), ui::dim(&format!("default model: {default}"))));
     if kind == ProviderKind::CodexCli && confirm("Log in to ChatGPT for Alice now?", true) {
         codex_login(paths, &[])?;
+    }
+    if kind == ProviderKind::AntigravityCli && confirm("Sign in to Antigravity now?", true) {
+        agy_login(paths, &id)?;
     }
     Ok(())
 }
@@ -787,26 +811,24 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
     for p in v["providers"].as_array().cloned().unwrap_or_default() {
         let kind = p["kind"].as_str().unwrap_or("");
         let id = p["id"].as_str().unwrap_or("");
-        if let Some((st, detail)) = status.get(id) {
-            let icon = match st.as_str() {
-                "ok" => if chat::color() { "\x1b[32m✓\x1b[0m" } else { "✓" },
-                "ng" => if chat::color() { "\x1b[31m✗\x1b[0m" } else { "✗" },
-                _ => "?",
-            };
-            print!("{icon} ");
-            let _ = detail;
-        }
+        // A colored dot: ready, not ready, unknown (server not running).
+        let dot = match status.get(id).map(|(s, _)| s.as_str()) {
+            Some("ok") => ui::mint("●"),
+            Some("ng") => ui::rose("●"),
+            _ => ui::dim("○"),
+        };
         let auth = match ProviderKind::parse(kind) {
             Some(k) if k.needs_api_key() => if p["has_key"] == true { "key set" } else { "no key" },
-            Some(ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli) => "cli login",
+            Some(k) if k.is_cli() => "cli login",
             _ => "",
         };
-        let detail = status.get(id).map(|(_, d)| format!(" — {d}")).unwrap_or_default();
-        println!("{id} {}", dim(&format!("({kind}{}){detail}", if auth.is_empty() { String::new() } else { format!(", {auth}") })));
+        let detail = status.get(id).map(|(_, d)| d.as_str()).filter(|d| !d.is_empty()).map(|d| format!(" · {d}")).unwrap_or_default();
+        println!();
+        println!("  {dot} {}  {}", ui::bold(id), ui::dim(&format!("{kind}{}{detail}", if auth.is_empty() { String::new() } else { format!(" · {auth}") })));
         for m in p["models"].as_array().cloned().unwrap_or_default() {
-            let full = format!("{}/{}", p["id"].as_str().unwrap_or(""), m.as_str().unwrap_or(""));
+            let full = format!("{id}/{}", m.as_str().unwrap_or(""));
             all.push(full.clone());
-            let mark = if full == default { "*" } else { " " };
+            let is_default = full == default;
             let info = catalog.iter().find(|c| c["id"] == full.as_str());
             let name = info.and_then(|i| i["name"].as_str()).filter(|n| *n != m.as_str().unwrap_or("")).unwrap_or("");
             let efforts: Vec<String> = info
@@ -815,17 +837,20 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
                 .flatten()
                 .filter_map(|e| e.as_str())
                 .map(|e| {
-                    let current = if full == default { default_effort } else { None };
+                    let current = if is_default { default_effort } else { None };
                     let dflt = info.and_then(|i| i["default_effort"].as_str());
-                    if Some(e) == current.or(dflt) { format!("[{e}]") } else { e.to_string() }
+                    if Some(e) == current.or(dflt) { ui::pink(&format!("[{e}]")) } else { ui::dim(e) }
                 })
                 .collect();
-            let extra = [name.to_string(), efforts.join(" ")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
-            println!("  {mark} {:>2}) {full}  {}", all.len(), dim(&extra));
+            let mark = if is_default { ui::pink("★") } else { " ".into() };
+            let label = if is_default { ui::bold(&full) } else { full.clone() };
+            let name = if name.is_empty() { String::new() } else { format!("  {}", ui::dim(name)) };
+            let efforts = if efforts.is_empty() { String::new() } else { format!("  {}", efforts.join(" ")) };
+            println!("    {} {mark} {label}{name}{efforts}", ui::lavender(&format!("{:>2}", all.len())));
         }
     }
     if all.is_empty() {
-        println!("No models configured. Add one with `alice model add`.");
+        ui::note("No models yet. Add one with `alice model add` ✦");
     }
     all
 }
@@ -848,7 +873,7 @@ async fn set_default(paths: &Paths, model: &str) -> CliResult<()> {
             cfg.save(paths)?;
         }
     }
-    println!("Default model: {model}");
+    ui::ok(&format!("default model: {}", ui::bold(model)));
     Ok(())
 }
 
@@ -857,8 +882,11 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     match a.as_slice() {
         [] => loop {
             let v = models_json(paths).await?;
+            ui::card("✦ Models", &[format!("profile {} · ★ is the default", paths.profile)]);
             let all = print_models(&v, &provider_status(paths).await);
-            let ans = ask("\nNumber [effort] = set default (e.g. `2 high`), a = add, r <n> = remove, t <n> = test, f = refresh list, Enter = quit", "");
+            println!();
+            ui::note("<n> [effort]  set the default (e.g. `2 high`)\na  add · r <n>  remove · t <n>  test · f  refresh · Enter  quit");
+            let ans = ask("Choice", "");
             let (cmd, rest) = ans.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((ans.as_str(), ""));
             let pick = |s: &str| s.parse::<usize>().ok().and_then(|n| all.get(n.wrapping_sub(1)).cloned());
             match cmd {
@@ -879,7 +907,6 @@ async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                     None => println!("unknown choice"),
                 },
             }
-            println!();
         },
         ["list" | "ls"] => {
             print_models(&models_json(paths).await?, &provider_status(paths).await);
@@ -910,9 +937,9 @@ async fn refresh_models(paths: &Paths) -> CliResult<()> {
     for r in v["results"].as_array().into_iter().flatten() {
         let id = r["id"].as_str().unwrap_or("");
         match (r["ok"] == true, r["models"].as_u64()) {
-            (true, Some(n)) => println!("{id}: {n} models"),
-            (true, None) => println!("{id}: {}", dim("lists no models; add them with `alice model add`")),
-            _ => println!("{id}: {}", r["error"].as_str().unwrap_or("failed")),
+            (true, Some(n)) => ui::ok(&format!("{}  {}", ui::bold(id), ui::dim(&format!("{n} models")))),
+            (true, None) => ui::warn(&format!("{}  {}", ui::bold(id), ui::dim("lists no models; add them with `alice model add`"))),
+            _ => ui::fail(&format!("{}  {}", ui::bold(id), r["error"].as_str().unwrap_or("failed"))),
         }
     }
     Ok(())
@@ -969,21 +996,24 @@ async fn remove_provider(paths: &Paths, id: &str) -> CliResult<()> {
             s.save(paths)?;
         }
     }
-    println!("Removed provider '{id}' and its API key.");
+    ui::ok(&format!("removed {} and its API key", ui::bold(id)));
     Ok(())
 }
 
 async fn test_model(paths: &Paths, model: &str) -> CliResult<()> {
     let c = remote(paths).await?;
-    println!("Testing {model} …");
+    ui::note(&format!("testing {model} …"));
     let v = c.post("/models/test", &json!({ "model": model })).await?;
     if v["ok"] == true {
-        println!(
-            "ok — reply {:?}, first token {} ms, total {} ms",
-            v["reply"].as_str().unwrap_or(""),
-            v["ttft_ms"].as_u64().map(|n| n.to_string()).unwrap_or("-".into()),
-            v["total_ms"]
-        );
+        ui::ok(&format!(
+            "{}  {}",
+            v["reply"].as_str().unwrap_or("").trim(),
+            ui::dim(&format!(
+                "first token {} ms · total {} ms",
+                v["ttft_ms"].as_u64().map(|n| n.to_string()).unwrap_or("-".into()),
+                v["total_ms"]
+            ))
+        ));
         Ok(())
     } else {
         Err(format!("failed: {}", v["error"].as_str().unwrap_or("unknown error")))
@@ -1016,10 +1046,10 @@ async fn set_secret(paths: &Paths, name: &str, value: &str) -> CliResult<()> {
 /// your usual Codex setup and login are untouched).
 fn codex_login(paths: &Paths, extra: &[&str]) -> CliResult<()> {
     let home = crate::providers::cli::prepare_codex_home()?;
-    println!("Signing Alice in to ChatGPT with the official Codex CLI.");
-    println!("{}", dim(&format!("This login is Alice's own ({}); your ~/.codex is not used.", home.display())));
+    ui::heading("Sign in to ChatGPT");
+    ui::note(&format!("Through the official Codex CLI. This login is Alice's own ({});\nyour ~/.codex is not used.", home.display()));
     if extra.is_empty() && std::env::var_os("SSH_CONNECTION").is_some() {
-        println!("{}", dim("On a remote machine, `alice model login codex-cli --device-auth` avoids the browser redirect."));
+        ui::note("On a server without a browser: `alice model login codex-cli --device-auth`.");
     }
     let exe = Config::load(paths)?.providers.iter().find(|p| p.kind == ProviderKind::CodexCli).map(|p| p.base_url().to_string()).unwrap_or_else(|| "codex".into());
     let st = std::process::Command::new(&exe).env("CODEX_HOME", &home).arg("login").args(extra).status().map_err(|e| format!("{exe}: {e}"))?;
@@ -1031,13 +1061,13 @@ fn codex_login(paths: &Paths, extra: &[&str]) -> CliResult<()> {
 fn agy_login(paths: &Paths, provider: &str) -> CliResult<()> {
     let cfg = Config::load(paths).map_err(|e| e.to_string())?;
     let exe = cfg.providers.iter().find(|p| p.id == provider).map(|p| p.base_url().to_string()).unwrap_or_else(|| "agy".into());
-    println!("Starting `{exe}`. Sign in with your Google account (on a server: open the URL it prints on another device and paste the code back).");
-    println!("When you see its prompt, you are signed in: type /exit (or press Ctrl+C) to come back.");
+    ui::heading("Sign in to Antigravity");
+    ui::note(&format!("Starting `{exe}`. Sign in with your Google account.\nOn a server: open the URL it prints on another device, then paste the code back.\nWhen its prompt appears you are signed in: type /exit (or Ctrl+C) to come back."));
     let st = std::process::Command::new(&exe).status().map_err(|e| format!("{exe}: {e} (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)"))?;
     let check = std::process::Command::new(&exe).arg("models").output();
     match check {
         Ok(o) if o.status.success() => {
-            println!("Signed in. Models: `alice model refresh`.");
+            ui::ok("signed in ✦ next: `alice model refresh` to load the models");
             Ok(())
         }
         _ if !st.success() => Err("agy did not finish signing in".into()),
@@ -1051,7 +1081,7 @@ async fn login(paths: &Paths, provider: &str, extra: &[&str]) -> CliResult<()> {
         ProviderKind::GeminiCli => Err("gemini-cli is retired (Google ended its subscription login). Add antigravity-cli instead.".into()),
         ProviderKind::AntigravityCli => agy_login(paths, provider),
         ProviderKind::Ollama => {
-            println!("Ollama needs no login.");
+            ui::ok("Ollama needs no login");
             Ok(())
         }
         _ => {
@@ -1060,7 +1090,7 @@ async fn login(paths: &Paths, provider: &str, extra: &[&str]) -> CliResult<()> {
                 return Err("no key given".into());
             }
             set_secret(paths, &format!("provider.{provider}.api_key"), &key).await?;
-            println!("Saved API key for '{provider}'.");
+            ui::ok(&format!("saved the API key for {}", ui::bold(provider)));
             Ok(())
         }
     }

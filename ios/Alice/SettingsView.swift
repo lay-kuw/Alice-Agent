@@ -23,6 +23,15 @@ struct SettingsView: View {
                 Section("Display") {
                     Toggle("Home screen", isOn: $homeEnabled).tint(Palette.pink)
                     Toggle("Alice's comments", isOn: $blurbs.enabled).tint(Palette.pink)
+                    if blurbs.enabled {
+                        Toggle(isOn: $blurbs.details) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Use titles and senders")
+                                Text("Off: only counts and times are sent to the model").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(Palette.pink)
+                    }
                 }
                 if blurbs.enabled {
                     Section {

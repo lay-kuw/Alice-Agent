@@ -791,14 +791,18 @@ $('composer').addEventListener('submit', async (e) => {
     S.sending = id;
     let r;
     try { r = await api('POST', `/threads/${id}/messages`, { content: text, client: 'web', attachments: atts }); } finally { S.sending = null; }
-    S.pending = [];
+    const finished = S.finished.has(id);
+    S.finished.delete(id);
+    // Another chat was opened while this one was sending: its view is left alone
+    // (this chat's messages arrive there when it is opened again).
+    if (S.current !== id) return;
+    S.pending = S.pending.filter((p) => !atts.includes(p.id));
     // Events may have arrived before this answer (even the finished reply):
     // only add what is missing, never roll back to the initial state.
     for (const m of [r.user_message, r.assistant_message]) if (!S.messages.some((x) => x.id === m.id)) S.messages.push(m);
     for (const a of atts) { const x = S.attachments.find((y) => y.id === a); if (x) x.message_id = r.user_message.id; }
     const reply = S.messages.find((x) => x.id === r.assistant_message.id);
-    S.generating = !S.finished.has(id) && !(reply && reply.status !== 'streaming' && endsTurn(reply));
-    S.finished.delete(id);
+    S.generating = !finished && !(reply && reply.status !== 'streaming' && endsTurn(reply));
     renderAll();
   } catch (err) {
     toast(err.message);

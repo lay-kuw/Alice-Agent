@@ -283,7 +283,11 @@ pub fn get_message(c: &Connection, id: &str) -> DbResult<Option<Message>> {
 
 /// Mark generations interrupted by a crash or restart as cancelled.
 pub fn recover_streaming(c: &Connection) -> DbResult<usize> {
-    c.execute("UPDATE messages SET status = 'cancelled' WHERE status = 'streaming'", [])
+    let n = c.execute("UPDATE messages SET status = 'cancelled' WHERE status = 'streaming'", [])?;
+    // Agent runs cut off the same way: say so in their history.
+    c.execute("UPDATE agent_runs SET status = 'interrupted', finished_at = ?1 WHERE status = 'running'", [now_ms()])?;
+    c.execute("UPDATE agents SET last_status = 'interrupted' WHERE last_status = 'running'", [])?;
+    Ok(n)
 }
 
 #[derive(Serialize)]

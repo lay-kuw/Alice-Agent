@@ -357,7 +357,11 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
             Ok(m) => m,
             Err(_) => return Outcome::Deleted,
         };
-        let (s, live) = compact::prepare(app, &user.thread_id, msgs, app.config().agent.history_chars, user.seq, model_id).await;
+        let Some((s, live)) = compact::prepare(app, &user.thread_id, msgs, app.config().agent.history_chars, user.seq, model_id, &cancel).await else {
+            // Stopped while summarizing.
+            finish_cancelled(app, &assistant, "");
+            return Outcome::Cancelled;
+        };
         (s, live.first().map(|m| m.seq - 1).unwrap_or(0))
     };
     loop {

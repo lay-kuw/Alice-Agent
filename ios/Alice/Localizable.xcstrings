@@ -225,6 +225,7 @@
       }
     },
     "Back": {
+      "extractionState": "stale",
       "localizations": {
         "ja": {
           "stringUnit": {
@@ -824,6 +825,16 @@
         }
       }
     },
+    "Interrupted": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中断"
+          }
+        }
+      }
+    },
     "Kansai dialect": {
       "localizations": {
         "ja": {
@@ -1120,6 +1131,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "OK"
+          }
+        }
+      }
+    },
+    "Off: only counts and times are sent to the model": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オフのときは件数と時刻だけをモデルに送ります"
           }
         }
       }
@@ -1690,6 +1711,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "スターを外す"
+          }
+        }
+      }
+    },
+    "Use titles and senders": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "件名・予定名も使う"
           }
         }
       }

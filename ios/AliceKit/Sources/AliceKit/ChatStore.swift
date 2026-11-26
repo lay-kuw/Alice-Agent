@@ -234,12 +234,15 @@ public final class ChatStore {
             sending = id
             defer { sending = nil }
             let r = try await client.post(id, text: trimmed, attachments: attachmentIds)
+            let ended = finished.contains(id)
+            finished.remove(id)
+            // Another chat was opened meanwhile: leave its view alone.
+            guard currentThreadId == id else { return true }
             // Events may have come first (even the finished reply): only add
             // what is missing, never roll back to the initial state.
             for m in [r.userMessage, r.assistantMessage] where !messages.contains(where: { $0.id == m.id }) { messages.append(m) }
             let reply = messages.first { $0.id == r.assistantMessage.id }
-            generating = !finished.contains(id) && !(reply.map { !$0.isStreaming && $0.endsTurn } ?? false)
-            finished.remove(id)
+            generating = !ended && !(reply.map { !$0.isStreaming && $0.endsTurn } ?? false)
             for i in attachments.indices where attachmentIds.contains(attachments[i].id) {
                 attachments[i].messageId = r.userMessage.id
             }

@@ -69,6 +69,13 @@ final class Blurbs {
     var enabled: Bool = UserDefaults.standard.object(forKey: "blurbs.enabled") as? Bool ?? true {
         didSet { UserDefaults.standard.set(enabled, forKey: "blurbs.enabled") }
     }
+    /// Titles, senders and subjects may go to the model too (off: only counts and times).
+    var details: Bool = UserDefaults.standard.bool(forKey: "blurbs.details") {
+        didSet {
+            UserDefaults.standard.set(details, forKey: "blurbs.details")
+            asked = [:]
+        }
+    }
     private(set) var lines: [String: String] = UserDefaults.standard.dictionary(forKey: linesKey) as? [String: String] ?? [:]
     private var asked: [String: String] = [:]
 
@@ -123,12 +130,15 @@ enum BlurbFacts {
 
     static func chat() -> String { "Time of day slot: \(Blurbs.slot())" }
 
+    /// Without the details setting, only counts and times are shared.
+    private static var details: Bool { Blurbs.shared.details }
+
     static func home(_ g: GoogleStore) -> String {
         var f: [String] = []
         let events = g.events(on: .now)
-        if !events.isEmpty { f.append("Today's events: " + events.prefix(5).map(line).joined(separator: "; ")) }
+        if !events.isEmpty { f.append("Today's events: " + (details ? events.prefix(5).map(line).joined(separator: "; ") : "\(events.count)")) }
         let due = open(g).filter { (offset($0) ?? 1) <= 0 }
-        if !due.isEmpty { f.append("To-dos due today or overdue: \(due.count) (" + due.prefix(3).map(\.title).joined(separator: ", ") + ")") }
+        if !due.isEmpty { f.append("To-dos due today or overdue: \(due.count)" + (details ? " (" + due.prefix(3).map(\.title).joined(separator: ", ") + ")" : "")) }
         if g.inboxLoaded { f.append("Unread mail: \(g.inbox.filter(\.unread).count)") }
         return f.joined(separator: "\n")
     }
@@ -142,7 +152,7 @@ enum BlurbFacts {
             let es = g.events(on: d)
             if es.isEmpty { continue }
             let day = i == 0 ? "Today" : i == 1 ? "Tomorrow" : d.formatted(.dateTime.weekday(.wide).locale(Locale(identifier: "en")))
-            lines.append("\(day): " + es.prefix(4).map(line).joined(separator: "; "))
+            lines.append("\(day): " + (details ? es.prefix(4).map(line).joined(separator: "; ") : "\(es.count) event(s)"))
         }
         return lines.joined(separator: "\n")
     }
@@ -150,6 +160,7 @@ enum BlurbFacts {
     static func mail(_ g: GoogleStore) -> String {
         guard g.inboxLoaded else { return "" }
         let unread = g.inbox.filter(\.unread)
+        guard details else { return "Unread: \(unread.count)" }
         return "Unread: \(unread.count)\n" + unread.prefix(4).map { "- \($0.senderName): \($0.displaySubject)" }.joined(separator: "\n")
     }
 
@@ -158,8 +169,9 @@ enum BlurbFacts {
         let all = g.lists.flatMap(\.tasks)
         let today = all.filter { t in offset(t).map { t.completed ? $0 == 0 : $0 <= 0 } ?? false }
         let overdue = all.filter { !$0.completed && (offset($0) ?? 0) < 0 }.count
-        return "Due today: \(today.count), done: \(today.filter(\.completed).count), overdue: \(overdue), open in total: \(all.filter { !$0.completed }.count)\n"
-            + today.filter { !$0.completed }.prefix(4).map { "- " + $0.title }.joined(separator: "\n")
+        let counts = "Due today: \(today.count), done: \(today.filter(\.completed).count), overdue: \(overdue), open in total: \(all.filter { !$0.completed }.count)"
+        guard details else { return counts }
+        return counts + "\n" + today.filter { !$0.completed }.prefix(4).map { "- " + $0.title }.joined(separator: "\n")
     }
 
     private static func open(_ g: GoogleStore) -> [TaskItem] { g.lists.flatMap(\.tasks).filter { !$0.completed } }

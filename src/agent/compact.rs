@@ -51,55 +51,75 @@ pub fn plan(live: &[Message], budget: usize, turn_start_seq: i64) -> Option<usiz
     (cut > 0).then_some(cut)
 }
 
-fn transcript(previous: Option<&str>, fold: &[Message]) -> String {
-    let mut lines: Vec<String> = Vec::new();
+/// The summarizer's input: the previous summary, then the oldest messages of
+/// `fold` up to the size cap. Returns the text and how many messages it took
+/// (only those may be marked as summarized).
+fn transcript(previous: Option<&str>, fold: &[Message]) -> (String, usize) {
+    let mut body = String::new();
+    let mut taken = 0;
     for m in fold {
         let who = match m.role.as_str() {
-            "user" if m.client == "agent" || m.client == "background" => continue,
-            "user" => "User",
-            "assistant" => "Alice",
-            "tool" => "Tool result",
-            _ => continue,
+            "user" if m.client == "agent" || m.client == "background" => None,
+            "user" => Some("User"),
+            "assistant" => Some("Alice"),
+            "tool" => Some("Tool result"),
+            _ => None,
         };
-        let cap = if m.role == "tool" { 300 } else { 1500 };
-        let text = crate::util::truncate(m.content.trim(), cap);
-        if !text.is_empty() {
-            lines.push(format!("[{who}] {text}"));
+        if let Some(who) = who {
+            let cap = if m.role == "tool" { 300 } else { 1500 };
+            let text = crate::util::truncate(m.content.trim(), cap);
+            if !text.is_empty() {
+                let line = format!("[{who}] {text}\n");
+                if taken > 0 && body.len() + line.len() > INPUT_CAP {
+                    break;
+                }
+                body.push_str(&line);
+            }
         }
+        taken += 1;
     }
-    // Keep the newest part when there is too much.
-    let mut body = String::new();
-    for l in lines.iter().rev() {
-        if body.len() + l.len() > INPUT_CAP {
-            break;
-        }
-        body.insert_str(0, &format!("{l}\n"));
-    }
-    match previous {
+    let text = match previous {
         Some(p) if !p.trim().is_empty() => format!("PREVIOUS SUMMARY:\n{p}\n\nNEW MESSAGES:\n{body}"),
         _ => format!("MESSAGES:\n{body}"),
-    }
+    };
+    (text, taken)
 }
 
 /// Fold the overflow of `msgs` into the thread's summary when needed.
-/// Returns the summary to show the model and the messages still to send.
-pub async fn prepare(app: &AppRef, thread_id: &str, msgs: Vec<Message>, budget: usize, turn_start_seq: i64, model_id: &str) -> (Option<String>, Vec<Message>) {
+/// Returns the summary to show the model and the messages still to send, or
+/// None when the turn was stopped meanwhile.
+pub async fn prepare(
+    app: &AppRef,
+    thread_id: &str,
+    msgs: Vec<Message>,
+    budget: usize,
+    turn_start_seq: i64,
+    model_id: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Option<(Option<String>, Vec<Message>)> {
     let (summary, summary_seq): (Option<String>, i64) = app
         .db
         .lock()
         .query_row("SELECT summary, summary_seq FROM threads WHERE id = ?1", [thread_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap_or((None, 0));
     let live: Vec<Message> = msgs.into_iter().filter(|m| m.seq > summary_seq).collect();
-    let Some(cut) = plan(&live, budget, turn_start_seq) else { return (summary, live) };
+    let Some(cut) = plan(&live, budget, turn_start_seq) else { return Some((summary, live)) };
 
     let cfg = app.config();
     let model = if cfg.memory.model.is_empty() { model_id } else { cfg.memory.model.as_str() };
-    let Some((provider, model_name)) = cfg.resolve_model(model) else { return (summary, live) };
+    let Some((provider, model_name)) = cfg.resolve_model(model) else { return Some((summary, live)) };
+    // Only what fits the summarizer is folded; the rest waits for the next turn.
+    let (_, mut taken) = transcript(summary.as_deref(), &live[..cut]);
+    // End the folded part before a user message, so the kept part starts with one.
+    while taken < cut && taken > 1 && live[taken].role != "user" {
+        taken -= 1;
+    }
+    let (input, _) = transcript(summary.as_deref(), &live[..taken]);
     let api_key = app.secrets().provider_key(&provider.id).map(str::to_string);
     let req = ChatRequest {
         model: model_name,
         system: PROMPT.to_string(),
-        messages: vec![ChatMessage::user(transcript(summary.as_deref(), &live[..cut]))],
+        messages: vec![ChatMessage::user(input)],
         tools: vec![],
         max_tokens: 1200,
         mcp: None,
@@ -107,25 +127,28 @@ pub async fn prepare(app: &AppRef, thread_id: &str, msgs: Vec<Message>, budget: 
         tool_runner: None,
     };
     let mut sink = |_: &str| {};
-    let out = tokio::time::timeout(TIMEOUT, providers::stream(&app.http, provider, api_key.as_deref(), &req, &mut sink)).await;
+    let out = tokio::select! {
+        r = tokio::time::timeout(TIMEOUT, providers::stream(&app.http, provider, api_key.as_deref(), &req, &mut sink)) => r,
+        _ = cancel.cancelled() => return None,
+    };
     let text = match out {
         Ok(Ok(o)) if !o.text.trim().is_empty() => o.text.trim().to_string(),
         Ok(Err(e)) => {
             crate::warn!("compaction failed thread={thread_id}: {e}");
-            return (summary, live);
+            return Some((summary, live));
         }
         _ => {
             crate::warn!("compaction gave nothing thread={thread_id}");
-            return (summary, live);
+            return Some((summary, live));
         }
     };
-    let new_seq = live[cut - 1].seq;
+    let new_seq = live[taken - 1].seq;
     let _ = app.db.lock().execute(
         "UPDATE threads SET summary = ?2, summary_seq = ?3 WHERE id = ?1",
         params![thread_id, crate::util::truncate(&text, 4000), new_seq],
     );
-    crate::info!("compacted thread={thread_id} up to seq {new_seq} ({cut} messages)");
-    (Some(text), live[cut..].to_vec())
+    crate::info!("compacted thread={thread_id} up to seq {new_seq} ({taken} messages)");
+    Some((Some(text), live[taken..].to_vec()))
 }
 
 /// The summary as it goes into the system prompt.
@@ -178,7 +201,18 @@ mod tests {
     fn transcript_skips_agent_instructions_and_keeps_the_newest() {
         let mut m = vec![msg(1, "user", 10), msg(2, "assistant", 10)];
         m[0].client = "agent".into();
-        let t = transcript(Some("old facts"), &m);
+        let (t, n) = transcript(Some("old facts"), &m);
         assert!(t.starts_with("PREVIOUS SUMMARY:\nold facts") && !t.contains("[User]") && t.contains("[Alice]"));
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn only_what_reaches_the_summarizer_counts_as_summarized() {
+        // 60 messages of 1500 bytes = 90 kB, more than the 40 kB cap: the oldest go in.
+        let m: Vec<Message> = (1..=60).map(|i| msg(i, if i % 2 == 1 { "user" } else { "assistant" }, 3000)).collect();
+        let (t, n) = transcript(None, &m);
+        assert!(n < 60 && n > 10, "{n}");
+        assert!(t.len() <= INPUT_CAP + 100);
+        assert!(t.contains(&format!("[User] {}", "x".repeat(10))));
     }
 }

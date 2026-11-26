@@ -130,6 +130,7 @@ enum AgentText {
         switch s {
         case "running": Label("Running", systemImage: "ellipsis").font(.caption2).foregroundStyle(Palette.pink)
         case "quiet": Label("Nothing to report", systemImage: "moon.zzz").font(.caption2).foregroundStyle(.secondary)
+        case "interrupted": Label("Interrupted", systemImage: "pause.circle").font(.caption2).foregroundStyle(.orange)
         case "ok", "busy", "stopped": EmptyView()
         default: Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange).help(s)
         }

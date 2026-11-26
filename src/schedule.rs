@@ -495,6 +495,19 @@ mod tests {
     }
 
     #[test]
+    fn runs_cut_off_by_a_restart_are_marked_interrupted() {
+        let db = crate::storage::Db::open_in_memory().unwrap();
+        let c = db.lock();
+        let a = save(&c, None, Fields { name: Some("x".into()), prompt: Some("y".into()), every_min: Some(60), ..Default::default() }).unwrap();
+        c.execute("INSERT INTO agent_runs (agent_id, started_at, status) VALUES (?1, 1, 'running')", [&a.id]).unwrap();
+        c.execute("UPDATE agents SET last_status = 'running' WHERE id = ?1", [&a.id]).unwrap();
+        crate::storage::recover_streaming(&c).unwrap();
+        let st: String = c.query_row("SELECT status FROM agent_runs", [], |r| r.get(0)).unwrap();
+        assert_eq!(st, "interrupted");
+        assert_eq!(get(&c, &a.id).unwrap().unwrap().last_status.as_deref(), Some("interrupted"));
+    }
+
+    #[test]
     fn save_validates_and_schedules() {
         let db = crate::storage::Db::open_in_memory().unwrap();
         let c = db.lock();

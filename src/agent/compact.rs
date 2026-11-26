@@ -55,7 +55,7 @@ fn transcript(previous: Option<&str>, fold: &[Message]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for m in fold {
         let who = match m.role.as_str() {
-            "user" if m.client == "agent" => continue,
+            "user" if m.client == "agent" || m.client == "background" => continue,
             "user" => "User",
             "assistant" => "Alice",
             "tool" => "Tool result",

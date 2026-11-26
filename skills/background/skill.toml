@@ -1,0 +1,16 @@
+id = "background"
+name = "Background tasks"
+version = "1.0.0"
+description = "Hand off long work (research, comparing many pages, reading long documents) to run on its own and report back"
+builtin = "background"
+
+[permissions]
+description = "Starts another Alice conversation on this machine; it uses the same skills and approvals as a normal chat."
+
+[[tools]]
+name = "background_task"
+description = "Start a long task in the background, in its own new chat. Use it when the user asks you to do something later or in the background, or when the work will clearly take many steps. The result is posted in that chat and the user is notified. Give complete, self-contained instructions: the background run does not see this conversation."
+permission = "allow"
+risk = "write"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"title": {"type": "string", "description": "Short title for the new chat"}, "instructions": {"type": "string", "description": "Everything needed to do the task, including context from this conversation"}}, "required": ["title", "instructions"]}'''

@@ -521,7 +521,7 @@ const quiet = (m) => m.client === 'agent' && /^\s*NO_UPDATE\W{0,8}$/.test(m.cont
 
 function msgEl(m) {
   // A scheduled agent's instruction is not shown: Alice speaks up on her own.
-  if (m.role === 'user' && m.client === 'agent') return null;
+  if (m.role === 'user' && (m.client === 'agent' || m.client === 'background')) return null;
   // ...nor "nothing to report", even while it is still streaming in.
   const head = (m.content || '').trim();
   if (m.role === 'assistant' && m.client === 'agent' && (quiet(m) || (m.status === 'streaming' && head && 'NO_UPDATE'.startsWith(head)))) return null;

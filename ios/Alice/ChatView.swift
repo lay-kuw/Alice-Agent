@@ -217,7 +217,7 @@ extension ChatView {
     var visible: [Message] {
         store.messages.filter { m in
             switch m.role {
-            case "user": m.client != "agent"
+            case "user": m.client != "agent" && m.client != "background"
             case "assistant":
                 !AgentReply.isQuiet(m)
                     && (!m.content.isEmpty || m.status == "error" || (m.status == "cancelled" && m.client != "agent") || (m.isStreaming && !m.hasToolCalls))

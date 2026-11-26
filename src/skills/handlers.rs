@@ -2,7 +2,7 @@
 //! commands. Handlers never decide permissions; [`super::gate`] does.
 
 use super::{Skill, ToolManifest, auth, setting};
-use crate::app::App;
+use crate::app::{App, AppRef};
 use crate::tools::untrusted;
 use crate::util::urlencode;
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_OUTPUT: usize = 256 * 1024;
 
-pub async fn run(app: &App, s: &Skill, t: &ToolManifest, args: &Value) -> Result<String, String> {
+pub async fn run(app: &AppRef, s: &Skill, t: &ToolManifest, args: &Value) -> Result<String, String> {
     match t.handler.as_str() {
         "builtin" => builtin(app, s, &t.name, args).await,
         "http" => http(app, s, t, args).await,
@@ -21,12 +21,18 @@ pub async fn run(app: &App, s: &Skill, t: &ToolManifest, args: &Value) -> Result
     }
 }
 
-async fn builtin(app: &App, s: &Skill, name: &str, args: &Value) -> Result<String, String> {
+async fn builtin(app: &AppRef, s: &Skill, name: &str, args: &Value) -> Result<String, String> {
     let cfg = app.config();
     match s.manifest.builtin.as_deref() {
         Some("fs") => crate::tools::fs::execute(&cfg, &app.paths, name, args).await,
         Some("web") => crate::tools::web::execute(app, &cfg, name, args).await,
         Some("google") => crate::tools::google::execute(app, s, name, args).await,
+        Some("recall") => crate::tools::recall::execute(app, name, args).await,
+        Some("background") => {
+            let s = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("");
+            let t = crate::schedule::start_background(app, s("title"), s("instructions"))?;
+            Ok(format!("Started in the background in a new chat \"{}\". The result will be posted there and the user notified.", t.title))
+        }
         _ => Err("no builtin module".into()),
     }
 }

@@ -1,0 +1,24 @@
+id = "recall"
+name = "Recall"
+version = "1.0.0"
+description = "Look back through Alice's memories and earlier conversations"
+builtin = "recall"
+
+[permissions]
+description = "Reads only Alice's own memories and chat history on this machine; nothing leaves it."
+
+[[tools]]
+name = "memory_search"
+description = "Search what Alice remembers about the user (long-term memories). Try a few short keywords or synonyms."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"query": {"type": "string", "description": "Keywords, e.g. 'cafe coffee shop'"}, "limit": {"type": "integer", "description": "1-20, default 8"}}, "required": ["query"]}'''
+
+[[tools]]
+name = "conversation_search"
+description = "Search earlier chats with the user for words they or Alice used. Returns matching snippets with the chat title and date. Try several short keywords (names, places, things) rather than a sentence."
+permission = "allow"
+risk = "read"
+handler = "builtin"
+input_schema = '''{"type": "object", "properties": {"query": {"type": "string", "description": "Space-separated keywords; a message matching more of them ranks higher"}, "limit": {"type": "integer", "description": "1-20, default 8"}}, "required": ["query"]}'''

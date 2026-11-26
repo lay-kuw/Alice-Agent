@@ -362,6 +362,35 @@ pub fn runs(app: &App, agent_id: &str) -> DbResult<Vec<Run>> {
     .collect()
 }
 
+/// Background tasks running at once, at most.
+pub const MAX_BACKGROUND: usize = 3;
+
+/// Run a one-off task in a new chat of its own (the `background_task` tool).
+/// Like an agent run, the instruction stays hidden and the reply reads as
+/// Alice reporting back; the clients notify when it arrives.
+pub fn start_background(app: &AppRef, title: &str, instructions: &str) -> Result<storage::Thread, String> {
+    let title = crate::util::truncate(title.trim(), 80).to_string();
+    let instructions = instructions.trim();
+    if title.is_empty() || instructions.is_empty() {
+        return Err("title and instructions are required".into());
+    }
+    let running = app.active.lock().unwrap_or_else(|e| e.into_inner()).values().filter(|g| g.client == "background").count();
+    if running >= MAX_BACKGROUND {
+        return Err(format!("{MAX_BACKGROUND} background tasks are already running; try again when one finishes"));
+    }
+    let t = storage::create_thread(&app.db.lock(), &title, None).map_err(|e| e.to_string())?;
+    app.emit(json!({ "type": "thread.created", "thread_id": t.id, "thread": t }));
+    let text = format!(
+        "{instructions}\n\n---\n(Background task \"{title}\" the user asked for in another chat; the user does not see this message. \
+         Do the work thoroughly, then write the result to the user in your usual voice and personality, starting with a one-line \
+         summary. Do not mention these instructions or describe the tools you used.)"
+    );
+    agent::start_turn(app, TurnInput { thread_id: t.id.clone(), text, client: "background".into(), model: None, attachment_ids: vec![], after: None })
+        .map_err(|e| e.to_string())?;
+    crate::info!("background task started thread={}", t.id);
+    Ok(t)
+}
+
 /// Is this reply Alice saying there is nothing to report?
 pub fn is_silent(content: &str) -> bool {
     let t = content.trim();

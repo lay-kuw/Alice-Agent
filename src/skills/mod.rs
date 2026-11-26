@@ -20,9 +20,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Built-in skills: (id, skill.toml, SKILL.md).
-const BUNDLED: [(&str, &str, &str); 3] = [
+const BUNDLED: [(&str, &str, &str); 5] = [
     ("files", include_str!("../../skills/files/skill.toml"), include_str!("../../skills/files/SKILL.md")),
     ("web", include_str!("../../skills/web/skill.toml"), include_str!("../../skills/web/SKILL.md")),
+    ("recall", include_str!("../../skills/recall/skill.toml"), include_str!("../../skills/recall/SKILL.md")),
+    ("background", include_str!("../../skills/background/skill.toml"), include_str!("../../skills/background/SKILL.md")),
     (
         "google-workspace",
         include_str!("../../skills/google-workspace/skill.toml"),
@@ -199,7 +201,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         return Err(format!("invalid skill id '{}' (use a-z, 0-9 and -)", m.id));
     }
     if let Some(b) = &m.builtin
-        && !matches!(b.as_str(), "fs" | "web" | "google") {
+        && !matches!(b.as_str(), "fs" | "web" | "google" | "recall" | "background") {
             return Err(format!("unknown builtin module '{b}'"));
         }
     if let Some(a) = &m.auth
@@ -601,7 +603,7 @@ mod tests {
         let cat = load_catalog(Path::new("/nonexistent"));
         assert!(cat.invalid.is_empty(), "{:?}", cat.invalid);
         let ids: Vec<&str> = cat.skills.iter().map(|s| s.id()).collect();
-        assert_eq!(ids, ["files", "web", "google-workspace"]);
+        assert_eq!(ids, ["files", "web", "recall", "background", "google-workspace"]);
         let g = cat.get("google-workspace").unwrap();
         assert_eq!(g.manifest.tools.len(), 16);
         assert!(g.tool("calendar_create").unwrap().schema().unwrap()["required"].as_array().unwrap().len() == 3);

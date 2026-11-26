@@ -4,6 +4,7 @@
 
 pub mod fs;
 pub mod google;
+pub mod recall;
 pub mod web;
 
 use serde_json::Value;

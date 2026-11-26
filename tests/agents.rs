@@ -141,3 +141,23 @@ async fn due_agents_post_into_their_thread() {
     assert_eq!(h.delete(&format!("/agents/{id}"), None).await, 204);
     assert_eq!(h.delete(&format!("/agents/{id}"), None).await, 404);
 }
+
+#[tokio::test]
+async fn background_tasks_run_in_their_own_chat() {
+    let h = Harness::new().await;
+    let t = h.new_thread().await;
+    let call = json!({ "name": "background_task", "arguments": { "title": "Cafe research", "instructions": "compare three cafes near the station" } });
+    let reply = h.chat(&t, &format!("calljson {call}"), "web").await;
+    assert!(reply["content"].as_str().unwrap().contains("Started in the background"), "{reply}");
+    // A new chat with the hidden instruction and Alice's report.
+    let threads = h.get("/threads").await["threads"].as_array().unwrap().clone();
+    let bg = threads.iter().find(|x| x["title"] == "Cafe research").expect("background chat").clone();
+    let id = bg["id"].as_str().unwrap().to_string();
+    idle(&h, &id).await;
+    let msgs = h.get(&format!("/threads/{id}/messages")).await["messages"].as_array().unwrap().clone();
+    let user = msgs.iter().find(|m| m["role"] == "user").unwrap();
+    assert_eq!(user["client"], "background");
+    assert!(user["content"].as_str().unwrap().starts_with("compare three cafes"));
+    let answer = msgs.iter().rev().find(|m| m["role"] == "assistant").unwrap();
+    assert!(answer["content"].as_str().unwrap().contains("compare three cafes"));
+}

@@ -194,7 +194,7 @@ pub fn start_turn(app: &AppRef, input: TurnInput) -> Result<TurnStarted, TurnErr
         // waiting for an approval), so every client leaves its "generating" state.
         app2.emit(json!({ "type": "turn.done", "thread_id": thread_id, "outcome": outcome_name }));
         // A scheduled agent's instruction is not something the user said.
-        if outcome == Outcome::Completed && user.client != "agent" {
+        if outcome == Outcome::Completed && user.client != "agent" && user.client != "background" {
             extract_memories(&app2, &user, &model).await;
         }
     });

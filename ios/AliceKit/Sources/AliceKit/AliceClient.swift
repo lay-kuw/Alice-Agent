@@ -89,6 +89,10 @@ public struct AliceClient: Sendable {
         try await send("PATCH", "/threads/\(id)", json: ["model": model])
     }
 
+    public func setThreadPinned(_ id: String, _ pinned: Bool) async throws {
+        try await send("PATCH", "/threads/\(id)", json: ["pinned": pinned])
+    }
+
     public func deleteThread(_ id: String) async throws {
         try await send("DELETE", "/threads/\(id)")
     }

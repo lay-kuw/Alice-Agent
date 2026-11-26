@@ -258,11 +258,13 @@ pub fn run(app: &AppRef, a: &Agent, now: i64, advance: bool) -> Result<String, S
         Ok(t) => t,
         Err(e) => {
             record(app, a, now, advance, Some(format!("error: {e}")));
+            log_run(app, a, None, now, !advance, "error", Some(&e));
             return Err(e);
         }
     };
+    let run_id = log_run(app, a, Some(&thread_id), now, !advance, "running", None);
     let (agent_id, tid) = (a.id.clone(), thread_id.clone());
-    let after: agent::AfterTurn = Box::new(move |app, outcome| finish(app, &agent_id, &tid, made, outcome));
+    let after: agent::AfterTurn = Box::new(move |app, outcome| finish(app, &agent_id, &tid, made, outcome, run_id));
     let started = agent::start_turn(
         app,
         TurnInput { thread_id: thread_id.clone(), text: instruction(a), client: "agent".into(), model: None, attachment_ids: vec![], after: Some(after) },
@@ -275,16 +277,89 @@ pub fn run(app: &AppRef, a: &Agent, now: i64, advance: bool) -> Result<String, S
             Ok(thread_id)
         }
         Err(TurnError::Busy) if advance => {
-            // Someone is talking in that thread; try again shortly.
+            // Someone is talking in that thread; try again shortly (not a run of its own).
+            let _ = app.db.lock().execute("DELETE FROM agent_runs WHERE id = ?1", [run_id]);
             let _ = app.db.lock().execute("UPDATE agents SET next_run = ?2, last_status = 'busy' WHERE id = ?1", params![a.id, now + BUSY_RETRY_MS]);
             Err("busy".into())
         }
         Err(e) => {
             crate::warn!("agent {} failed: {e}", a.id);
             record(app, a, now, advance, Some(format!("error: {e}")));
+            end_run(app, run_id, "error", Some(&e.to_string()), Some(&thread_id));
             Err(e.to_string())
         }
     }
+}
+
+/// How many runs are kept per agent.
+pub const RUNS_KEPT: i64 = 10;
+
+/// One run of an agent, for the run history.
+#[derive(Debug, Clone, Serialize)]
+pub struct Run {
+    pub id: i64,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    /// running / waiting (for a tool approval) / ok / quiet / error / stopped
+    pub status: String,
+    pub error: Option<String>,
+    pub thread_id: Option<String>,
+    pub thread_title: Option<String>,
+    pub manual: bool,
+}
+
+fn log_run(app: &App, a: &Agent, thread_id: Option<&str>, now: i64, manual: bool, status: &str, error: Option<&str>) -> i64 {
+    let c = app.db.lock();
+    let finished = (status != "running").then_some(now);
+    let id = c
+        .execute(
+            "INSERT INTO agent_runs (agent_id, started_at, finished_at, status, error, thread_id, manual) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![a.id, now, finished, status, error, thread_id, manual as i64],
+        )
+        .map(|_| c.last_insert_rowid())
+        .unwrap_or(0);
+    let _ = c.execute(
+        "DELETE FROM agent_runs WHERE agent_id = ?1 AND id NOT IN (SELECT id FROM agent_runs WHERE agent_id = ?1 ORDER BY id DESC LIMIT ?2)",
+        params![a.id, RUNS_KEPT],
+    );
+    id
+}
+
+fn end_run(app: &App, run_id: i64, status: &str, error: Option<&str>, thread_id: Option<&str>) {
+    let _ = app.db.lock().execute(
+        "UPDATE agent_runs SET status = ?2, error = ?3, thread_id = ?4, finished_at = ?5 WHERE id = ?1",
+        params![run_id, status, error, thread_id, now_ms()],
+    );
+}
+
+/// The last runs of an agent, newest first. A run waiting for a tool approval
+/// says so (`waiting`).
+pub fn runs(app: &App, agent_id: &str) -> DbResult<Vec<Run>> {
+    let waiting: std::collections::HashSet<String> =
+        app.approvals.lock().unwrap_or_else(|e| e.into_inner()).values().map(|p| p.thread_id.clone()).collect();
+    let c = app.db.lock();
+    let mut st = c.prepare_cached(
+        "SELECT r.id, r.started_at, r.finished_at, r.status, r.error, r.thread_id, t.title, r.manual
+         FROM agent_runs r LEFT JOIN threads t ON t.id = r.thread_id WHERE r.agent_id = ?1 ORDER BY r.id DESC LIMIT ?2",
+    )?;
+    st.query_map(params![agent_id, RUNS_KEPT], |r| {
+        let thread_id: Option<String> = r.get(5)?;
+        let mut status: String = r.get(3)?;
+        if status == "running" && thread_id.as_ref().is_some_and(|t| waiting.contains(t)) {
+            status = "waiting".into();
+        }
+        Ok(Run {
+            id: r.get(0)?,
+            started_at: r.get(1)?,
+            finished_at: r.get(2)?,
+            status,
+            error: r.get(4)?,
+            thread_id,
+            thread_title: r.get(6)?,
+            manual: r.get::<_, i64>(7)? != 0,
+        })
+    })?
+    .collect()
 }
 
 /// Is this reply Alice saying there is nothing to report?
@@ -296,15 +371,19 @@ pub fn is_silent(content: &str) -> bool {
 /// After the run, while the thread is still reserved for it: if Alice had
 /// nothing to report, remove exactly this run's messages (and the chat, when
 /// it was made for this run). Nothing else can have been posted meanwhile.
-fn finish(app: &AppRef, agent_id: &str, thread_id: &str, made: bool, outcome: &str) {
-    let (silent, from_seq, others) = {
+fn finish(app: &AppRef, agent_id: &str, thread_id: &str, made: bool, outcome: &str, run_id: i64) {
+    let (silent, from_seq, others, error) = {
         let c = app.db.lock();
         let msgs = storage::list_messages(&c, thread_id).unwrap_or_default();
         // This run's instruction: the newest one from "agent" (the thread is reserved).
         let from = msgs.iter().rev().find(|m| m.role == "user" && m.client == "agent").map(|m| m.seq);
         let reply = from.and_then(|f| msgs.iter().rev().find(|m| m.seq > f && m.role == "assistant"));
         let silent = outcome == "completed" && reply.is_some_and(|m| m.status == "complete" && is_silent(&m.content));
-        (silent, from, from.is_some_and(|f| msgs.iter().any(|m| m.seq < f)))
+        // Why a run failed, for the history.
+        let error = from
+            .and_then(|f| msgs.iter().rev().find(|m| m.seq > f && m.status == "error"))
+            .and_then(|m| m.meta.as_ref()?.get("error")?.as_str().map(|e| crate::util::truncate(e, 300).to_string()));
+        (silent, from, from.is_some_and(|f| msgs.iter().any(|m| m.seq < f)), error)
     };
     let status = match outcome {
         _ if silent => "quiet",
@@ -313,15 +392,19 @@ fn finish(app: &AppRef, agent_id: &str, thread_id: &str, made: bool, outcome: &s
         "deleted" => "ok",
         _ => "error",
     };
+    let mut kept_thread = Some(thread_id);
     if let (true, Some(from)) = (silent, from_seq) {
         if made && !others {
             let _ = crate::server::delete_thread_now(app, thread_id);
+            kept_thread = None;
         } else {
             let _ = app.db.lock().execute("DELETE FROM messages WHERE thread_id = ?1 AND seq >= ?2", params![thread_id, from]);
             app.emit(json!({ "type": "resync", "thread_id": thread_id }));
         }
     }
     let _ = app.db.lock().execute("UPDATE agents SET last_status = ?2 WHERE id = ?1", params![agent_id, status]);
+    let error = error.or_else(|| (status == "error").then(|| format!("the turn ended: {outcome}")));
+    end_run(app, run_id, status, error.as_deref(), kept_thread);
     app.emit(json!({ "type": "agents.updated" }));
 }
 

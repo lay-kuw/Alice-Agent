@@ -123,6 +123,19 @@ async fn due_agents_post_into_their_thread() {
     assert_eq!(r["thread_id"], t);
     idle(&h, &t).await;
     assert_eq!(settle(&h, &id).await["next_run"], before);
+    // Run history: newest first, scheduled and manual runs, with their result.
+    let runs = h.get(&format!("/agents/{id}/runs")).await["runs"].as_array().unwrap().clone();
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!((runs[0]["status"].as_str(), runs[0]["manual"].as_bool()), (Some("ok"), Some(true)));
+    assert_eq!((runs[1]["status"].as_str(), runs[1]["manual"].as_bool()), (Some("ok"), Some(false)));
+    assert_eq!(runs[1]["thread_id"], t);
+    assert!(runs[0]["finished_at"].as_i64().unwrap() >= runs[0]["started_at"].as_i64().unwrap());
+    let quiet = h.get(&format!("/agents/{qid}/runs")).await["runs"].as_array().unwrap().clone();
+    assert!(quiet.len() == 2 && quiet.iter().all(|r| r["status"] == "quiet"), "{quiet:?}");
+    // A quiet run that removed its own chat points nowhere.
+    let gone = h.get(&format!("/agents/{nid}/runs")).await["runs"][0].clone();
+    assert!(gone["status"] == "quiet" && gone["thread_id"].is_null(), "{gone}");
+
     let (code, v) = h.req(reqwest::Method::PATCH, &format!("/agents/{id}"), Some(json!({ "enabled": false }))).await;
     assert_eq!((code, v["agent"]["enabled"].as_bool()), (200, Some(false)));
     assert_eq!(h.delete(&format!("/agents/{id}"), None).await, 204);

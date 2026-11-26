@@ -3,6 +3,8 @@
 //! existing (foreign keys), so a concurrent delete cannot be undone by a
 //! generation that is still running.
 
+mod compact;
+
 use crate::app::{ActiveGeneration, AppRef, Bridge};
 use crate::config::{Config, ProviderKind};
 use crate::memory;
@@ -349,6 +351,15 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
     let mut assistant = first;
     let mut provider_ms_total: u128 = 0;
     let mut step = 0usize;
+    // A long thread is compacted once per turn, before the first step.
+    let (summary, summary_seq) = {
+        let msgs = match storage::list_messages(&app.db.lock(), &user.thread_id) {
+            Ok(m) => m,
+            Err(_) => return Outcome::Deleted,
+        };
+        let (s, live) = compact::prepare(app, &user.thread_id, msgs, app.config().agent.history_chars, user.seq, model_id).await;
+        (s, live.first().map(|m| m.seq - 1).unwrap_or(0))
+    };
     loop {
         let t_step = Instant::now();
         let cfg = app.config();
@@ -377,6 +388,8 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
                 Err(_) => return Outcome::Deleted,
             };
             drop(c);
+            // Messages folded into the summary are not sent again.
+            let msgs: Vec<Message> = if summary.is_some() { msgs.into_iter().filter(|m| m.seq > summary_seq).collect() } else { msgs };
             let img = |id: &str| if id == user.id { load_images(app, id) } else { vec![] };
             let mut h = build_history(&msgs, cfg.agent.history_chars, user.seq, &img);
             let extra = attachment_text(app, &user.id);
@@ -388,7 +401,8 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
         };
         let req = ChatRequest {
             model: model_name,
-            system: system_prompt(&cfg, &crate::config::read_soul(&app.paths), &mem_block, ws.as_deref(), &skill_index),
+            system: system_prompt(&cfg, &crate::config::read_soul(&app.paths), &mem_block, ws.as_deref(), &skill_index)
+                + &summary.as_deref().map(compact::render).map(|s| format!("\n{s}")).unwrap_or_default(),
             messages: history,
             tools: tool_specs,
             max_tokens: cfg.agent.max_tokens,

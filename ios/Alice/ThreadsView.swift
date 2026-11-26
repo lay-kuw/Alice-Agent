@@ -30,6 +30,7 @@ struct ThreadsView: View {
                         }
                         // Press and hold: the row pops up with the same actions.
                         .contextMenu {
+                            Button(t.isPinned ? "Unstar" : "Star", systemImage: t.isPinned ? "star.slash" : "star.fill") { Task { await store.setPinned(t.id, !t.isPinned) } }
                             Button("Rename", systemImage: "pencil") { newTitle = t.title; renaming = t }
                             Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
                         }
@@ -153,6 +154,13 @@ struct ThreadRow: View {
                 .background(LinearGradient(colors: [Palette.color(for: thread.id), Palette.color(for: thread.id).opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             Text(thread.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 0)
+            if thread.isPinned {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(LinearGradient(colors: [Palette.lemon, Palette.pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .shadow(color: Palette.pink.opacity(0.35), radius: 2, y: 1)
+                    .accessibilityLabel("Starred")
+            }
             if thread.generating == true { ProgressView().controlSize(.small).tint(Palette.pink) }
         }
         .padding(.vertical, 4)

@@ -86,7 +86,7 @@ const I18N = {
     'sk.confirm': '「{n}」を有効にしますか？ このスキルは次の権限を宣言しています:', 'sk.cmd': '※ このスキルはフォルダ内のプログラムを実行します',
     'sk.advanced': '詳細設定', 'sk.saveSettings': '設定を保存', 'sk.account': 'アカウント',
     'sys.runs': 'ツール実行ログ', 'run.none': 'まだ実行されていません。',
-    'conn.on': '接続中', 'conn.off': '再接続しています…',
+    'conn.on': '接続中', 'conn.off': '再接続しています…', pin: '★ スターを付ける', unpin: '☆ スターを外す', pinned: 'スター付き',
   },
   en: {
     'login.hint': 'Enter the API token shown by `alice token` on the server.', 'login.submit': 'Sign in', 'login.invalid': 'Invalid token',
@@ -157,7 +157,7 @@ const I18N = {
     'sk.confirm': 'Enable “{n}”? It declares these permissions:', 'sk.cmd': 'Note: this skill runs programs from its folder',
     'sk.advanced': 'Advanced', 'sk.saveSettings': 'Save settings', 'sk.account': 'Account',
     'sys.runs': 'Tool runs', 'run.none': 'Nothing has run yet.',
-    'conn.on': 'Connected', 'conn.off': 'Reconnecting…',
+    'conn.on': 'Connected', 'conn.off': 'Reconnecting…', pin: '★ Star', unpin: '☆ Unstar', pinned: 'Starred',
   },
 };
 let LANG = (navigator.language || 'en').toLowerCase().startsWith('ja') ? 'ja' : 'en';
@@ -347,11 +347,21 @@ async function loadThreads() {
   renderThreads();
 }
 
+/// Starred chats first, then the newest.
+function sortThreads() { S.threads.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updated_at - a.updated_at); }
+
+async function setPinned(id, pinned) {
+  const th = S.threads.find((x) => x.id === id);
+  if (th) { th.pinned = pinned; sortThreads(); renderThreads(); }
+  await guard(() => api('PATCH', '/threads/' + id, { pinned }));
+}
+
 function renderThreads() {
   $('threads').replaceChildren(...S.threads.map((th) =>
-    el('div', { class: 'thread' + (th.id === S.current ? ' active' : '') },
+    el('div', { class: 'thread' + (th.id === S.current ? ' active' : ''), oncontextmenu: (e) => { e.preventDefault(); openThreadMenu(e, th.id); } },
       el('button', { class: 'open', title: th.title || t('newTitle'), onclick: () => { openThread(th.id); closeSide(); } },
-        threadIcon(th.id), el('span', { class: 't' }, th.title || t('newTitle')), th.generating ? el('span', { class: 'dot' }) : null),
+        threadIcon(th.id), el('span', { class: 't' }, th.title || t('newTitle')), th.generating ? el('span', { class: 'dot' }) : null,
+        th.pinned ? el('span', { class: 'star', title: t('pinned') }, '★') : null),
       el('button', { class: 'more', title: t('more'), 'aria-label': t('more'), 'aria-haspopup': 'menu', onclick: (e) => openThreadMenu(e, th.id) }, '⋯'))));
 }
 
@@ -376,6 +386,8 @@ function openThreadMenu(e, id) {
   if (menuThread === id && !pop.classList.contains('hidden')) return closeThreadMenu();
   closeThreadMenu();
   menuThread = id;
+  const th = S.threads.find((x) => x.id === id);
+  $('thread-pop').querySelector('[data-act="pin"]').textContent = th && th.pinned ? t('unpin') : t('pin');
   btn.classList.add('on');
   pop.classList.remove('hidden');
   const r = btn.getBoundingClientRect();
@@ -394,6 +406,7 @@ $('thread-pop').addEventListener('click', (e) => {
   const id = menuThread, act = e.target.dataset.act;
   closeThreadMenu();
   if (act === 'rename') renameThread(id);
+  if (act === 'pin') { const th = S.threads.find((x) => x.id === id); setPinned(id, !(th && th.pinned)); }
   if (act === 'delete') deleteThread(id);
 });
 
@@ -821,7 +834,7 @@ function handleEvent(v) {
     case 'thread.created': case 'thread.updated': {
       const i = S.threads.findIndex((x) => x.id === v.thread.id);
       if (i >= 0) S.threads[i] = { ...S.threads[i], ...v.thread }; else S.threads.unshift(v.thread);
-      S.threads.sort((a, b) => b.updated_at - a.updated_at);
+      sortThreads();
       if (here) { S.thread = v.thread; renderHeader(); }
       renderThreads();
       break;
@@ -834,7 +847,7 @@ function handleEvent(v) {
     case 'threads.cleared': S.threads = []; S.approvals.clear(); newChat(); break;
     case 'message.created': {
       const th = S.threads.find((x) => x.id === v.thread_id);
-      if (th) { th.updated_at = v.ts; if (v.message.status === 'streaming') th.generating = true; S.threads.sort((a, b) => b.updated_at - a.updated_at); renderThreads(); }
+      if (th) { th.updated_at = v.ts; if (v.message.status === 'streaming') th.generating = true; sortThreads(); renderThreads(); }
       else loadThreads().catch(() => {});
       if (!here) break;
       upsertMessage(v.message);

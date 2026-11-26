@@ -14,6 +14,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../migrations/0002_tool_runs.sql"),
     include_str!("../../migrations/0003_agents.sql"),
     include_str!("../../migrations/0004_agent_times.sql"),
+    include_str!("../../migrations/0005_pins_summaries_runs.sql"),
 ];
 
 #[derive(Clone)]
@@ -70,6 +71,8 @@ pub struct Thread {
     pub model: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Starred: kept at the top of the list.
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -111,6 +114,7 @@ fn row_thread(r: &rusqlite::Row) -> rusqlite::Result<Thread> {
         model: r.get(2)?,
         created_at: r.get(3)?,
         updated_at: r.get(4)?,
+        pinned: r.get::<_, i64>(5)? != 0,
     })
 }
 
@@ -146,6 +150,7 @@ pub fn create_thread(c: &Connection, title: &str, model: Option<&str>) -> DbResu
         model: model.map(str::to_string),
         created_at: now,
         updated_at: now,
+        pinned: false,
     };
     c.execute(
         "INSERT INTO threads (id, title, model, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -156,14 +161,14 @@ pub fn create_thread(c: &Connection, title: &str, model: Option<&str>) -> DbResu
 
 pub fn list_threads(c: &Connection) -> DbResult<Vec<Thread>> {
     let mut st = c.prepare_cached(
-        "SELECT id, title, model, created_at, updated_at FROM threads ORDER BY updated_at DESC",
+        "SELECT id, title, model, created_at, updated_at, pinned FROM threads ORDER BY pinned DESC, updated_at DESC",
     )?;
     st.query_map([], row_thread)?.collect()
 }
 
 pub fn get_thread(c: &Connection, id: &str) -> DbResult<Option<Thread>> {
     c.query_row(
-        "SELECT id, title, model, created_at, updated_at FROM threads WHERE id = ?1",
+        "SELECT id, title, model, created_at, updated_at, pinned FROM threads WHERE id = ?1",
         [id],
         row_thread,
     )
@@ -195,6 +200,12 @@ pub fn update_thread(
     if let Some(m) = model {
         c.execute("UPDATE threads SET model = ?2, updated_at = ?3 WHERE id = ?1", params![id, m, now_ms()])?;
     }
+    get_thread(c, id)
+}
+
+/// Star or unstar a thread (its place in time stays as it was).
+pub fn set_pinned(c: &Connection, id: &str, pinned: bool) -> DbResult<Option<Thread>> {
+    c.execute("UPDATE threads SET pinned = ?2 WHERE id = ?1", params![id, pinned as i64])?;
     get_thread(c, id)
 }
 

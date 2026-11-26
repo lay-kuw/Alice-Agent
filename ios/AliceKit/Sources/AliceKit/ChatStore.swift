@@ -275,6 +275,19 @@ public final class ChatStore {
         do { try await client.renameThread(id, title: title) } catch { lastError = error.localizedDescription }
     }
 
+    /// Star or unstar a chat; starred chats stay at the top.
+    public func setPinned(_ id: String, _ pinned: Bool) async {
+        if let i = threads.firstIndex(where: { $0.id == id }) {
+            threads[i].pinned = pinned
+            sortThreads()
+        }
+        do { try await client.setThreadPinned(id, pinned) } catch { lastError = error.localizedDescription }
+    }
+
+    private func sortThreads() {
+        threads.sort { ($0.isPinned ? 1 : 0, $0.updatedAt) > ($1.isPinned ? 1 : 0, $1.updatedAt) }
+    }
+
     public func delete(_ id: String) async {
         do { try await client.deleteThread(id) } catch { lastError = error.localizedDescription }
     }
@@ -351,7 +364,7 @@ public final class ChatStore {
 
     private func upsertThread(_ t: ChatThread) {
         if let i = threads.firstIndex(where: { $0.id == t.id }) { threads[i] = t } else { threads.insert(t, at: 0) }
-        threads.sort { $0.updatedAt > $1.updatedAt }
+        sortThreads()
     }
 
     public func apply(_ ev: ServerEvent) async {
@@ -379,7 +392,7 @@ public final class ChatStore {
             if let i = threads.firstIndex(where: { $0.id == m.threadId }) {
                 threads[i].updatedAt = m.createdAt
                 if m.isStreaming { threads[i].generating = true }
-                threads.sort { $0.updatedAt > $1.updatedAt }
+                sortThreads()
             } else {
                 threads = (try? await client.threads()) ?? threads
             }

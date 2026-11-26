@@ -13,6 +13,7 @@ Object.assign(I18N.ja, {
   'ag.next': '次回 {t}', 'ag.done': '実行済み', 'ag.off': '停止中', 'ag.last': '前回 {t}', 'ag.none': 'まだエージェントがいません 🌙',
   'ag.everyN': '{n}{u}', 'ag.u.min': '分ごと', 'ag.u.hour': '時間ごと', 'ag.u.day': '日ごと', 'ag.u.week': '週ごと',
   'ag.mode.every': '繰り返し', 'ag.mode.times': '時刻指定', 'ag.addTime': '＋ 時刻を追加', 'ag.timesEach': '毎日 {t}',
+  'ag.hist': '履歴', 'ag.histNone': 'まだ実行されていません', 'ag.manual': '手動', 'ag.st.ok': '完了', 'ag.st.waiting': '承認待ち', 'ag.goneChat': '（チャットなし）',
   'ag.st.running': '実行中…', 'ag.st.quiet': '報告なし', 'ag.st.stopped': '中止', 'ag.st.busy': '待機中', 'ag.st.error': 'エラー',
   'ag.from': '{t} から', 'ag.daily': '毎日 {t}', 'ag.weekly': '毎週 {d} {t}', 'ag.at': '{t} に 1 回', 'ag.minEvery': '繰り返しは {n} 分以上にしてください',
   'nt.on': '通知オン', 'nt.off': '通知オフ', 'nt.denied': 'ブラウザで通知がブロックされています', 'nt.insecure': '通知は HTTPS か localhost で開いたときだけ使えます',
@@ -38,6 +39,7 @@ Object.assign(I18N.en, {
   'ag.next': 'Next {t}', 'ag.done': 'Done', 'ag.off': 'Paused', 'ag.last': 'Last {t}', 'ag.none': 'No agents yet 🌙',
   'ag.everyN': 'Every {n} {u}', 'ag.u.min': 'min', 'ag.u.hour': 'h', 'ag.u.day': 'days', 'ag.u.week': 'weeks',
   'ag.mode.every': 'Repeat', 'ag.mode.times': 'Set times', 'ag.addTime': '＋ Add a time', 'ag.timesEach': 'Every day at {t}',
+  'ag.hist': 'History', 'ag.histNone': 'No runs yet', 'ag.manual': 'manual', 'ag.st.ok': 'Done', 'ag.st.waiting': 'Waiting for approval', 'ag.goneChat': '(no chat)',
   'ag.st.running': 'Running…', 'ag.st.quiet': 'Nothing to report', 'ag.st.stopped': 'Stopped', 'ag.st.busy': 'Waiting', 'ag.st.error': 'Error',
   'ag.from': 'from {t}', 'ag.daily': 'Every day at {t}', 'ag.weekly': 'Every {d} at {t}', 'ag.at': 'Once at {t}', 'ag.minEvery': 'Repeat at least every {n} minutes',
   'nt.on': 'Notifications on', 'nt.off': 'Notifications off', 'nt.denied': 'Notifications are blocked in this browser', 'nt.insecure': 'Notifications need HTTPS or localhost',
@@ -687,7 +689,11 @@ async function loadAgents() {
   await gtry(async () => { const r = await api('GET', '/agents'); G.agents = r.agents; G.minEvery = r.min_every_min || 5; G.loadErr = null; }, true);
   if (G.view === 'agents') renderView();
 }
-function agentsUpdated() { if (G.view === 'agents') loadAgents(); else G.agents = null; }
+function agentsUpdated() {
+  if (G.view !== 'agents') { G.agents = null; return; }
+  loadAgents();
+  for (const id of G.hist.keys()) loadHistory(id);
+}
 
 const fmtWhen = (ms) => new Date(ms).toLocaleString(locale(), { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
 const UNITS = [['week', 10080], ['day', 1440], ['hour', 60], ['min', 1]];
@@ -727,10 +733,39 @@ function agentCard(a) {
       a.thread_id ? el('button', { class: 'ghost small', onclick: () => { setView('chat'); openThread(a.thread_id); } }, '→ ', to) : el('span', { class: 'muted small' }, '→ ', to),
       el('span', { class: 'grow' }),
       a.last_run ? el('small', { class: 'muted', title: a.last_status || '' }, t('ag.last', { t: fmtWhen(a.last_run) }), statusText(a.last_status)) : null,
+      el('button', { class: 'ghost small' + (G.hist.has(a.id) ? ' on' : ''), onclick: () => toggleHistory(a) }, '🕘 ', t('ag.hist')),
       el('button', { class: 'ghost small', onclick: () => runAgent(a) }, '▶ ', t('ag.run')),
       el('button', { class: 'ghost icon more-btn on', title: t('more'), onclick: (ev) => { ev.stopPropagation(); popMenu(ev.clientX, ev.clientY, [[t('edit'), () => agentSheet(a)], [t('delete'), () => deleteAgent(a), true]]); } }, icon('more'))));
+  if (G.hist.has(a.id)) card.append(historyEl(a));
   card.addEventListener('dblclick', () => agentSheet(a));
   return card;
+}
+
+// Run history (Web only): the last ten runs with result, target chat and why one failed.
+G.hist = new Map(); // agent id -> runs (null while loading)
+
+async function loadHistory(id) {
+  await gtry(async () => { G.hist.set(id, (await api('GET', `/agents/${id}/runs`)).runs); });
+  if (G.view === 'agents') renderView();
+}
+
+function toggleHistory(a) {
+  if (G.hist.has(a.id)) G.hist.delete(a.id); else { G.hist.set(a.id, null); loadHistory(a.id); }
+  renderView();
+}
+
+function historyEl(a) {
+  const runs = G.hist.get(a.id);
+  if (!runs) return el('div', { class: 'ag-hist' }, el('div', { class: 'spinner' }));
+  if (!runs.length) return el('div', { class: 'ag-hist muted small' }, t('ag.histNone'));
+  return el('div', { class: 'ag-hist' }, ...runs.map((r) => el('div', { class: 'ag-run' },
+    el('span', { class: 'ag-run-time' }, fmtWhen(r.started_at)),
+    el('span', { class: 'ag-badge ' + r.status }, t('ag.st.' + r.status)),
+    r.manual ? el('span', { class: 'muted small' }, t('ag.manual')) : null,
+    r.thread_id && r.thread_title
+      ? el('button', { class: 'ghost small', onclick: () => { setView('chat'); openThread(r.thread_id); } }, '→ ', r.thread_title)
+      : el('span', { class: 'muted small' }, '→ ', r.thread_id ? '…' : t('ag.goneChat')),
+    r.error ? el('span', { class: 'ag-err', title: r.error }, r.error) : null)));
 }
 
 function statusText(s) {

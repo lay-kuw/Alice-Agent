@@ -100,6 +100,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/{id}", axum::routing::patch(update_agent).delete(delete_agent))
         .route("/agents/{id}/run", post(run_agent))
+        .route("/agents/{id}/runs", get(agent_runs))
         .merge(google::routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         // Bridge routes authenticate with the per-turn token themselves.
@@ -452,6 +453,8 @@ struct UpdateThread {
     title: Option<String>,
     /// Some("") clears the thread model (use the default).
     model: Option<String>,
+    /// Star (true) or unstar the thread.
+    pinned: Option<bool>,
 }
 
 async fn update_thread(State(app): State<AppRef>, Path(id): Path<String>, Json(b): Json<UpdateThread>) -> ApiResult<Json<Value>> {
@@ -461,7 +464,13 @@ async fn update_thread(State(app): State<AppRef>, Path(id): Path<String>, Json(b
     }
     let title = b.title.as_deref().map(str::trim);
     let model = b.model.as_deref().map(|m| if m.is_empty() { None } else { Some(m) });
-    let t = storage::update_thread(&app.db.lock(), &id, title, model)?.ok_or_else(not_found)?;
+    let t = {
+        let c = app.db.lock();
+        if let Some(p) = b.pinned {
+            storage::set_pinned(&c, &id, p)?;
+        }
+        storage::update_thread(&c, &id, title, model)?.ok_or_else(not_found)?
+    };
     app.emit(json!({ "type": "thread.updated", "thread_id": t.id, "thread": t }));
     Ok(Json(json!({ "thread": t })))
 }
@@ -574,6 +583,12 @@ async fn delete_agent(State(app): State<AppRef>, Path(id): Path<String>) -> ApiR
     }
     app.emit(json!({ "type": "agents.updated" }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The agent's last runs (Web UI history).
+async fn agent_runs(State(app): State<AppRef>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    crate::schedule::get(&app.db.lock(), &id)?.ok_or_else(not_found)?;
+    Ok(Json(json!({ "runs": crate::schedule::runs(&app, &id)? })))
 }
 
 /// Run an agent now, without moving its schedule.

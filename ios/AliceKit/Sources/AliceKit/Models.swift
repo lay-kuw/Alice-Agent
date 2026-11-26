@@ -66,7 +66,10 @@ public struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     public var createdAt: Int64
     public var updatedAt: Int64
     public var generating: Bool?
+    /// Starred: kept at the top of the list.
+    public var pinned: Bool?
 
+    public var isPinned: Bool { pinned == true }
     public var displayTitle: String { title.isEmpty ? "New chat" : title }
 }
 

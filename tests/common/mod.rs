@@ -51,6 +51,11 @@ async fn chat(State(st): State<Arc<FakeLlm>>, Json(req): Json<Value>) -> axum::r
     let last_user = msgs.iter().rev().find(|m| m["role"] == "user").and_then(|m| m["content"].as_str()).unwrap_or("").to_string();
     let model = req["model"].as_str().unwrap_or("").to_string();
 
+    // Rolling compaction: a summary naming how many lines it folded.
+    if system.contains("You keep a running summary") {
+        let n = last_user.lines().filter(|l| l.starts_with('[')).count();
+        return sse(text_chunks(&format!("SUMMARY of {n} lines")), 0);
+    }
     if system.contains("You maintain long-term memory") {
         let user_msg = last_user.split("USER MESSAGE:\n").nth(1).unwrap_or("").to_string();
         if user_msg.contains("slowmem") {
@@ -110,11 +115,12 @@ async fn chat(State(st): State<Arc<FakeLlm>>, Json(req): Json<Value>) -> axum::r
         .map(|s| s.lines().filter(|l| l.starts_with("- ")).collect())
         .unwrap_or_default();
     let reply = format!(
-        "MEM[{}] N={} MODEL={} TOOL[{}] ECHO={}",
+        "MEM[{}] N={} MODEL={} TOOL[{}] SUM[{}] ECHO={}",
         mem.join(";"),
         msgs.iter().filter(|m| m["role"] != "system").count(),
         model,
         tool_text,
+        system.split("<earlier_context_summary>\n").nth(1).and_then(|s| s.split('\n').next()).unwrap_or(""),
         last_user
     );
     let delay = if last_user.contains("slow") { 150 } else { 0 };

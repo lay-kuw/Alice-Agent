@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 
 async fn idle(h: &Harness, t: &str) {
     for _ in 0..200 {
-        if h.get(&format!("/threads/{t}")).await["generating"] == false {
+        // Done, or gone (a quiet run removes the chat it made).
+        let (code, v) = h.req(reqwest::Method::GET, &format!("/threads/{t}"), None).await;
+        if code == 404 || v["generating"] == false {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -69,6 +71,26 @@ async fn due_agents_post_into_their_thread() {
     let after = h.get(&format!("/threads/{t}/messages")).await["messages"].as_array().unwrap().clone();
     assert_eq!(after.len(), msgs.len(), "{after:?}");
 
+    // A message sent the moment the quiet run lets go of the chat is never swept up with it.
+    let mut ev = h.events(Some(&t)).await;
+    assert_eq!(alice::schedule::tick(&h.app, alice::util::now_ms() + 31 * 60_000), 1);
+    let mut sent = None;
+    for _ in 0..400 {
+        let (code, v) = h.req(reqwest::Method::POST, &format!("/threads/{t}/messages"), Some(json!({ "content": "right after", "client": "web" }))).await;
+        if code == 202 {
+            sent = v["user_message"]["id"].as_str().map(str::to_string);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let sent = sent.expect("could not post after the run");
+    // Every turn ends with one turn.done, whatever happened.
+    let done = ev.until(|v| v["type"] == "turn.done").await;
+    assert_eq!(done["thread_id"], t);
+    idle(&h, &t).await;
+    let all = h.get(&format!("/threads/{t}/messages")).await["messages"].as_array().unwrap().clone();
+    assert!(all.iter().any(|m| m["id"] == sent.as_str()), "the later message was removed");
+
     // Nothing to report in a chat made for the run: the chat goes away too.
     let n = h.post("/agents", json!({ "name": "Quiet one", "prompt": "quietrun news", "every_min": 30 })).await["agent"].clone();
     let nid = n["id"].as_str().unwrap().to_string();
@@ -86,6 +108,14 @@ async fn due_agents_post_into_their_thread() {
     let d = h.post("/agents", json!({ "name": "Daily", "prompt": "news", "times": ["17:00", "12:00"] })).await["agent"].clone();
     assert_eq!(d["times"], json!(["12:00", "17:00"]));
     assert!(d["next_run"].as_i64().unwrap() > alice::util::now_ms() - 1000);
+
+    // Reply target: left out keeps it, null clears it (a new chat next time).
+    let (_, v) = h.req(reqwest::Method::PATCH, &format!("/agents/{id}"), Some(json!({ "name": "Stretch!" }))).await;
+    assert_eq!(v["agent"]["thread_id"], t);
+    let (_, v) = h.req(reqwest::Method::PATCH, &format!("/agents/{id}"), Some(json!({ "thread_id": null }))).await;
+    assert!(v["agent"]["thread_id"].is_null(), "{v}");
+    let (_, v) = h.req(reqwest::Method::PATCH, &format!("/agents/{id}"), Some(json!({ "thread_id": t }))).await;
+    assert_eq!(v["agent"]["thread_id"], t);
 
     // Run now leaves the schedule alone; edit and delete.
     let before = agent(&h, &id).await["next_run"].clone();

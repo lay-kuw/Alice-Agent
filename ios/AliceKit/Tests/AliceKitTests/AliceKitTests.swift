@@ -125,3 +125,14 @@ func liveServer() async throws {
     #expect(s.changes(after: at(9), until: at(24)) == [at(11), at(20)])
     #expect(EventColor.tag("11")?.name == "Tomato" && EventColor.tag("12") == nil && EventColor.tags.count == 11)
 }
+
+@Test func parsesTurnEndAndToolMessages() throws {
+    guard case .turnDone(let t)? = ServerEvent.parse(#"{"type":"turn.done","thread_id":"t1","outcome":"cancelled"}"#) else { Issue.record("turn.done"); return }
+    #expect(t == "t1")
+    let tool = #"{"type":"tool.completed","thread_id":"t1","message_id":"a1","message":{"id":"m9","thread_id":"t1","seq":4,"role":"tool","content":"ok","status":"complete","client":"web","created_at":1}}"#
+    guard case .toolCompleted(let tid, let m)? = ServerEvent.parse(tool) else { Issue.record("tool.completed"); return }
+    #expect(tid == "t1" && m?.id == "m9" && m?.role == "tool")
+    // Older servers send no message; the app then refetches.
+    guard case .toolCompleted(_, let none)? = ServerEvent.parse(#"{"type":"tool.completed","thread_id":"t1","message_id":"a1"}"#) else { Issue.record("old"); return }
+    #expect(none == nil)
+}

@@ -223,7 +223,7 @@ async fn run_turn<S: Surface>(
     let mut rx = app.events.subscribe();
     let started = agent::start_turn(
         app,
-        TurnInput { thread_id: thread.to_string(), text, client: ch.into(), model, attachment_ids: attachments },
+        TurnInput { thread_id: thread.to_string(), text, client: ch.into(), model, attachment_ids: attachments, after: None },
     );
     if let Err(e) = started {
         let _ = s.send(chat, &format!("⚠️ {e}"), &[]).await;

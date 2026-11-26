@@ -7,6 +7,7 @@ struct ChatView: View {
     @Bindable var store: ChatStore
     @State private var text = ""
     @State private var pending: [Attachment] = []
+    @State private var sending = false
     @State private var photo: PhotosPickerItem?
     @State private var importing = false
     @State private var pickingPhoto = false
@@ -179,10 +180,18 @@ struct ChatView: View {
                 } else {
                     Button {
                         let t = text
-                        let ids = pending.map(\.id)
+                        let held = pending
                         text = ""
                         pending = []
-                        Task { await store.send(t, attachmentIds: ids) }
+                        sending = true
+                        Task {
+                            // A failed send (offline, chat busy) gives the text and files back to resend.
+                            if !(await store.send(t, attachmentIds: held.map(\.id))) {
+                                if text.isEmpty { text = t }
+                                if pending.isEmpty { pending = held }
+                            }
+                            sending = false
+                        }
                     } label: {
                         let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty
                         Image(systemName: "arrow.up")
@@ -191,7 +200,7 @@ struct ChatView: View {
                             .frame(width: Self.control, height: Self.control)
                             .background(empty ? AnyShapeStyle(Color.secondary.opacity(0.35)) : AnyShapeStyle(Palette.accent), in: Circle())
                     }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty)
+                    .disabled(sending || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty))
                     .accessibilityLabel("Send")
                 }
             }

@@ -42,7 +42,12 @@ pub struct TurnInput {
     /// Per-message model override (also stored on the thread).
     pub model: Option<String>,
     pub attachment_ids: Vec<String>,
+    /// Runs when the turn has ended, while the thread is still reserved (so
+    /// nothing else can have been posted in it yet). Gets the outcome name.
+    pub after: Option<AfterTurn>,
 }
+
+pub type AfterTurn = Box<dyn FnOnce(&AppRef, &str) + Send + 'static>;
 
 pub struct TurnStarted {
     pub user_message: Message,
@@ -159,6 +164,7 @@ pub fn start_turn(app: &AppRef, input: TurnInput) -> Result<TurnStarted, TurnErr
 
     let started = TurnStarted { user_message: user.clone(), assistant_message: assistant.clone(), model: model.clone() };
     let app2 = app.clone();
+    let after = input.after;
     tokio::spawn(async move {
         let thread_id = user.thread_id.clone();
         // If the turn panics, close it as failed so the thread is usable (and
@@ -171,8 +177,20 @@ pub fn start_turn(app: &AppRef, input: TurnInput) -> Result<TurnStarted, TurnErr
                 Outcome::Failed
             }
         };
+        let outcome_name = match outcome {
+            Outcome::Completed => "completed",
+            Outcome::Cancelled => "cancelled",
+            Outcome::Failed => "failed",
+            Outcome::Deleted => "deleted",
+        };
+        if let Some(f) = after {
+            f(&app2, outcome_name);
+        }
         app2.active.lock().unwrap_or_else(|e| e.into_inner()).remove(&thread_id);
         app2.drop_approvals(Some(&thread_id));
+        // One end-of-turn signal whatever happened (done, failed, stopped while
+        // waiting for an approval), so every client leaves its "generating" state.
+        app2.emit(json!({ "type": "turn.done", "thread_id": thread_id, "outcome": outcome_name }));
         // A scheduled agent's instruction is not something the user said.
         if outcome == Outcome::Completed && user.client != "agent" {
             extract_memories(&app2, &user, &model).await;
@@ -528,21 +546,21 @@ async fn run_turn(app: &AppRef, user: &Message, first: Message, model_id: &str, 
                     },
                 );
                 match r {
-                    Ok(m) => {
+                    Ok(mut m) => {
                         let meta = json!({ "tool": call.name, "ok": ok });
                         let _ = c.execute("UPDATE messages SET meta = ?2 WHERE id = ?1", rusqlite::params![m.id, meta.to_string()]);
+                        m.meta = Some(meta);
                         Some(m)
                     }
                     Err(_) => None,
                 }
             };
-            if tool_msg.is_none() {
-                return Outcome::Deleted;
-            }
+            let Some(tool_msg) = tool_msg else { return Outcome::Deleted };
+            // The tool message itself rides along, so clients need not refetch the thread.
             app.emit(json!({
                 "type": "tool.completed", "thread_id": user.thread_id, "message_id": assistant.id,
                 "tool_call_id": call.id, "tool": call.name, "ok": ok,
-                "summary": crate::util::truncate(&content, 300),
+                "summary": crate::util::truncate(&content, 300), "message": tool_msg,
             }));
         }
 
@@ -645,15 +663,17 @@ pub async fn bridged_call(app: &AppRef, bridge: &Arc<Bridge>, name: &str, args: 
             },
         )
         .ok()
-        .inspect(|m| {
+        .map(|mut m| {
             let meta = json!({ "tool": call.name, "ok": ok, "via": source.as_str() });
             let _ = c.execute("UPDATE messages SET meta = ?2 WHERE id = ?1", rusqlite::params![m.id, meta.to_string()]);
+            m.meta = Some(meta);
+            m
         })
     };
-    if msg.is_some() {
+    if let Some(m) = msg {
         app.emit(json!({
             "type": "tool.completed", "thread_id": bridge.thread_id, "message_id": bridge.message_id,
-            "tool_call_id": call.id, "tool": call.name, "ok": ok, "summary": crate::util::truncate(&content, 300),
+            "tool_call_id": call.id, "tool": call.name, "ok": ok, "summary": crate::util::truncate(&content, 300), "message": m,
         }));
     }
     (content, ok)

@@ -194,7 +194,10 @@ public enum ServerEvent: Sendable {
     case messageDelta(threadId: String, messageId: String, delta: String)
     case messageCompleted(Message)
     case toolStarted(threadId: String, messageId: String)
-    case toolCompleted(threadId: String, messageId: String)
+    /// Carries the tool's message when the server sends it.
+    case toolCompleted(threadId: String, message: Message?)
+    /// A turn ended, however it ended.
+    case turnDone(String)
     case approvalRequired(Approval)
     case approvalResolved(String)
     case configUpdated
@@ -216,7 +219,8 @@ public enum ServerEvent: Sendable {
         case "message.delta":
             return .messageDelta(threadId: tid, messageId: v["message_id"]?.string ?? "", delta: v["delta"]?.string ?? "")
         case "tool.started": return .toolStarted(threadId: tid, messageId: v["message_id"]?.string ?? "")
-        case "tool.completed": return .toolCompleted(threadId: tid, messageId: v["message_id"]?.string ?? "")
+        case "tool.completed": return .toolCompleted(threadId: tid, message: (try? v["message"]?.decode(Message.self)) ?? nil)
+        case "turn.done": return .turnDone(tid)
         case "tool.approval_required":
             return .approvalRequired(Approval(
                 id: v["approval_id"]?.string ?? "", threadId: tid, tool: v["tool"]?.string ?? "",

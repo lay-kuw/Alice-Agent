@@ -44,6 +44,8 @@ impl Sandbox {
         let ws = workspace_dir(cfg, paths);
         let _ = std::fs::create_dir_all(&ws);
         let mut roots: Vec<PathBuf> = Vec::new();
+        // The configured workspace (tools.fs.workspace), not the default one.
+        let workspace = std::fs::canonicalize(&ws).ok();
         for r in std::iter::once(ws).chain(cfg.tools.fs.roots.iter().map(|r| expand_home(r))) {
             if let Ok(c) = std::fs::canonicalize(r)
                 && !roots.contains(&c) {
@@ -54,7 +56,7 @@ impl Sandbox {
             .into_iter()
             .filter_map(|p| std::fs::canonicalize(p).ok())
             .collect();
-        Sandbox { roots, protected, workspace: std::fs::canonicalize(paths.workspace()).ok() }
+        Sandbox { roots, protected, workspace }
     }
 
     pub fn roots(&self) -> &[PathBuf] {
@@ -121,6 +123,10 @@ impl Sandbox {
         }
         for name in rest.iter().rev() {
             real.push(name);
+        }
+        // Check the full path too, not only its existing ancestor.
+        if !self.inside(&real) {
+            return Err(format!("access denied: {input} is outside the allowed directories"));
         }
         Ok(real)
     }
@@ -325,6 +331,22 @@ mod tests {
         let paths = Paths::at(dir.path().join("home"));
         let sb = Sandbox::new(&cfg, &paths);
         (dir, sb, paths)
+    }
+
+    #[test]
+    fn custom_workspace_inside_alice_home_is_usable() {
+        // tools.fs.workspace may live under Alice's own (protected) folder.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::at(dir.path().join("home"));
+        std::fs::create_dir_all(&paths.home).unwrap();
+        let mut cfg = Config::default();
+        cfg.tools.fs.workspace = paths.home.join("my-files").display().to_string();
+        let sb = Sandbox::new(&cfg, &paths);
+        run(&sb, "fs_write", &json!({"path": "note.txt", "content": "hi"})).unwrap();
+        run(&sb, "fs_write", &json!({"path": "sub/dir/note.txt", "content": "hi"})).unwrap();
+        // The rest of Alice's folder stays off limits.
+        let secrets = paths.home.join("secrets.toml").display().to_string();
+        assert!(run(&sb, "fs_write", &json!({"path": secrets, "content": "x"})).is_err());
     }
 
     #[test]

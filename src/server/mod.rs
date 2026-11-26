@@ -601,7 +601,7 @@ async fn post_message(State(app): State<AppRef>, Path(id): Path<String>, Json(b)
     };
     let started = agent::start_turn(
         &app,
-        TurnInput { thread_id: id, text: b.content, client, model: b.model, attachment_ids: b.attachments },
+        TurnInput { thread_id: id, text: b.content, client, model: b.model, attachment_ids: b.attachments, after: None },
     )?;
     Ok((
         StatusCode::ACCEPTED,

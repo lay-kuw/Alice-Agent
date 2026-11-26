@@ -125,7 +125,8 @@ fn next_run(c: &Connection, a: &Agent, now: i64) -> Option<i64> {
 pub struct Fields {
     pub name: Option<String>,
     pub prompt: Option<String>,
-    /// "" or null: a new thread on the next run.
+    /// Left out: unchanged. "" or null: a new thread on the next run.
+    #[serde(default, deserialize_with = "present")]
     pub thread_id: Option<Option<String>>,
     /// Interval mode: the first run is as soon as possible, then every N minutes.
     pub every_min: Option<i64>,
@@ -134,6 +135,12 @@ pub struct Fields {
     pub enabled: Option<bool>,
     /// Older clients: when the interval starts (defaults to now).
     pub start_at: Option<i64>,
+}
+
+/// Tells a field that is present (even as null) from one left out:
+/// serde would read both as None.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    <Option<String> as serde::Deserialize>::deserialize(d).map(Some)
 }
 
 pub fn save(c: &Connection, id: Option<&str>, f: Fields) -> Result<Agent, String> {
@@ -254,16 +261,17 @@ pub fn run(app: &AppRef, a: &Agent, now: i64, advance: bool) -> Result<String, S
             return Err(e);
         }
     };
+    let (agent_id, tid) = (a.id.clone(), thread_id.clone());
+    let after: agent::AfterTurn = Box::new(move |app, outcome| finish(app, &agent_id, &tid, made, outcome));
     let started = agent::start_turn(
         app,
-        TurnInput { thread_id: thread_id.clone(), text: instruction(a), client: "agent".into(), model: None, attachment_ids: vec![] },
+        TurnInput { thread_id: thread_id.clone(), text: instruction(a), client: "agent".into(), model: None, attachment_ids: vec![], after: Some(after) },
     );
     match started {
-        Ok(s) => {
+        Ok(_) => {
             crate::info!("agent {} started", a.id);
             record(app, a, now, advance, Some("running".into()));
             app.emit(json!({ "type": "agents.updated" }));
-            tokio::spawn(finish(app.clone(), a.id.clone(), thread_id.clone(), s.user_message.seq, made));
             Ok(thread_id)
         }
         Err(TurnError::Busy) if advance => {
@@ -285,31 +293,31 @@ pub fn is_silent(content: &str) -> bool {
     t.len() <= SILENT.len() + 8 && t.contains(SILENT)
 }
 
-/// After the run: if Alice had nothing to report, remove the run from the chat
-/// (and the chat itself when it was made for this run).
-async fn finish(app: AppRef, agent_id: String, thread_id: String, from_seq: i64, made: bool) {
-    let deadline = now_ms() + 60 * 60_000;
-    while app.is_generating(&thread_id) && now_ms() < deadline {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    let (silent, status, others) = {
+/// After the run, while the thread is still reserved for it: if Alice had
+/// nothing to report, remove exactly this run's messages (and the chat, when
+/// it was made for this run). Nothing else can have been posted meanwhile.
+fn finish(app: &AppRef, agent_id: &str, thread_id: &str, made: bool, outcome: &str) {
+    let (silent, from_seq, others) = {
         let c = app.db.lock();
-        let msgs = storage::list_messages(&c, &thread_id).unwrap_or_default();
-        let reply = msgs.iter().rev().find(|m| m.seq > from_seq && m.role == "assistant");
-        let silent = reply.is_some_and(|m| m.status == "complete" && is_silent(&m.content));
-        let status = match reply.map(|m| m.status.as_str()) {
-            _ if silent => "quiet",
-            Some("complete") => "ok",
-            Some("cancelled") => "stopped",
-            _ => "error",
-        };
-        (silent, status, msgs.iter().any(|m| m.seq < from_seq))
+        let msgs = storage::list_messages(&c, thread_id).unwrap_or_default();
+        // This run's instruction: the newest one from "agent" (the thread is reserved).
+        let from = msgs.iter().rev().find(|m| m.role == "user" && m.client == "agent").map(|m| m.seq);
+        let reply = from.and_then(|f| msgs.iter().rev().find(|m| m.seq > f && m.role == "assistant"));
+        let silent = outcome == "completed" && reply.is_some_and(|m| m.status == "complete" && is_silent(&m.content));
+        (silent, from, from.is_some_and(|f| msgs.iter().any(|m| m.seq < f)))
     };
-    if silent {
+    let status = match outcome {
+        _ if silent => "quiet",
+        "completed" => "ok",
+        "cancelled" => "stopped",
+        "deleted" => "ok",
+        _ => "error",
+    };
+    if let (true, Some(from)) = (silent, from_seq) {
         if made && !others {
-            let _ = crate::server::delete_thread_now(&app, &thread_id);
+            let _ = crate::server::delete_thread_now(app, thread_id);
         } else {
-            let _ = app.db.lock().execute("DELETE FROM messages WHERE thread_id = ?1 AND seq >= ?2", params![thread_id, from_seq]);
+            let _ = app.db.lock().execute("DELETE FROM messages WHERE thread_id = ?1 AND seq >= ?2", params![thread_id, from]);
             app.emit(json!({ "type": "resync", "thread_id": thread_id }));
         }
     }

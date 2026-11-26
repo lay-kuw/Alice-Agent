@@ -223,22 +223,36 @@ public final class ChatStore {
         return t.id
     }
 
-    public func send(_ text: String, attachmentIds: [String] = []) async {
+    /// False when the message did not go out (so the caller can offer it again).
+    @discardableResult
+    public func send(_ text: String, attachmentIds: [String] = []) async -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !attachmentIds.isEmpty, !generating else { return }
+        guard !trimmed.isEmpty || !attachmentIds.isEmpty, !generating else { return false }
         do {
             let id = try await ensureThread()
+            finished.remove(id)
+            sending = id
+            defer { sending = nil }
             let r = try await client.post(id, text: trimmed, attachments: attachmentIds)
-            upsert(r.userMessage)
-            upsert(r.assistantMessage)
-            generating = true
+            // Events may have come first (even the finished reply): only add
+            // what is missing, never roll back to the initial state.
+            for m in [r.userMessage, r.assistantMessage] where !messages.contains(where: { $0.id == m.id }) { messages.append(m) }
+            let reply = messages.first { $0.id == r.assistantMessage.id }
+            generating = !finished.contains(id) && !(reply.map { !$0.isStreaming && $0.endsTurn } ?? false)
+            finished.remove(id)
             for i in attachments.indices where attachmentIds.contains(attachments[i].id) {
                 attachments[i].messageId = r.userMessage.id
             }
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
+
+    /// The thread a message is being posted to, and threads whose turn ended before that post answered.
+    private var sending: String?
+    private var finished: Set<String> = []
 
     public func upload(name: String, mime: String, data: Data) async -> Attachment? {
         do {
@@ -387,9 +401,21 @@ public final class ChatStore {
                 generating = false
                 remember(m.threadId)
             }
-        case .toolStarted(let tid, _), .toolCompleted(let tid, _):
+        case .toolStarted:
+            // The app does not show tool calls; nothing to fetch.
+            break
+        case .toolCompleted(let tid, let m):
             guard tid == currentThreadId else { return }
-            if let r = try? await client.messages(tid), currentThreadId == tid { messages = r.messages }
+            if let m { upsert(m) } else if let r = try? await client.messages(tid), currentThreadId == tid { messages = r.messages }
+        case .turnDone(let tid):
+            // Whatever happened (done, failed, stopped during an approval), the turn is over.
+            if sending == tid { finished.insert(tid) }
+            if let i = threads.firstIndex(where: { $0.id == tid }) { threads[i].generating = false }
+            guard tid == currentThreadId else { return }
+            generating = false
+            if messages.contains(where: \.isStreaming), let r = try? await client.messages(tid), currentThreadId == tid {
+                messages = r.messages
+            }
         case .approvalRequired(let a):
             if !approvals.contains(where: { $0.id == a.id }) { approvals.append(a) }
         case .approvalResolved(let id):

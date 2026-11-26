@@ -5,6 +5,8 @@
 
 const $ = (id) => document.getElementById(id);
 const S = {
+  sending: null, // thread a message is being posted to
+  finished: new Set(), // threads whose turn ended before the post's answer came back
   threads: [], current: null, thread: null, messages: [], attachments: [],
   generating: false, models: { models: [], default: '' }, pending: [], newModel: '',
   approvals: new Map(), es: null, config: null, profile: 'default',
@@ -544,23 +546,32 @@ function renderMessages() {
   box.scrollTop = box.scrollHeight;
 }
 
+// At most one redraw per frame, however many deltas arrive.
 let rafPending = new Set();
+let rafScheduled = false;
+/// True while the user is selecting text inside `node` (do not redraw under them).
+const selecting = (node) => { const sel = getSelection(); return !!sel && !sel.isCollapsed && node.contains(sel.anchorNode); };
 function rerenderMessage(id) {
   rafPending.add(id);
-  if (rafPending.size > 1) return;
+  if (rafScheduled) return;
+  rafScheduled = true;
   requestAnimationFrame(() => {
+    rafScheduled = false;
     const box = $('messages');
     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+    const later = new Set();
     for (const mid of rafPending) {
       const m = S.messages.find((x) => x.id === mid);
       const old = $('msg-' + mid);
+      // A message still streaming keeps the user's selection; it is redrawn once they let go or it completes.
+      if (old && m && m.status === 'streaming' && selecting(old)) { later.add(mid); continue; }
       const fresh = m && msgEl(m);
       if (old && fresh) old.replaceWith(fresh);
       else if (old) old.remove();
       else if (fresh) { box.append(fresh); $('empty').classList.add('hidden'); }
     }
-    rafPending = new Set();
-    if (nearBottom) box.scrollTop = box.scrollHeight;
+    rafPending = later;
+    if (nearBottom && !later.size) box.scrollTop = box.scrollHeight;
   });
 }
 
@@ -739,11 +750,18 @@ $('composer').addEventListener('submit', async (e) => {
     const atts = S.pending.map((p) => p.id);
     input.value = '';
     input.dispatchEvent(new Event('input'));
-    const r = await api('POST', `/threads/${id}/messages`, { content: text, client: 'web', attachments: atts });
+    S.finished.delete(id);
+    S.sending = id;
+    let r;
+    try { r = await api('POST', `/threads/${id}/messages`, { content: text, client: 'web', attachments: atts }); } finally { S.sending = null; }
     S.pending = [];
-    for (const m of [r.user_message, r.assistant_message]) upsertMessage(m);
+    // Events may have arrived before this answer (even the finished reply):
+    // only add what is missing, never roll back to the initial state.
+    for (const m of [r.user_message, r.assistant_message]) if (!S.messages.some((x) => x.id === m.id)) S.messages.push(m);
     for (const a of atts) { const x = S.attachments.find((y) => y.id === a); if (x) x.message_id = r.user_message.id; }
-    S.generating = true;
+    const reply = S.messages.find((x) => x.id === r.assistant_message.id);
+    S.generating = !S.finished.has(id) && !(reply && reply.status !== 'streaming' && endsTurn(reply));
+    S.finished.delete(id);
     renderAll();
   } catch (err) {
     toast(err.message);
@@ -842,9 +860,33 @@ function handleEvent(v) {
       if (endsTurn(v.message) && typeof notifyReply === 'function') notifyReply(v.thread_id, v.message);
       break;
     }
-    case 'tool.started': case 'tool.completed':
-      if (here) api('GET', `/threads/${S.current}/messages`).then((m) => { if (S.current === v.thread_id) { S.messages = m.messages; rerenderMessage(v.message_id); } }).catch(() => {});
+    case 'tool.started': {
+      // Show the call on its message without refetching the thread.
+      const m = here && S.messages.find((x) => x.id === v.message_id);
+      if (m) {
+        m.tool_calls = m.tool_calls || [];
+        if (!m.tool_calls.some((c) => c.id === v.tool_call_id)) m.tool_calls.push({ id: v.tool_call_id, name: v.tool, arguments: v.arguments });
+        rerenderMessage(m.id);
+      }
       break;
+    }
+    case 'tool.completed':
+      if (!here) break;
+      if (v.message) { upsertMessage(v.message); rerenderMessage(v.message_id); }
+      else api('GET', `/threads/${S.current}/messages`).then((m) => { if (S.current === v.thread_id) { S.messages = m.messages; rerenderMessage(v.message_id); } }).catch(() => {});
+      break;
+    case 'turn.done': {
+      // Whatever happened (done, failed, stopped during an approval), the turn is over.
+      const th = S.threads.find((x) => x.id === v.thread_id);
+      if (th && th.generating) { th.generating = false; renderThreads(); }
+      if (S.sending === v.thread_id) S.finished.add(v.thread_id);
+      if (!here) break;
+      S.generating = false;
+      renderComposer();
+      // A message left "streaming" means its end was never sent; take the server's copy.
+      if (S.messages.some((x) => x.status === 'streaming')) api('GET', `/threads/${S.current}/messages`).then((m) => { if (S.current === v.thread_id) { S.messages = m.messages; renderMessages(); } }).catch(() => {});
+      break;
+    }
     case 'tool.approval_required':
       S.approvals.set(v.approval_id, v);
       if (here) renderMessages(); else toast(t('approval.other', { t: v.tool }));

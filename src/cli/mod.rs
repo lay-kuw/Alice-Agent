@@ -48,7 +48,11 @@ pub enum Cmd {
     /// Chat: `alice chat` (TUI), `alice chat "message"`, `alice chat new|list|<id>|delete <id>|rename <id>|clear`, `--plain`
     Chat { args: Vec<String> },
     /// Manage models: list, add, remove <id>, use <id>, login <provider>, logout <provider>, test <id>
-    Model { args: Vec<String> },
+    Model {
+        /// Options after the provider go to its own login (e.g. `--device-auth`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Memory: list, search "keyword", status, clear
     Memory { args: Vec<String> },
     /// Config: `alice config`, `get <key>`, `set <key> <value>`, `secret <name>`
@@ -1265,5 +1269,20 @@ async fn tool_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             Ok(())
         }
         _ => Err("usage: alice tool [list | enable <tool> [ask|allow] | disable <tool> | reset <tool>]".into()),
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn login_options_reach_the_provider() {
+        let c = Cli::try_parse_from(["alice", "model", "login", "codex-cli", "--device-auth"]).unwrap();
+        match c.cmd {
+            Some(Cmd::Model { args }) => assert_eq!(args, ["login", "codex-cli", "--device-auth"]),
+            _ => panic!("not a model command"),
+        }
     }
 }

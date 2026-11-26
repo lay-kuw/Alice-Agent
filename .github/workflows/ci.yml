@@ -9,15 +9,16 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
   ios:
-    runs-on: macos-15
+    # The app is built with Xcode 27 (Swift 6.4); older images cannot compile it.
+    runs-on: xcode-27
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cd ios/AliceKit && swift test
       - run: xcodebuild -project ios/Alice.xcodeproj -scheme Alice -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build

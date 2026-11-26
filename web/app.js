@@ -38,7 +38,7 @@ const I18N = {
     'm.removeq': 'プロバイダー {p} と API キーを削除しますか？', 'm.key': 'API キー', 'm.keySet': '設定済み — 変更する場合のみ入力', 'm.saveKey': 'キーを保存',
     'm.none': 'まだプロバイダーがありません。', 'm.add': 'プロバイダーを追加', 'm.kind': '種類', 'm.id': 'ID（例: openai）', 'm.base': 'ベース URL（任意。openai-compatible は必須）',
     'm.models': 'モデル名（カンマ区切り）', 'm.addBtn': '追加', 'm.added': '追加しました',
-    'm.sub': 'ChatGPT / Gemini のサブスクは公式 CLI（codex-cli / gemini-cli）経由で使います。Codex は Alice 専用のログイン（alice model login codex-cli）で、スキルは内蔵 MCP サーバー経由で使えます。',
+    'm.sub': 'ChatGPT / Google AI のサブスクは公式 CLI（codex-cli / antigravity-cli）経由で使います。Codex は Alice 専用のログイン（alice model login codex-cli）、Antigravity はサーバーで一度 `agy` を起動してログインします。',
     'm.cliLogin': 'ログインはサーバーで実行: alice model login {p}（いつもの Codex とは別のログインです）', 'm.caps': 'ツール: {t}・画像: {i}・ストリーミング: {s}',
     'c.iphone': 'iPhone アプリ', 'c.iphone.sub': '同じサーバーに接続して、スレッドと記憶を共有します。',
     'c.ios1': 'アプリを開いて「サーバーを追加」', 'c.ios2': 'この URL を入力', 'c.ios3': 'API トークンを入力',
@@ -109,7 +109,7 @@ const I18N = {
     'm.removeq': 'Remove provider {p} and its API key?', 'm.key': 'API key', 'm.keySet': 'Set — enter only to replace', 'm.saveKey': 'Save key',
     'm.none': 'No providers yet.', 'm.add': 'Add provider', 'm.kind': 'Type', 'm.id': 'ID (e.g. openai)', 'm.base': 'Base URL (optional; required for openai-compatible)',
     'm.models': 'Model names, comma separated', 'm.addBtn': 'Add', 'm.added': 'Provider added',
-    'm.sub': "ChatGPT / Gemini subscriptions work through the vendors' official CLIs (codex-cli / gemini-cli). Codex uses Alice's own login (alice model login codex-cli) and reaches skills through Alice's built-in MCP server.",
+    'm.sub': "ChatGPT / Google AI subscriptions work through the vendors' official CLIs (codex-cli / antigravity-cli). Codex uses Alice's own login (alice model login codex-cli); for Antigravity, run `agy` once on the server and sign in.",
     'm.cliLogin': 'Log in on the server: alice model login {p}', 'm.caps': 'tools: {t} · images: {i} · streaming: {s}',
     'c.iphone': 'iPhone app', 'c.iphone.sub': 'Connects to this server and shares threads and memory.',
     'c.ios1': 'Open the app and tap “Add server”', 'c.ios2': 'Enter this URL', 'c.ios3': 'Enter the API token',
@@ -1260,7 +1260,7 @@ const TABS = {
                 b.textContent = r.ok ? t('m.ok') : t('m.ng');
               } }, t('m.test'))));
         })),
-        ['codex-cli', 'gemini-cli'].includes(p.kind) ? el('p', { class: 'hint' }, t('m.cliLogin', { p: p.id })) : null,
+        ['codex-cli', 'antigravity-cli'].includes(p.kind) ? el('p', { class: 'hint' }, t('m.cliLogin', { p: p.id })) : null,
         needsKey ? el('div', { class: 'copyfield' }, keyInput, el('button', { onclick: () => guard(async () => {
           if (!keyInput.value) return;
           await api('PUT', `/secrets/provider.${p.id}.api_key`, { value: keyInput.value });
@@ -1285,14 +1285,14 @@ const TABS = {
       toast(failed.length ? failed.map((x) => `${x.id}: ${x.error}`).join('\n') : t('m.refreshed'));
       showTab('models');
     }) }, t('m.refresh'))));
-    const kind = el('select', {}, ...['openai', 'anthropic', 'gemini', 'openai-compatible', 'ollama', 'codex-cli', 'gemini-cli'].map((k) => el('option', { value: k }, k)));
+    const kind = el('select', {}, ...['openai', 'anthropic', 'gemini', 'openai-compatible', 'ollama', 'codex-cli', 'antigravity-cli'].map((k) => el('option', { value: k }, k)));
     const id = el('input', { type: 'text', placeholder: t('m.id') });
     const base = el('input', { type: 'text', placeholder: t('m.base') });
     const models = el('input', { type: 'text', placeholder: t('m.models') });
     const key = el('input', { type: 'password', placeholder: t('m.key') });
     kind.addEventListener('change', () => {
       if (kind.value === 'anthropic' && !models.value) models.value = 'claude-opus-5-5';
-      if (['codex-cli', 'gemini-cli'].includes(kind.value)) models.value = 'default';
+      if (['codex-cli', 'antigravity-cli'].includes(kind.value)) models.value = 'default';
     });
     const add = () => guard(async () => {
       await api('POST', '/providers', { id: id.value || kind.value, kind: kind.value, base_url: base.value, models: models.value.split(',').map((s) => s.trim()).filter(Boolean), api_key: key.value || null });

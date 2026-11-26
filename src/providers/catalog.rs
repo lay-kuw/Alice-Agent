@@ -88,6 +88,17 @@ pub async fn discover(http: &reqwest::Client, p: &ProviderConfig, key: Option<&s
             let v = json(r.send().await.map_err(|e| e.without_url().to_string())?).await?;
             v["data"].as_array().into_iter().flatten().filter_map(|m| Some(info(m["id"].as_str()?, "", ""))).collect()
         }
+        // `agy models`: one model per line, "slug   Display name".
+        ProviderKind::AntigravityCli => {
+            let out = tokio::time::timeout(std::time::Duration::from_secs(20), tokio::process::Command::new(p.base_url()).arg("models").output())
+                .await
+                .map_err(|_| "agy did not answer".to_string())?
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+            }
+            super::cli::parse_agy_models(&String::from_utf8_lossy(&out.stdout)).into_iter().map(|(slug, name)| info(&slug, &name, "")).collect()
+        }
         // OpenAI's list mixes in audio, image and embedding models; Gemini CLI has no list.
         ProviderKind::Openai | ProviderKind::GeminiCli => return Ok(None),
     };
@@ -143,7 +154,7 @@ pub async fn refresh(app: &App) -> Vec<Value> {
             let Some(p) = c.providers.iter_mut().find(|p| &p.id == id) else { continue };
             let mut models: Vec<String> = Vec::new();
             // CLIs keep "default" (the CLI's own choice).
-            if matches!(kind, ProviderKind::CodexCli | ProviderKind::GeminiCli) {
+            if kind.is_cli() {
                 models.push("default".into());
             }
             models.extend(list.iter().map(|m| m.model.clone()));

@@ -48,7 +48,7 @@ src/
 ├── config/          Config (config.toml) / Secrets (secrets.toml, 0600) / Paths
 ├── storage/         DB 接続・マイグレーション・threads/messages の CRUD
 ├── memory/          抽出・検索・削除・再構築
-├── providers/       共通型 + openai.rs / anthropic.rs / gemini.rs / cli.rs(codex, gemini-cli)
+├── providers/       共通型 + openai.rs / anthropic.rs / gemini.rs / cli.rs(codex, antigravity)
 ├── agent/           ターン実行・コンテキスト構築・ツールループ・承認待ち
 ├── skills/          スキル（manifest・検出・Tool Registry・Tool Gate・認証・http/command ハンドラ）
 ├── mcp.rs           `alice mcp`（stdio MCP 中継。Codex 用）
@@ -85,7 +85,8 @@ pub async fn stream(provider: &ProviderConfig, secret: Option<&str>, req, on_del
 | anthropic | ✓ | ✓ | ✓ | テキスト化 / PDF | ✓ (adaptive) | API Key |
 | gemini | ✓ | ✓ | ✓ | テキスト化 | ✓ | API Key |
 | codex-cli | 行単位 | MCP（`alice mcp`）。安全確認に失敗したらテキスト方式 | ✗ | ✗ | Codex 内部 | Alice 専用の ChatGPT ログイン (公式 CLI, `~/.alice/codex`) |
-| gemini-cli | 行単位 | テキスト方式（```alice-tool```） | ✗ | ✗ | – | Google ログイン (実験的) |
+| antigravity-cli | 行単位 | テキスト方式（```alice-tool```） | ✗ | ✗ | – | Google ログイン（`agy` で一度サインイン。plan モード・サンドボックス・空フォルダで実行） |
+| gemini-cli | – | – | – | – | – | 終了（2026-06-18 に Google がサブスクログインを終了。設定は読めるが使用不可） |
 
 Context Window はモデル設定 (`context_tokens`) で管理し、履歴の切り詰めに使う。
 

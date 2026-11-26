@@ -41,7 +41,7 @@
 ## Phase 5 — Channels
 - ☑ Telegram（long polling, allowlist, コマンド, 承認ボタン）— 偽 Bot API で検証。実 Bot での疎通は未確認
 - ☑ Discord（Gateway, allowlist, コマンド, 承認）— 偽 Gateway/REST で検証。実 Bot での疎通は未確認
-- ◐ Subscription Provider: codex-cli（公式 JSONL 形式で検証、実ログインでの疎通は未確認）/ gemini-cli（Antigravity CLI への置き換えにより実験的）
+- ◐ Subscription Provider: codex-cli（公式 JSONL 形式で検証、実ログインでの疎通は未確認）/ antigravity-cli（公式ドキュメントの stream-json 形式に準拠、実ログインでの疎通は未確認。gemini-cli は終了）
 
 ## Phase 6 — iPhone
 - ◐ SwiftUI アプリ（接続・Keychain・スレッド・ストリーミング・承認・添付・停止・モデル選択）— AliceKit は実サーバーとの通しテスト済み、アプリはシミュレータ向けビルド成功。実機/シミュレータでの画面確認は未実施（シミュレータランタイム未導入）

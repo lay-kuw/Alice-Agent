@@ -231,19 +231,36 @@ pub enum ProviderKind {
     Anthropic,
     Gemini,
     CodexCli,
+    /// Kept so old configs load; Google ended subscription logins for it on 2026-06-18.
     GeminiCli,
+    AntigravityCli,
 }
 
 impl ProviderKind {
-    pub const ALL: [ProviderKind; 7] = [
+    pub const ALL: [ProviderKind; 8] = [
         ProviderKind::Openai,
         ProviderKind::Anthropic,
         ProviderKind::Gemini,
         ProviderKind::OpenaiCompatible,
         ProviderKind::Ollama,
         ProviderKind::CodexCli,
+        ProviderKind::AntigravityCli,
         ProviderKind::GeminiCli,
     ];
+    /// What can be added now (gemini-cli is retired).
+    pub const ADDABLE: [ProviderKind; 7] = [
+        ProviderKind::Openai,
+        ProviderKind::Anthropic,
+        ProviderKind::Gemini,
+        ProviderKind::OpenaiCompatible,
+        ProviderKind::Ollama,
+        ProviderKind::CodexCli,
+        ProviderKind::AntigravityCli,
+    ];
+    /// Reached through a vendor's official CLI (subscription login).
+    pub fn is_cli(self) -> bool {
+        matches!(self, ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli)
+    }
     pub fn as_str(self) -> &'static str {
         match self {
             ProviderKind::Openai => "openai",
@@ -253,6 +270,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "gemini",
             ProviderKind::CodexCli => "codex-cli",
             ProviderKind::GeminiCli => "gemini-cli",
+            ProviderKind::AntigravityCli => "antigravity-cli",
         }
     }
     pub fn parse(s: &str) -> Option<ProviderKind> {
@@ -267,6 +285,7 @@ impl ProviderKind {
             ProviderKind::OpenaiCompatible => "",
             ProviderKind::CodexCli => "codex",
             ProviderKind::GeminiCli => "gemini",
+            ProviderKind::AntigravityCli => "agy",
         }
     }
     pub fn needs_api_key(self) -> bool {

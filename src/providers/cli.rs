@@ -5,9 +5,12 @@
 //!   directory, with Codex's shell/exec/browser/plugins turned off. Alice's
 //!   tools are reached through `alice mcp` (see docs/SKILLS.md), after a
 //!   safety check of the tools Codex exposes.
-//! - `gemini-cli`: `gemini -p --output-format stream-json` using the user's
-//!   Google login. Experimental: availability of subscription logins for
-//!   Gemini CLI has changed over time; prefer the Gemini API if it fails.
+//! - `antigravity-cli`: `agy -p --output-format stream-json` using the user's
+//!   Google login (sign in once with `agy`). Runs in plan mode, sandboxed, in
+//!   an empty directory; actions that need approval are refused (headless).
+//!   Alice's tools go through the text protocol.
+//! - `gemini-cli`: retired (Google ended its subscription login on
+//!   2026-06-18); kept so existing configs still load and say so.
 //!
 //! Other CLIs (and Codex if the safety check fails) get Alice's tools through
 //! a text protocol (```alice-tool blocks). Images are not forwarded and
@@ -339,10 +342,14 @@ pub async fn stream(p: &ProviderConfig, req: &ChatRequest<'_>, on_delta: OnDelta
     // Text-protocol replies are buffered so tool blocks never reach the UI.
     let mut buf = String::new();
     let mut sink = |d: &str| buf.push_str(d);
-    let result = if mode == ToolMode::Text {
-        run(p.kind, &exe, req, &prompt, &scratch, bridge, &mut sink).await
-    } else {
-        run(p.kind, &exe, req, &prompt, &scratch, bridge, on_delta).await
+    let result = match (p.kind, mode == ToolMode::Text) {
+        (ProviderKind::AntigravityCli, true) => run_agy(&exe, req, &prompt, &scratch, &mut sink).await,
+        (ProviderKind::AntigravityCli, false) => run_agy(&exe, req, &prompt, &scratch, on_delta).await,
+        (ProviderKind::GeminiCli, _) => Err(ProviderError(
+            "Gemini CLI no longer serves subscription logins (ended 2026-06-18). Add `antigravity-cli` (alice model add) or the Gemini API instead.".into(),
+        )),
+        (_, true) => run(p.kind, &exe, req, &prompt, &scratch, bridge, &mut sink).await,
+        (_, false) => run(p.kind, &exe, req, &prompt, &scratch, bridge, on_delta).await,
     };
     let _ = std::fs::remove_dir_all(&scratch);
     let mut out = result?;
@@ -488,6 +495,132 @@ async fn run(
     Ok(out)
 }
 
+/// Largest prompt passed as a command-line argument (Linux caps one argument at 128 KiB).
+const AGY_ARG_MAX: usize = 120_000;
+
+/// One turn through the Antigravity CLI (`agy -p … --output-format stream-json`).
+async fn run_agy(exe: &str, req: &ChatRequest<'_>, prompt: &str, dir: &std::path::Path, on_delta: OnDelta<'_>) -> Result<Completion> {
+    let mut cmd = Command::new(exe);
+    cmd.current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    // Plan mode and the sandbox: research only, no edits; approvals are refused in headless runs.
+    cmd.args(["--output-format", "stream-json", "--mode", "plan", "--sandbox", "--print-timeout", "0s"]);
+    if !req.model.is_empty() && req.model != "default" {
+        cmd.args(["--model", req.model]);
+    }
+    if let Some(e) = req.effort.as_deref() {
+        cmd.args(["--effort", e]);
+    }
+    // Short prompts as the argument; long ones on stdin.
+    let on_stdin = prompt.len() > AGY_ARG_MAX;
+    if on_stdin {
+        cmd.args(["-p", "Follow the instructions and conversation given on standard input."]);
+    } else {
+        cmd.arg("-p").arg(prompt);
+    }
+    let mut child = cmd.spawn().map_err(|e| ProviderError(format!("cannot start '{exe}': {e} (install the Antigravity CLI and sign in with `agy`)")))?;
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        if on_stdin {
+            stdin.write_all(prompt.as_bytes()).await.map_err(|e| ProviderError(e.to_string()))?;
+        }
+    }
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut out = Completion::default();
+    let mut st = AgyStream::default();
+    while let Some(line) = lines.next_line().await.map_err(|e| ProviderError(e.to_string()))? {
+        st.feed(&line, &mut out, on_delta);
+    }
+    let status = child.wait().await.map_err(|e| ProviderError(e.to_string()))?;
+    if let Some(e) = st.error {
+        return Err(ProviderError(e));
+    }
+    if out.text.is_empty() && !status.success() {
+        let mut stderr = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            use tokio::io::AsyncReadExt;
+            let _ = e.read_to_string(&mut stderr).await;
+        }
+        let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        let hint = if last.to_lowercase().contains("auth") { " (sign in once by running `agy` on the server)" } else { "" };
+        return Err(ProviderError(format!("{exe} exited with {status}: {}{hint}", crate::util::truncate(&last, 300))));
+    }
+    out.stop_reason = "end_turn".into();
+    Ok(out)
+}
+
+/// Reads `agy` stream-json lines: assistant text from `step_update` events
+/// (`step_type` agent_response, `text_delta`), the end from `result`.
+#[derive(Default)]
+pub struct AgyStream {
+    /// Text seen so far per agent_response step.
+    steps: std::collections::HashMap<i64, String>,
+    pub error: Option<String>,
+}
+
+impl AgyStream {
+    pub fn feed(&mut self, line: &str, out: &mut Completion, on_delta: OnDelta<'_>) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+        match v["event"].as_str().unwrap_or("") {
+            "step_update" => {
+                let s = &v["step_update"];
+                if s["step_type"] != "agent_response" {
+                    return;
+                }
+                let Some(delta) = s["text_delta"].as_str().filter(|d| !d.is_empty()) else { return };
+                let step = s["step_index"].as_i64().unwrap_or(0);
+                let seen = self.steps.entry(step).or_default();
+                // Deltas are pieces; a final event may repeat the whole step text.
+                let new = match delta.strip_prefix(seen.as_str()) {
+                    Some(rest) if !seen.is_empty() && s["state"] == "DONE" => rest.to_string(),
+                    _ => delta.to_string(),
+                };
+                if new.is_empty() {
+                    return;
+                }
+                if seen.is_empty() && !out.text.is_empty() {
+                    out.text.push_str("\n\n");
+                    on_delta("\n\n");
+                }
+                seen.push_str(&new);
+                out.text.push_str(&new);
+                on_delta(&new);
+            }
+            "result" => {
+                let r = &v["result"];
+                if let Some(u) = r.get("usage") {
+                    out.usage.input_tokens = u["input_tokens"].as_u64().unwrap_or(0);
+                    out.usage.output_tokens = u["output_tokens"].as_u64().unwrap_or(0) + u["thinking_tokens"].as_u64().unwrap_or(0);
+                }
+                match r["status"].as_str().unwrap_or("SUCCESS") {
+                    "SUCCESS" => {
+                        // Nothing streamed: take the final response.
+                        if out.text.is_empty()
+                            && let Some(t) = r["response"].as_str() {
+                                out.text.push_str(t.trim_end());
+                                on_delta(t.trim_end());
+                            }
+                    }
+                    s => self.error = Some(r["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("agy ended with {s}"))),
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `agy models` lines: "slug   Display name". Returns (slug, name).
+pub fn parse_agy_models(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let (slug, rest) = l.split_once(char::is_whitespace).unwrap_or((l, ""));
+            // Slugs look like "gemini-3.1-pro-high": lowercase with dashes (headers and notes do not).
+            let ok = slug.contains('-') && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_'));
+            ok.then(|| (slug.to_string(), rest.trim().to_string()))
+        })
+        .collect()
+}
+
 /// Subscription rate limits from the official Codex app-server
 /// (`account/rateLimits/read`). Spends no tokens.
 pub async fn codex_rate_limits(exe: &str) -> std::result::Result<Value, String> {
@@ -558,4 +691,48 @@ pub fn summarize_rate_limits(v: &Value) -> Value {
         "limit_reached": rl["rateLimitReachedType"],
         "reset_credits": v.pointer("/rateLimitResetCredits/availableCount"),
     })
+}
+
+#[cfg(test)]
+mod agy_tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_documented_stream() {
+        let lines = [
+            r#"{"event":"init","conversation_id":"c1","init":{"cwd":"/tmp","tools":[],"permission_mode":"request-review"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":1,"state":"DONE","step_type":"user_input"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"Hello"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":", Alice"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"Hello, Alice!"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":4,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","output":"x"}}}"#,
+            r#"{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Hello, Alice!","usage":{"input_tokens":10,"output_tokens":5,"thinking_tokens":2}}}"#,
+        ];
+        let mut out = Completion::default();
+        let mut shown = String::new();
+        let mut st = AgyStream::default();
+        for l in lines {
+            st.feed(l, &mut out, &mut |d: &str| shown.push_str(d));
+        }
+        assert_eq!(out.text, "Hello, Alice!");
+        assert_eq!(shown, "Hello, Alice!");
+        assert_eq!((out.usage.input_tokens, out.usage.output_tokens), (10, 7));
+        assert!(st.error.is_none());
+
+        // Only a final result: its response is used. An error status is an error.
+        let mut out = Completion::default();
+        let mut st = AgyStream::default();
+        st.feed(r#"{"event":"result","result":{"status":"SUCCESS","response":"Hi\n"}}"#, &mut out, &mut |_: &str| {});
+        assert_eq!(out.text, "Hi");
+        st.feed(r#"{"event":"result","result":{"status":"ERROR","error":"authentication required"}}"#, &mut out, &mut |_: &str| {});
+        assert_eq!(st.error.as_deref(), Some("authentication required"));
+    }
+
+    #[test]
+    fn lists_models() {
+        let m = parse_agy_models("gemini-4-neon-xhigh   Gemini 4 Neon (XHigh)\ngemini-3.1-pro-high  Gemini 3.1 Pro (High)\n\nSome note: text\n");
+        assert_eq!(m[0], ("gemini-4-neon-xhigh".into(), "Gemini 4 Neon (XHigh)".into()));
+        assert_eq!(m[1].0, "gemini-3.1-pro-high");
+        assert_eq!(m.len(), 2);
+    }
 }

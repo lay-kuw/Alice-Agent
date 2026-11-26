@@ -159,7 +159,7 @@ pub async fn stream(
         }
         ProviderKind::Anthropic => anthropic::stream(http, provider, api_key, req, on_delta).await,
         ProviderKind::Gemini => gemini::stream(http, provider, api_key, req, on_delta).await,
-        ProviderKind::CodexCli | ProviderKind::GeminiCli => cli::stream(provider, req, on_delta).await,
+        ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli => cli::stream(provider, req, on_delta).await,
     }
 }
 
@@ -172,7 +172,8 @@ pub fn capabilities(kind: ProviderKind) -> Value {
         ProviderKind::Anthropic => ("yes", "yes", "yes", "as-text", "adaptive", "api-key"),
         ProviderKind::Gemini => ("yes", "yes", "yes", "as-text", "yes", "api-key"),
         ProviderKind::CodexCli => ("message", "no", "no", "no", "internal", "chatgpt-login (codex CLI)"),
-        ProviderKind::GeminiCli => ("message", "no", "no", "no", "internal", "google-login (gemini CLI, experimental)"),
+        ProviderKind::GeminiCli => ("no", "no", "no", "no", "none", "retired (Google ended Gemini CLI subscription logins)"),
+        ProviderKind::AntigravityCli => ("message", "no", "no", "no", "internal", "google-login (Antigravity CLI)"),
     };
     json!({
         "streaming": streaming, "tool_calling": tools, "image_input": image,
@@ -181,7 +182,7 @@ pub fn capabilities(kind: ProviderKind) -> Value {
 }
 
 pub fn supports_tools(kind: ProviderKind) -> bool {
-    !matches!(kind, ProviderKind::CodexCli | ProviderKind::GeminiCli)
+    !kind.is_cli()
 }
 
 pub(crate) async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response> {
@@ -279,11 +280,18 @@ pub async fn health(http: &reqwest::Client, p: &ProviderConfig, api_key: Option<
                 Err(_) => ("unknown", "codex did not answer".into()),
             };
         }
-        ProviderKind::GeminiCli => {
-            let out = tokio::process::Command::new(p.base_url()).arg("--version").output();
-            return match tokio::time::timeout(Duration::from_secs(8), out).await {
-                Ok(Ok(o)) if o.status.success() => ("unknown", "installed; login can only be checked by sending a message (experimental)".into()),
-                _ => ("ng", format!("'{}' is not installed", p.base_url())),
+        ProviderKind::GeminiCli => return ("ng", "retired: Google ended Gemini CLI subscription logins; use antigravity-cli".into()),
+        ProviderKind::AntigravityCli => {
+            // Listing models needs a signed-in CLI, so it doubles as a login check.
+            let out = tokio::process::Command::new(p.base_url()).arg("models").output();
+            return match tokio::time::timeout(Duration::from_secs(20), out).await {
+                Ok(Ok(o)) if o.status.success() => ("ok", "signed in".into()),
+                Ok(Ok(o)) => {
+                    let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                    ("ng", format!("not signed in? run `agy` once on the server ({})", crate::util::truncate(&e, 120)))
+                }
+                Ok(Err(_)) => ("ng", format!("'{}' is not installed", p.base_url())),
+                Err(_) => ("unknown", "agy did not answer".into()),
             };
         }
     };

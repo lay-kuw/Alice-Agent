@@ -15,7 +15,7 @@ Alice Agent は単一ユーザー専用・ローカルファーストの Persona
 | R1 | Web Frontend | ビルド時に Node.js を使うとビルド依存が増える | **ビルド工程なしの素の HTML/CSS/JS** を `include_str!` でバイナリに埋め込む。Node.js はビルド時にも不要。 |
 | R2 | CLI コマンド表記 | `alice caht <id>` / `alice chat claer` は誤記と判断 | `alice chat <chat-id>` / `alice chat clear` として実装。 |
 | R3 | ChatGPT Subscription | 公式に許可された経路は Codex CLI (`codex exec --json`) のみ。Codex 自体がエージェントで独自ツールを持ち、Alice のツール呼び出し・ストリーミング粒度・画像以外の添付は制御できない | `codex-cli` Provider として **オプション** 実装。`--ephemeral` + `--sandbox read-only` で起動し、Alice のツールは渡さない（テキスト応答専用）。制約は Capability 表に明記。ツールが必要な場合は OpenAI API にフォールバック。 |
-| R4 | Gemini Subscription | Gemini CLI の個人向け Google ログイン（AI Pro/Ultra）は 2026 年に提供形態が変わり（Antigravity CLI への移行告知、403/429 報告多数）、安定した公式経路とは言えない | `gemini-cli` Provider は **実験的** 扱い。動作しない場合は Gemini API（API Key）を推奨。Cookie 抽出や非公開 API は一切使わない。 |
+| R4 | Google AI Subscription | Gemini CLI の個人向け Google ログイン（AI Pro/Ultra）は 2026-06-18 に終了し、公式の後継は Antigravity CLI（`agy`）。`agy` は自前のツール（ファイル編集・コマンド）を持ち、ドキュメント上それを完全に無効化するオプションはない | `antigravity-cli` Provider で `agy -p` を plan モード・`--sandbox`・空の作業フォルダで実行（ヘッドレスでは承認が必要な操作は拒否される）。Alice のツールはテキスト方式。`gemini-cli` は終了扱い（既存設定は読み込むが、使うと移行を案内）。Cookie 抽出や非公開 API は一切使わない。 |
 | R5 | 「派生ユーザープロファイル」 | 独立したプロファイルテーブルは削除整合性の弱点になる | **プロファイルを別に持たない**。ユーザー情報はすべて出典付き Memory として表現し、プロファイル表示は Memory のビューとする。 |
 | R6 | 会話の要約 | スレッド横断の要約は削除済み情報の伝播経路になる | 要約はスレッド内でのみ使用し、スレッドと共に削除。スレッド横断の要約は作らない。 |
 | R7 | 再学習防止 | AI 応答を Memory 抽出の入力にすると、削除済み Memory が別スレッドで再生成されうる | **Memory はユーザー自身の発言（role=user）からのみ抽出**。抽出時に既存 Memory の本文は LLM に渡さない（キー名のみ）。 |

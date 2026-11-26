@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 pub async fn collect(app: &AppRef) -> Value {
     let cfg = app.config();
-    let subs = cfg.providers.iter().filter(|p| matches!(p.kind, ProviderKind::CodexCli | ProviderKind::GeminiCli)).map(|p| {
+    let subs = cfg.providers.iter().filter(|p| p.kind.is_cli()).map(|p| {
         let p = p.clone();
         async move {
             match p.kind {
@@ -18,7 +18,7 @@ pub async fn collect(app: &AppRef) -> Value {
                     Ok(v) => json!({ "id": p.id, "kind": "codex-cli", "ok": true, "limits": cli::summarize_rate_limits(&v) }),
                     Err(e) => json!({ "id": p.id, "kind": "codex-cli", "ok": false, "error": e }),
                 },
-                _ => json!({ "id": p.id, "kind": p.kind.as_str(), "ok": false, "error": "the Gemini CLI does not report remaining quota" }),
+                _ => json!({ "id": p.id, "kind": p.kind.as_str(), "ok": false, "error": "this CLI does not report remaining quota" }),
             }
         }
     });

@@ -696,25 +696,25 @@ async fn chat_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
 fn model_hint(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "claude-opus-5-5",
-        ProviderKind::CodexCli | ProviderKind::GeminiCli => "default",
+        ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli => "default",
         _ => "",
     }
 }
 
 async fn model_add(paths: &Paths) -> CliResult<()> {
-    let kinds: Vec<&str> = ProviderKind::ALL.iter().map(|k| k.as_str()).collect();
+    let kinds: Vec<&str> = ProviderKind::ADDABLE.iter().map(|k| k.as_str()).collect();
     println!("Provider type:");
-    let kind = ProviderKind::ALL[choose("Select", &kinds, 0)];
+    let kind = ProviderKind::ADDABLE[choose("Select", &kinds, 0)];
     match kind {
         ProviderKind::CodexCli => println!("Uses your ChatGPT subscription through the official Codex CLI, with Alice's own login. Alice's skills are reached through its built-in MCP server."),
-        ProviderKind::GeminiCli => println!("Experimental: uses the official Gemini CLI login. If it fails, use the Gemini API (API key) instead. Text only."),
+        ProviderKind::AntigravityCli => println!("Uses your Google AI subscription through the official Antigravity CLI (agy). Sign in once by running `agy` on this machine. Text only; Alice's skills work through its text protocol."),
         _ => {}
     }
     let id = ask("Provider id", kind.as_str());
     let base_default = kind.default_base_url();
     let base_url = match kind {
         ProviderKind::OpenaiCompatible => ask("Base URL (e.g. http://host:8000/v1)", ""),
-        ProviderKind::CodexCli | ProviderKind::GeminiCli => ask("Executable", base_default),
+        ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli => ask("Executable", base_default),
         _ => ask("Base URL", base_default),
     };
     let base_url = if base_url == base_default { String::new() } else { base_url };
@@ -798,7 +798,7 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
         }
         let auth = match ProviderKind::parse(kind) {
             Some(k) if k.needs_api_key() => if p["has_key"] == true { "key set" } else { "no key" },
-            Some(ProviderKind::CodexCli | ProviderKind::GeminiCli) => "cli login",
+            Some(ProviderKind::CodexCli | ProviderKind::GeminiCli | ProviderKind::AntigravityCli) => "cli login",
             _ => "",
         };
         let detail = status.get(id).map(|(_, d)| format!(" — {d}")).unwrap_or_default();
@@ -1026,13 +1026,30 @@ fn codex_login(paths: &Paths, extra: &[&str]) -> CliResult<()> {
     if st.success() { Ok(()) } else { Err("codex login failed".into()) }
 }
 
+/// Antigravity keeps its own sign-in (OS keyring); `agy` asks for it on first
+/// start. On a server it prints a URL to open elsewhere and asks for the code.
+fn agy_login(paths: &Paths, provider: &str) -> CliResult<()> {
+    let cfg = Config::load(paths).map_err(|e| e.to_string())?;
+    let exe = cfg.providers.iter().find(|p| p.id == provider).map(|p| p.base_url().to_string()).unwrap_or_else(|| "agy".into());
+    println!("Starting `{exe}`. Sign in with your Google account (on a server: open the URL it prints on another device and paste the code back).");
+    println!("When you see its prompt, you are signed in: type /exit (or press Ctrl+C) to come back.");
+    let st = std::process::Command::new(&exe).status().map_err(|e| format!("{exe}: {e} (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)"))?;
+    let check = std::process::Command::new(&exe).arg("models").output();
+    match check {
+        Ok(o) if o.status.success() => {
+            println!("Signed in. Models: `alice model refresh`.");
+            Ok(())
+        }
+        _ if !st.success() => Err("agy did not finish signing in".into()),
+        _ => Err("agy is not signed in yet; run it again and finish the sign-in".into()),
+    }
+}
+
 async fn login(paths: &Paths, provider: &str, extra: &[&str]) -> CliResult<()> {
     match provider_kind(paths, provider)? {
         ProviderKind::CodexCli => codex_login(paths, extra),
-        ProviderKind::GeminiCli => {
-            println!("Run `gemini` once in a terminal and choose \"Login with Google\". Alice reuses that login.");
-            Ok(())
-        }
+        ProviderKind::GeminiCli => Err("gemini-cli is retired (Google ended its subscription login). Add antigravity-cli instead.".into()),
+        ProviderKind::AntigravityCli => agy_login(paths, provider),
         ProviderKind::Ollama => {
             println!("Ollama needs no login.");
             Ok(())
@@ -1056,8 +1073,9 @@ async fn logout(paths: &Paths, provider: &str) -> CliResult<()> {
             let _ = std::process::Command::new("codex").env("CODEX_HOME", home).arg("logout").status();
             Ok(())
         }
-        ProviderKind::GeminiCli => {
-            println!("Sign out inside the Gemini CLI (`gemini`, then /auth).");
+        ProviderKind::GeminiCli => Ok(()),
+        ProviderKind::AntigravityCli => {
+            println!("Sign out inside the Antigravity CLI: run `agy`, then /logout.");
             Ok(())
         }
         _ => {

@@ -74,6 +74,7 @@ alice profile default    # default に戻す
 - **作業フォルダ**: `alice config set tools.fs.workspace ~/AliceWork`（または Web の「設定 → ツール」）。相対パスはここに解決され、ほかのフォルダは `tools.fs.roots` で追加できます。
 - **Web 検索**: `alice config set tools.web.search_provider brave` + `alice config secret brave.api_key`（または SearXNG）。
 - **ChatGPT サブスク**: `alice model add` → `codex-cli` → `alice model login codex-cli`（Alice 専用のログイン。普段の `~/.codex` は使いません）。スキルは内蔵 MCP サーバー経由で使え、承認は Alice の画面で行います。
+- **Google AI サブスク（Pro / Ultra）**: `alice model add` → `antigravity-cli`。サーバーに Antigravity CLI を入れ（`curl -fsSL https://antigravity.google/cli/install.sh | bash`）、`alice model login antigravity-cli`（中身は `agy` の起動）で一度サインインします。ブラウザのないサーバーでは、表示された URL を手元のブラウザで開き、出てきたコードを貼り戻します。`agy` は plan モード・サンドボックス・空の作業フォルダで動かし、スキルは Alice のテキスト方式で使います。Gemini CLI のサブスクログインは 2026-06-18 に終了したため、`gemini-cli` は追加できなくなりました。
 - **モデル一覧の自動取得**: Codex（アカウントで使えるモデルと推論の深さ）、Gemini / Anthropic / OpenAI 互換サーバーは、起動時と 6 時間ごとに一覧を取り直します（`alice model refresh` で今すぐ）。推論の深さは `codex-cli/gpt-6.2-sol#high` のようにモデル ID の後ろに付けて指定し、Web・TUI・iPhone のモデル選択からも選べます。
 
 ## iPhone アプリ

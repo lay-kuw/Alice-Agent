@@ -43,7 +43,7 @@ struct TasksView: View {
                 .overlay { if !google.tasksLoaded { ProgressView() } }
                 .refreshable { await google.loadTasks() }
                 .task { if !google.tasksLoaded { await google.loadTasks() } }
-                .task(id: taskFacts) { await Blurbs.shared.ask("tasks", facts: taskFacts, client: google.client) }
+                .task(id: "\(BlurbFacts.tasks(google))\(Blurbs.shared.enabled)") { await Blurbs.shared.ask("tasks", facts: BlurbFacts.tasks(google), client: google.client) }
             }
             .navigationTitle("To-do")
             .navigationBarTitleDisplayMode(.inline)
@@ -173,16 +173,6 @@ struct TasksView: View {
                 ForEach(items, id: \.1.id) { list, t in row(t, list: list) }
             }
         }
-    }
-
-    /// What Alice's comment is about: today's progress.
-    private var taskFacts: String {
-        guard google.tasksLoaded else { return "" }
-        let today = allTasks.filter { _, t in dayOffset(t).map { t.completed ? $0 == 0 : $0 <= 0 } ?? false }
-        let overdue = allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { $0 < 0 } ?? false) }.count
-        let open = allTasks.filter { !$0.1.completed }.count
-        return "Due today: \(today.count), done: \(today.filter(\.1.completed).count), overdue: \(overdue), open in total: \(open)\n"
-            + today.filter { !$0.1.completed }.prefix(4).map { "- " + $0.1.title }.joined(separator: "\n")
     }
 
     /// Every list (or one), as before.

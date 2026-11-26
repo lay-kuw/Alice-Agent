@@ -47,6 +47,15 @@ struct ChatView: View {
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
         .safeAreaInset(edge: .bottom) { composer }
+        // Swipe right in a chat to go back to the main screen.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30)
+                .onEnded { v in
+                    guard store.currentThreadId != nil, v.translation.width > 90, abs(v.translation.height) < 60 else { return }
+                    Haptics.light()
+                    withAnimation(.snappy) { store.newChat() }
+                }
+        )
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         // A little tap when Alice finishes, a firmer one when she needs an approval.
@@ -83,8 +92,8 @@ struct ChatView: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         if let t = store.currentThread {
             ToolbarItem(placement: .topBarLeading) {
-                Button { withAnimation(.snappy) { store.newChat() } } label: { Image(systemName: "chevron.left") }
-                    .accessibilityLabel("Back")
+                Button(action: openThreads) { Image(systemName: "line.3.horizontal") }
+                    .accessibilityLabel("Chats")
             }
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
@@ -317,8 +326,8 @@ struct ChatLanding: View {
     private static let ideas: [(String.LocalizationValue, String, Color)] = [
         ("Sort out my to-dos", "checkmark.circle.fill", Palette.lavender),
         ("Look something up", "magnifyingglass", Palette.pink),
-        ("Give me ideas", "lightbulb.fill", Palette.lemon),
-        ("Help me write", "pencil", Palette.sky),
+        ("Events nearby", "mappin.and.ellipse", Palette.peach),
+        ("Check my schedule", "calendar", Palette.sky),
     ]
 
     var body: some View {

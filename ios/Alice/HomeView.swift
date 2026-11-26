@@ -11,8 +11,6 @@ struct HomeView: View {
     /// Switch tabs ("chat", "calendar", "mail", "tasks").
     var go: (String) -> Void
     @State private var ask = ""
-    @State private var showSettings = false
-    @State private var showAgents = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -38,25 +36,12 @@ struct HomeView: View {
                 ToolbarItem(placement: .principal) { Text("Alice Agent ✨").font(.headline.weight(.bold)) }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Settings", systemImage: "gearshape") { showSettings = true }
-                        Button("Agents", systemImage: "clock.badge.checkmark") { showAgents = true }
+                        Button("Settings", systemImage: "gearshape") { Sheets.shared.settings = true }
+                        Button("Agents", systemImage: "clock.badge.checkmark") { Sheets.shared.agents = true }
                     } label: { AppMenuIcon() }
                 }
             }
-            .task(id: facts) { await Blurbs.shared.ask("home", facts: facts, client: store.client) }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {
-                showSettings = false
-                showAgents = true
-            }
-        }
-        .sheet(isPresented: $showAgents) {
-            AgentsView(store: store) { thread in
-                showAgents = false
-                Task { await store.open(thread) }
-                go("chat")
-            }
+            .task(id: "\(BlurbFacts.home(google))\(Blurbs.shared.enabled)") { await Blurbs.shared.ask("home", facts: BlurbFacts.home(google), client: store.client) }
         }
     }
 
@@ -86,7 +71,7 @@ struct HomeView: View {
 
     private var tiles: some View {
         HStack(spacing: 10) {
-            tile("Chat", "ellipsis.bubble.fill", "chat", accent: true)
+            tile("Chat", "ellipsis.bubble.fill", "chat")
             tile("Calendar", "calendar", "calendar")
             tile("Mail", "envelope.fill", "mail", dot: google.inbox.contains(where: \.unread))
             tile("To-do", "checkmark.square.fill", "tasks")
@@ -94,7 +79,12 @@ struct HomeView: View {
     }
 
     private func tile(_ title: LocalizedStringKey, _ icon: String, _ tab: String, accent: Bool = false, dot: Bool = false) -> some View {
-        Button { Haptics.light(); go(tab) } label: {
+        Button {
+            Haptics.light()
+            // Chat opens on its main screen.
+            if tab == "chat" { store.newChat() }
+            go(tab)
+        } label: {
             VStack(spacing: 6) {
                 Image(systemName: icon)
                     .font(.system(size: 22, weight: .semibold))
@@ -221,20 +211,6 @@ struct HomeView: View {
         Task {
             if !(await store.send(text)) { ask = text }
         }
-    }
-
-    /// What Alice's greeting is about.
-    private var facts: String {
-        var f: [String] = []
-        let events = google.events(on: .now)
-        if !events.isEmpty {
-            f.append("Today's events: " + events.prefix(5).map { e in "\(e.allDay ? "all day" : e.startDate.map(Fmt.time) ?? "") \(e.displayTitle)" }.joined(separator: "; "))
-        }
-        let due = google.lists.flatMap(\.tasks).filter { !$0.completed && ($0.dueDate.map { $0 <= Calendar.current.startOfDay(for: .now).addingTimeInterval(86_399) } ?? false) }
-        if !due.isEmpty { f.append("To-dos due today or overdue: \(due.count) (" + due.prefix(3).map(\.title).joined(separator: ", ") + ")") }
-        let unread = google.inbox.filter(\.unread).count
-        if google.inboxLoaded { f.append("Unread mail: \(unread)") }
-        return f.joined(separator: "\n")
     }
 }
 

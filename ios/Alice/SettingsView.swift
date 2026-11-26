@@ -10,7 +10,7 @@ struct SettingsView: View {
     var openAgents: () -> Void
     @Environment(\.dismiss) private var dismiss
     @AppStorage("home.enabled") private var homeEnabled = true
-    @AppStorage("blurbs.enabled") private var blurbsEnabled = true
+    @Bindable private var blurbs = Blurbs.shared
     @State private var tone = ""
     @State private var savedTone = ""
     @State private var notify: [Notifier.Kind: Bool] = [:]
@@ -22,9 +22,9 @@ struct SettingsView: View {
             Form {
                 Section("Display") {
                     Toggle("Home screen", isOn: $homeEnabled).tint(Palette.pink)
-                    Toggle("Alice's comments", isOn: $blurbsEnabled).tint(Palette.pink)
+                    Toggle("Alice's comments", isOn: $blurbs.enabled).tint(Palette.pink)
                 }
-                if blurbsEnabled {
+                if blurbs.enabled {
                     Section {
                         TextField("Her usual voice", text: $tone, axis: .vertical).lineLimit(1...3)
                         ScrollView(.horizontal, showsIndicators: false) {

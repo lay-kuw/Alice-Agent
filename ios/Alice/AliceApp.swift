@@ -88,7 +88,12 @@ struct RootView: View {
             if p == .active {
                 store?.start()
                 store?.retryNow()
-                if let google { Task { await google.prefetch() } }
+                if let google, let store {
+                    Task {
+                        await google.prefetch()
+                        await Blurbs.shared.refreshAll(google: google, client: store.client)
+                    }
+                }
             }
         }
     }
@@ -159,6 +164,20 @@ struct MainTabs: View {
         }
         // Titles kept by navigation do not follow a language change; rebuild the tabs.
         .id(locale.identifier)
+        .sheet(isPresented: Bindable(Sheets.shared).settings) {
+            SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {
+                Sheets.shared.settings = false
+                Sheets.shared.agents = true
+            }
+        }
+        .sheet(isPresented: Bindable(Sheets.shared).agents) {
+            AgentsView(store: store) { thread in
+                // "Open chat" from an agent: close the sheet and show it.
+                Sheets.shared.agents = false
+                Task { await store.open(thread) }
+                tab = "chat"
+            }
+        }
         .sideDrawer {
             ThreadsSheet(store: store) { id in
                 Drawer.shared.open = false
@@ -174,8 +193,15 @@ struct MainTabs: View {
         #if DEBUG
         .onAppear { if let t = ProcessInfo.processInfo.environment["ALICE_DEV_TAB"] { tab = t } }
         #endif
-        // Load every tab in the background so switching is instant.
-        .task { await google.prefetch() }
+        // Load every tab in the background so switching is instant, then
+        // let Alice prepare a comment for each screen.
+        .task {
+            await google.prefetch()
+            await Blurbs.shared.refreshAll(google: google, client: store.client)
+        }
+        .onChange(of: Blurbs.shared.enabled) { _, on in
+            if on { Task { await Blurbs.shared.refreshAll(google: google, client: store.client) } }
+        }
         // Tapped notifications open their tab.
         .onChange(of: Router.shared.tab, initial: true) { _, t in
             if let t { tab = t; Router.shared.tab = nil }

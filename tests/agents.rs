@@ -161,3 +161,19 @@ async fn background_tasks_run_in_their_own_chat() {
     let answer = msgs.iter().rev().find(|m| m["role"] == "assistant").unwrap();
     assert!(answer["content"].as_str().unwrap().contains("compare three cafes"));
 }
+
+#[tokio::test]
+async fn an_agent_follows_its_chat_and_falls_back_to_a_new_one() {
+    let h = Harness::new().await;
+    let a = h.post("/agents", json!({ "name": "Daily note", "prompt": "say hi", "every_min": 60 })).await["agent"].clone();
+    let id = a["id"].as_str().unwrap().to_string();
+    assert!(a["thread_id"].is_null());
+    // The first run makes a chat, and the agent now points at it.
+    assert_eq!(alice::schedule::tick(&h.app, alice::util::now_ms()), 1);
+    let made = agent(&h, &id).await["thread_id"].as_str().unwrap().to_string();
+    idle(&h, &made).await;
+    assert_eq!(agent(&h, &id).await["thread_title"], "Daily note");
+    // Deleting that chat sends the agent back to "a new chat".
+    assert_eq!(h.delete(&format!("/threads/{made}"), None).await, 204);
+    assert!(agent(&h, &id).await["thread_id"].is_null());
+}

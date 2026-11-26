@@ -496,6 +496,8 @@ pub fn delete_thread_now(app: &App, id: &str) -> Result<bool, rusqlite::Error> {
     }
     if existed {
         app.emit(json!({ "type": "thread.deleted", "thread_id": id, "external": external }));
+        // An agent that wrote here goes back to "a new chat"; let the agent lists know.
+        app.emit(json!({ "type": "agents.updated" }));
     }
     Ok(existed)
 }

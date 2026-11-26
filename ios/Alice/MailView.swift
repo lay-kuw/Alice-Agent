@@ -61,7 +61,7 @@ struct MailView: View {
                 }
                 .refreshable { await google.loadInbox(query: filter == "all" ? "" : query) }
                 .task { if !google.inboxLoaded { await google.loadInbox() } }
-                .task(id: mailFacts) { await Blurbs.shared.ask("mail", facts: mailFacts, client: google.client) }
+                .task(id: "\(BlurbFacts.mail(google))\(Blurbs.shared.enabled)") { await Blurbs.shared.ask("mail", facts: BlurbFacts.mail(google), client: google.client) }
                 .onChange(of: filter) { _, f in Task { await google.loadInbox(query: f == "all" ? "" : query) } }
                 .onChange(of: google.inbox, initial: true) { _, list in if filter == "all" { unreadCount = list.filter(\.unread).count } }
                 .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
@@ -113,12 +113,6 @@ extension MailView {
         }
     }
 
-    /// What Alice's comment is about: the unread mail.
-    private var mailFacts: String {
-        let unread = google.inbox.filter(\.unread)
-        guard google.inboxLoaded, filter == "all" else { return "" }
-        return "Unread: \(unread.count)\n" + unread.prefix(4).map { "- \($0.senderName): \($0.displaySubject)" }.joined(separator: "\n")
-    }
 }
 
 struct MailRow: View {

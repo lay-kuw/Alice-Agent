@@ -29,22 +29,21 @@ struct CalendarView: View {
     var body: some View {
         NavigationStack {
             GoogleGate(google: google, group: "calendar", title: "Calendar") {
-                // The calendar stays put; only the day's events scroll, so the
-                // calendar's own scrolling never drags the page.
-                VStack(alignment: .leading, spacing: 12) {
-                    BlurbBubble(screen: "calendar", fallback: "Here is your schedule 📅")
-                        .padding(.top, 4)
-                    calendarCard
-                    dayHeader
-                    ScrollView {
+                // The whole page pulls to refresh, like Mail and To-do.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        BlurbBubble(screen: "calendar", fallback: "Here is your schedule 📅")
+                            .padding(.top, 4)
+                        calendarCard
+                        dayHeader
                         dayEvents.padding(.bottom, 30)
                     }
-                    .scrollIndicators(.hidden)
-                    .refreshable { await load(force: true) }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
+                .scrollIndicators(.hidden)
+                .refreshable { await load(force: true) }
                 .background(PastelBackground())
-                .task(id: calendarFacts) { await Blurbs.shared.ask("calendar", facts: calendarFacts, client: google.client) }
+                .task(id: "\(BlurbFacts.calendar(google))\(Blurbs.shared.enabled)") { await Blurbs.shared.ask("calendar", facts: BlurbFacts.calendar(google), client: google.client) }
                 .task(id: "\(mode)|\(topWeek?.timeIntervalSince1970 ?? 0)") {
                     // Wait for scrolling to settle before loading.
                     try? await Task.sleep(for: .milliseconds(150))
@@ -78,21 +77,6 @@ struct CalendarView: View {
         }
     }
 
-    /// What Alice's comment is about: today and the coming week.
-    private var calendarFacts: String {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: .now)
-        var lines: [String] = []
-        for i in 0..<7 {
-            guard let d = cal.date(byAdding: .day, value: i, to: today) else { continue }
-            let es = google.events(on: d)
-            if es.isEmpty { continue }
-            let day = i == 0 ? "Today" : i == 1 ? "Tomorrow" : d.formatted(.dateTime.weekday(.wide).locale(Locale(identifier: "en")))
-            lines.append("\(day): " + es.prefix(4).map { e in "\(e.allDay ? "all day" : e.startDate.map(Fmt.time) ?? "") \(e.displayTitle)" }.joined(separator: "; "))
-        }
-        return lines.joined(separator: "\n")
-    }
-
     // MARK: mode
 
     private var modeMenu: some View {
@@ -101,8 +85,6 @@ struct CalendarView: View {
                 Label("Week", systemImage: Self.icon("week")).tag("week")
                 Label("Month", systemImage: Self.icon("month")).tag("month")
             }
-            Divider()
-            Button("Jump to today", systemImage: "sun.max") { jumpToToday() }
         } label: {
             Image(systemName: Self.icon(mode))
                 .font(.system(size: 16, weight: .semibold))
@@ -211,6 +193,9 @@ struct CalendarView: View {
                 }
             }
             .scrollPosition(id: $topWeek, anchor: mode == "month" ? .top : .leading)
+            // Tapping the tab again scrolls views to the top; for this endless
+            // scroller that would mean three years back.
+            .background(NoScrollToTop())
             .frame(height: Self.rowHeight * CGFloat(rows))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .onChange(of: topWeek) { old, new in
@@ -262,7 +247,21 @@ struct CalendarView: View {
                 .font(.system(.title2, design: .rounded).weight(.bold))
             Text(selected.fmt(.dateTime.month(.abbreviated).day())).foregroundStyle(.secondary)
             Spacer()
+            // Back to today, only when away from it.
+            if !Calendar.current.isDateInToday(selected) {
+                Button { jumpToToday() } label: {
+                    Label("Today", systemImage: "sun.max.fill")
+                        .font(.footnote.weight(.bold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(.white)
+                        .background(Palette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
+            }
         }
+        .animation(.snappy, value: Calendar.current.isDateInToday(selected))
         // An overlay, so the spinner never changes the header's height.
         .overlay(alignment: .trailing) {
             if google.loading.contains("events") && !google.loadedWeeks.contains(Self.startOfWeek(selected)) {
@@ -556,5 +555,33 @@ struct ColorTagPicker: View {
         .buttonStyle(.plain)
         .accessibilityLabel(name)
         .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// Turns off "scroll to top" (tab re-tap, status bar tap) for the scroll view it sits in.
+private struct NoScrollToTop: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { Probe() }
+    func updateUIView(_ v: UIView, context: Context) {}
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                var v = self?.superview
+                while let s = v {
+                    if let sv = s as? UIScrollView { sv.scrollsToTop = false; return }
+                    v = s.superview
+                }
+                // Not an ancestor: look among the siblings' subtrees (background sits beside the content).
+                if let host = self?.superview?.superview { Self.disable(in: host) }
+            }
+        }
+
+        static func disable(in view: UIView) {
+            for s in view.subviews {
+                if let sv = s as? UIScrollView { sv.scrollsToTop = false }
+                disable(in: s)
+            }
+        }
     }
 }

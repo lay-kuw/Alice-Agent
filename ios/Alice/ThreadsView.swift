@@ -7,40 +7,25 @@ struct ChatTab: View {
     @Bindable var store: ChatStore
     let connectionName: String
     var onDisconnect: () -> Void
-    @State private var showSettings = false
-    @State private var showAgents = false
 
     var body: some View {
         NavigationStack {
-            ChatView(store: store, openThreads: { Drawer.shared.open = true }, openSettings: { showSettings = true }, openAgents: { showAgents = true })
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {
-                showSettings = false
-                showAgents = true
-            }
-        }
-        .sheet(isPresented: $showAgents) {
-            AgentsView(store: store) { thread in
-                // "Open chat" from an agent: close the sheet and show it.
-                showAgents = false
-                Task { await store.open(thread) }
-            }
+            ChatView(store: store, openThreads: { Drawer.shared.open = true }, openSettings: { Sheets.shared.settings = true }, openAgents: { Sheets.shared.agents = true })
         }
         // A tapped reply notification opens its chat.
         .onChange(of: Router.shared.thread, initial: true) { _, id in
             guard let id else { return }
             Router.shared.thread = nil
-            showAgents = false
+            Sheets.shared.agents = false
             Drawer.shared.open = false
             Task { await store.open(id) }
         }
         #if DEBUG
         .onAppear {
             let env = ProcessInfo.processInfo.environment
-            if env["ALICE_DEV_AGENTS"] != nil { showAgents = true }
+            if env["ALICE_DEV_AGENTS"] != nil { Sheets.shared.agents = true }
             if env["ALICE_DEV_THREADS"] != nil { Drawer.shared.open = true }
-            if env["ALICE_DEV_SETTINGS"] != nil { showSettings = true }
+            if env["ALICE_DEV_SETTINGS"] != nil { Sheets.shared.settings = true }
         }
         .task(id: store.threads.count) {
             // ALICE_DEV_CHAT=1 opens the newest chat; a thread id opens that one.
@@ -54,6 +39,16 @@ struct ChatTab: View {
             Button("OK", role: .cancel) {}
         } message: { Text(store.lastError ?? "") }
     }
+}
+
+/// Settings and agents are presented from the tabs, so they stay open when a
+/// tab goes away underneath (turning Home off from Home).
+@MainActor
+@Observable
+final class Sheets {
+    static let shared = Sheets()
+    var settings = false
+    var agents = false
 }
 
 /// The chat list slides in from the left over everything (tabs included).

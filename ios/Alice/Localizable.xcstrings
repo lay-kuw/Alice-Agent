@@ -1,6 +1,7 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "": {},
     "%lld": {},
     "%lld/%lld": {},
     "(No title)": {
@@ -313,6 +314,16 @@
         }
       }
     },
+    "Check my schedule": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "予定を確認して"
+          }
+        }
+      }
+    },
     "Cheerful and cute": {
       "localizations": {
         "ja": {
@@ -573,6 +584,16 @@
         }
       }
     },
+    "Events nearby": {
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "近所のイベントを教えて"
+          }
+        }
+      }
+    },
     "Every %lld %@": {
       "localizations": {
         "ja": {
@@ -673,16 +694,6 @@
         }
       }
     },
-    "Give me ideas": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "アイデアを出して"
-          }
-        }
-      }
-    },
     "Good evening!\nHow was your day?": {
       "localizations": {
         "ja": {
@@ -709,16 +720,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "こんにちは！\n今日の調子はどう？"
-          }
-        }
-      }
-    },
-    "Help me write": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "文章を作って"
           }
         }
       }
@@ -819,16 +820,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "受信トレイは空っぽ"
-          }
-        }
-      }
-    },
-    "Jump to today": {
-      "localizations": {
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "今日へ"
           }
         }
       }

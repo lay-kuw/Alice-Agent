@@ -6,6 +6,9 @@ struct TasksView: View {
     /// The list shown, or nil for every list grouped by list.
     @AppStorage("tasks.list") private var listId = ""
     @State private var showCompleted = false
+    /// today / week / all
+    @AppStorage("tasks.scope") private var scope = "today"
+    @State private var openGroups: Set<String> = []
     @State private var adding = false
     @State private var editing: Editing?
 
@@ -19,6 +22,161 @@ struct TasksView: View {
         NavigationStack {
             GoogleGate(google: google, group: "tasks", title: "Tasks") {
                 List {
+                    BlurbBubble(screen: "tasks", fallback: "Let's take it one at a time ✅")
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    scopeChips
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                    if scope == "today" {
+                        todaySection
+                    } else if scope == "week" {
+                        weekSection
+                    } else {
+                        allSection
+                    }
+                }
+                .listStyle(.plain)
+                .animation(.snappy, value: google.lists)
+                .pastel()
+                .overlay { if !google.tasksLoaded { ProgressView() } }
+                .refreshable { await google.loadTasks() }
+                .task { if !google.tasksLoaded { await google.loadTasks() } }
+                .task(id: taskFacts) { await Blurbs.shared.ask("tasks", facts: taskFacts, client: google.client) }
+            }
+            .navigationTitle("To-do")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }
+                        .accessibilityLabel("New task")
+                        .disabled(google.lists.isEmpty)
+                }
+            }
+            #if DEBUG
+            .task(id: google.tasksLoaded) {
+                if google.tasksLoaded, ProcessInfo.processInfo.environment["ALICE_DEV_ADD"] != nil { adding = true }
+            }
+            #endif
+            .sheet(isPresented: $adding) {
+                // New tasks go to the list in view (the first list in the All view).
+                TaskSheet(google: google, listId: selected?.id ?? google.lists.first?.id ?? "")
+            }
+            .sheet(item: $editing) { e in TaskSheet(google: google, listId: e.list, editing: e.task) }
+            .googleErrors(google)
+        }
+    }
+
+    // MARK: scopes
+
+    private var scopeChips: some View {
+        HStack(spacing: 8) {
+            scopeChip("today", "Today", "sun.max")
+            scopeChip("week", "This week", "calendar")
+            scopeChip("all", "All", "tray.full")
+        }
+    }
+
+    private func scopeChip(_ id: String, _ title: LocalizedStringKey, _ icon: String) -> some View {
+        Button { withAnimation(.snappy) { scope = id } } label: {
+            Label(title, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .foregroundStyle(scope == id ? .white : .primary)
+                .background {
+                    if scope == id { Capsule().fill(Palette.accent) } else { Capsule().fill(.background.opacity(0.6)) }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Every task with its list, for the date views.
+    private var allTasks: [(String, TaskItem)] { google.lists.flatMap { l in l.tasks.map { (l.id, $0) } } }
+
+    private func dayOffset(_ t: TaskItem) -> Int? {
+        guard let d = t.dueDate else { return nil }
+        let cal = Calendar.current
+        return cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: cal.startOfDay(for: d)).day
+    }
+
+    /// Due today or overdue (and today's that are done), with progress, then tomorrow and the rest of the week.
+    @ViewBuilder private var todaySection: some View {
+        let today = allTasks.filter { _, t in
+            guard let o = dayOffset(t) else { return false }
+            return t.completed ? o == 0 : o <= 0
+        }
+        let done = today.filter(\.1.completed).count
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Today's tasks").font(.headline.weight(.bold))
+                Text("\(done)/\(today.count)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: "sparkles").foregroundStyle(Palette.accent)
+            }
+            ProgressView(value: today.isEmpty ? 0 : Double(done) / Double(today.count)).tint(Palette.lavender)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        if today.isEmpty && google.tasksLoaded {
+            Text("Nothing due today 🌷").foregroundStyle(.secondary).listRowBackground(Color.clear).listRowSeparator(.hidden)
+        }
+        ForEach(today, id: \.1.id) { list, t in row(t, list: list) }
+        group("tomorrow", "Tomorrow", allTasks.filter { !$0.1.completed && dayOffset($0.1) == 1 })
+        group("week", "This week", allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { (2...7).contains($0) } ?? false) })
+    }
+
+    /// Open tasks due within a week, by day.
+    @ViewBuilder private var weekSection: some View {
+        let soon = allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { $0 <= 7 } ?? false) }
+            .sorted { ($0.1.dueDate ?? .distantFuture) < ($1.1.dueDate ?? .distantFuture) }
+        if soon.isEmpty && google.tasksLoaded {
+            SoftEmpty(title: "A light week", systemImage: "leaf", message: "Nothing due in the next seven days")
+                .listRowBackground(Color.clear).listRowSeparator(.hidden)
+        }
+        ForEach(soon, id: \.1.id) { list, t in row(t, list: list) }
+    }
+
+    /// A folding group with a count, like "Tomorrow 3 ⌄".
+    @ViewBuilder private func group(_ id: String, _ title: LocalizedStringKey, _ items: [(String, TaskItem)]) -> some View {
+        if !items.isEmpty {
+            Button {
+                withAnimation(.snappy) { if openGroups.contains(id) { openGroups.remove(id) } else { openGroups.insert(id) } }
+            } label: {
+                HStack {
+                    Image(systemName: "calendar").foregroundStyle(Palette.accent)
+                    Text(title).font(.subheadline.weight(.bold))
+                    Spacer()
+                    Text("\(items.count)").font(.caption.weight(.bold)).foregroundStyle(Palette.lavender)
+                        .padding(.horizontal, 8).padding(.vertical, 2).background(Palette.lavender.opacity(0.15), in: Capsule())
+                    Image(systemName: "chevron.down").font(.caption.bold()).rotationEffect(.degrees(openGroups.contains(id) ? 180 : 0))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .glassCard(radius: 16)
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            if openGroups.contains(id) {
+                ForEach(items, id: \.1.id) { list, t in row(t, list: list) }
+            }
+        }
+    }
+
+    /// What Alice's comment is about: today's progress.
+    private var taskFacts: String {
+        guard google.tasksLoaded else { return "" }
+        let today = allTasks.filter { _, t in dayOffset(t).map { t.completed ? $0 == 0 : $0 <= 0 } ?? false }
+        let overdue = allTasks.filter { !$0.1.completed && (dayOffset($0.1).map { $0 < 0 } ?? false) }.count
+        let open = allTasks.filter { !$0.1.completed }.count
+        return "Due today: \(today.count), done: \(today.filter(\.1.completed).count), overdue: \(overdue), open in total: \(open)\n"
+            + today.filter { !$0.1.completed }.prefix(4).map { "- " + $0.1.title }.joined(separator: "\n")
+    }
+
+    /// Every list (or one), as before.
+    @ViewBuilder private var allSection: some View {
                     if !google.lists.isEmpty { listChips.listRowBackground(Color.clear).listRowSeparator(.hidden) }
                     let lists = shown
                     let open = lists.flatMap { l in l.tasks.filter { !$0.completed }.map { (l, $0) } }
@@ -56,35 +214,6 @@ struct TasksView: View {
                         .padding(.top, 8)
                         if showCompleted { ForEach(done, id: \.1.id) { l, t in row(t, list: l.id) } }
                     }
-                }
-                .listStyle(.plain)
-                .animation(.snappy, value: google.lists)
-                .pastel()
-                .overlay { if !google.tasksLoaded { ProgressView() } }
-                .refreshable { await google.loadTasks() }
-                .task { if !google.tasksLoaded { await google.loadTasks() } }
-            }
-            .navigationTitle("Tasks")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { adding = true } label: { Image(systemName: "plus.circle.fill").font(.title3).foregroundStyle(Palette.accent) }
-                        .accessibilityLabel("New task")
-                        .disabled(google.lists.isEmpty)
-                }
-            }
-            #if DEBUG
-            .task(id: google.tasksLoaded) {
-                if google.tasksLoaded, ProcessInfo.processInfo.environment["ALICE_DEV_ADD"] != nil { adding = true }
-            }
-            #endif
-            .sheet(isPresented: $adding) {
-                // New tasks go to the list in view (the first list in the All view).
-                TaskSheet(google: google, listId: selected?.id ?? google.lists.first?.id ?? "")
-            }
-            .sheet(item: $editing) { e in TaskSheet(google: google, listId: e.list, editing: e.task) }
-            .googleErrors(google)
-        }
     }
 
     /// The chosen list; nil means All.

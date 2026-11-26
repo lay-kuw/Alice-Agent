@@ -9,7 +9,7 @@ struct AliceApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView().modifier(LanguageByAppearance())
         }
         .backgroundTask(.appRefresh(WidgetRefresh.id)) { await WidgetRefresh.run() }
     }
@@ -126,29 +126,40 @@ struct RootView: View {
     }
 }
 
-/// Chat plus the Google tabs (data comes from the Alice server, which holds the tokens).
+/// Home (optional), chat and the Google tabs (data comes from the Alice server, which holds the tokens).
 struct MainTabs: View {
     let store: ChatStore
     let google: GoogleStore
     let connectionName: String
     var onDisconnect: () -> Void
-    @SceneStorage("tab") private var tab = "chat"
+    @SceneStorage("tab") private var tab = "home"
+    @AppStorage("home.enabled") private var homeEnabled = true
 
     var body: some View {
         TabView(selection: $tab) {
-            ThreadsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect)
-                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
+            if homeEnabled {
+                HomeView(store: store, google: google, connectionName: connectionName, onDisconnect: onDisconnect) { tab = $0 }
+                    .tabItem { Label("Home", systemImage: "house.fill") }
+                    .tag("home")
+            }
+            ChatTab(store: store, connectionName: connectionName, onDisconnect: onDisconnect)
+                .tabItem { Label(homeEnabled ? "Chat" : "Alice", systemImage: "ellipsis.bubble.fill") }
                 .tag("chat")
             CalendarView(google: google)
                 .tabItem { Label("Calendar", systemImage: "calendar") }
                 .tag("calendar")
             MailView(google: google)
                 .tabItem { Label("Mail", systemImage: "envelope.fill") }
+                .badge(google.inbox.filter(\.unread).count)
                 .tag("mail")
             TasksView(google: google)
-                .tabItem { Label("Tasks", systemImage: "checklist") }
+                .tabItem { Label("To-do", systemImage: "checkmark.square.fill") }
                 .tag("tasks")
         }
+        // Replies notify only when their chat is not on screen.
+        .onChange(of: tab, initial: true) { _, t in store.viewingChat = t == "chat" }
+        .onChange(of: homeEnabled) { _, on in if !on, tab == "home" { tab = "chat" } }
+        .onAppear { if !homeEnabled, tab == "home" { tab = "chat" } }
         .tint(Palette.lavender)
         #if DEBUG
         .onAppear { if let t = ProcessInfo.processInfo.environment["ALICE_DEV_TAB"] { tab = t } }
@@ -161,7 +172,8 @@ struct MainTabs: View {
         }
         // Widget taps open their tab (alice://calendar, alice://tasks).
         .onOpenURL { url in
-            if let t = url.host(), ["chat", "calendar", "mail", "tasks"].contains(t) { tab = t }
+            if let t = url.host(), ["home", "chat", "calendar", "mail", "tasks"].contains(t) { tab = t }
         }
     }
 }
+

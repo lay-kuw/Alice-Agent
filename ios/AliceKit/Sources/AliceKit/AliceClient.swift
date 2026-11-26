@@ -166,3 +166,24 @@ public enum SSE {
         return String(s)
     }
 }
+
+// MARK: - App screens
+
+extension AliceClient {
+    /// Alice's one-line comment for a screen ("home", "chat", "calendar", "mail", "tasks").
+    public func blurb(screen: String, lang: String, facts: String, now: String) async throws -> String {
+        struct R: Decodable { let text: String }
+        let d = try await send("POST", "/blurb", json: ["screen": screen, "lang": lang, "facts": facts, "now": now])
+        return try Self.decoder.decode(R.self, from: d).text
+    }
+
+    /// The tone of those comments (`agent.blurb_tone`; empty = Alice's usual voice).
+    public func blurbTone() async throws -> String {
+        let v = try await get("/config", JSONValue.self)
+        return v["agent"]?["blurb_tone"]?.string ?? ""
+    }
+
+    public func setBlurbTone(_ tone: String) async throws {
+        try await send("PATCH", "/config", json: ["agent.blurb_tone": tone])
+    }
+}

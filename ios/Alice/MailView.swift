@@ -5,17 +5,37 @@ struct MailView: View {
     @Bindable var google: GoogleStore
     @State private var composing: Draft?
     @State private var path: [MailSummary] = []
+    /// all / unread / important / me
+    @State private var filter = "all"
+    @State private var unreadCount = 0
+
+    private static let filters: [(String, LocalizedStringKey, String)] = [
+        ("all", "All", "in:inbox"), ("unread", "Unread", "in:inbox is:unread"),
+        ("important", "Important", "in:inbox is:important"), ("me", "To me", "in:inbox to:me"),
+    ]
+    private var query: String { Self.filters.first { $0.0 == filter }?.2 ?? "in:inbox" }
 
     var body: some View {
         NavigationStack(path: $path) {
             GoogleGate(google: google, group: "gmail", title: "Gmail") {
                 List {
+                    BlurbBubble(screen: "mail", fallback: "Here is your inbox ✉️")
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                    filterChips
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 6, trailing: 16))
                     ForEach(google.inbox) { m in
                         NavigationLink(value: m) { MailRow(mail: m) }
-                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 12))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .glassCard(radius: 18)
+                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                             .listRowBackground(Color.clear)
-                            .listRowSeparatorTint(Palette.lavender.opacity(0.25))
-                            .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore() } } }
+                            .listRowSeparator(.hidden)
+                            .onAppear { if m.id == google.inbox.last?.id { Task { await google.loadMore(query: query) } } }
                             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                 // Swipe right: read (or back to unread).
                                 Button { Task { await google.setRead(m.id, m.unread) } } label: {
@@ -39,8 +59,11 @@ struct MailView: View {
                         }
                     }
                 }
-                .refreshable { await google.loadInbox() }
+                .refreshable { await google.loadInbox(query: filter == "all" ? "" : query) }
                 .task { if !google.inboxLoaded { await google.loadInbox() } }
+                .task(id: mailFacts) { await Blurbs.shared.ask("mail", facts: mailFacts, client: google.client) }
+                .onChange(of: filter) { _, f in Task { await google.loadInbox(query: f == "all" ? "" : query) } }
+                .onChange(of: google.inbox, initial: true) { _, list in if filter == "all" { unreadCount = list.filter(\.unread).count } }
                 .navigationDestination(for: MailSummary.self) { MailDetailView(google: google, summary: $0) }
             }
             .navigationTitle("Inbox")
@@ -59,6 +82,42 @@ struct MailView: View {
             }
             #endif
         }
+    }
+}
+
+extension MailView {
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Self.filters, id: \.0) { id, title, _ in
+                    Button { withAnimation(.snappy) { filter = id } } label: {
+                        HStack(spacing: 5) {
+                            if id == "important" { Image(systemName: "star.fill").font(.caption) }
+                            Text(title)
+                            if id == "unread", unreadCount > 0 {
+                                Text("\(unreadCount)").font(.caption2.weight(.bold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 6).padding(.vertical, 1).background(Palette.pink, in: Capsule())
+                            }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(filter == id ? .white : .primary)
+                        .background {
+                            if filter == id { Capsule().fill(Palette.accent) } else { Capsule().fill(.background.opacity(0.6)) }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// What Alice's comment is about: the unread mail.
+    private var mailFacts: String {
+        let unread = google.inbox.filter(\.unread)
+        guard google.inboxLoaded, filter == "all" else { return "" }
+        return "Unread: \(unread.count)\n" + unread.prefix(4).map { "- \($0.senderName): \($0.displaySubject)" }.joined(separator: "\n")
     }
 }
 

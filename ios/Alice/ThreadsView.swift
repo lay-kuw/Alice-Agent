@@ -1,26 +1,85 @@
 import AliceKit
 import SwiftUI
 
-/// Thread list (sidebar on iPad-sized layouts, root list on iPhone).
-struct ThreadsView: View {
+/// The chat tab: the chat itself is the main screen; the thread list opens
+/// from the top-left menu, settings and agents from the top right.
+struct ChatTab: View {
     @Bindable var store: ChatStore
     let connectionName: String
     var onDisconnect: () -> Void
+    @State private var showThreads = false
+    @State private var showSettings = false
+    @State private var showAgents = false
 
-    @State private var showChat = false
+    var body: some View {
+        NavigationStack {
+            ChatView(store: store, openThreads: { showThreads = true }, openSettings: { showSettings = true }, openAgents: { showAgents = true })
+        }
+        .sheet(isPresented: $showThreads) {
+            ThreadsSheet(store: store) { id in
+                showThreads = false
+                if let id { Task { await store.open(id) } } else { store.newChat() }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(store: store, connectionName: connectionName, onDisconnect: onDisconnect) {
+                showSettings = false
+                showAgents = true
+            }
+        }
+        .sheet(isPresented: $showAgents) {
+            AgentsView(store: store) { thread in
+                // "Open chat" from an agent: close the sheet and show it.
+                showAgents = false
+                Task { await store.open(thread) }
+            }
+        }
+        // A tapped reply notification opens its chat.
+        .onChange(of: Router.shared.thread, initial: true) { _, id in
+            guard let id else { return }
+            Router.shared.thread = nil
+            showAgents = false
+            showThreads = false
+            Task { await store.open(id) }
+        }
+        #if DEBUG
+        .onAppear {
+            let env = ProcessInfo.processInfo.environment
+            if env["ALICE_DEV_AGENTS"] != nil { showAgents = true }
+            if env["ALICE_DEV_THREADS"] != nil { showThreads = true }
+            if env["ALICE_DEV_SETTINGS"] != nil { showSettings = true }
+        }
+        .task(id: store.threads.count) {
+            // ALICE_DEV_CHAT=1 opens the newest chat; a thread id opens that one.
+            if let k = ProcessInfo.processInfo.environment["ALICE_DEV_CHAT"], store.currentThreadId == nil,
+               let t = store.threads.first(where: { $0.id == k }) ?? (k.count == 12 ? nil : store.threads.first) {
+                await store.open(t.id)
+            }
+        }
+        #endif
+        .alert("Error", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(store.lastError ?? "") }
+    }
+}
+
+/// All chats, starred first. Picking one (or New chat) hands it back.
+struct ThreadsSheet: View {
+    @Bindable var store: ChatStore
+    /// nil = a new chat.
+    var pick: (String?) -> Void
     @State private var renaming: ChatThread?
     @State private var newTitle = ""
     /// The tapped row. List selection (not buttons) opens chats, so a tap while a
     /// row's swipe actions are showing only closes them.
     @State private var picked: String?
-    @State private var notify: [Notifier.Kind: Bool] = [:]
-    @State private var showAgents = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             List(selection: $picked) {
                 ForEach(store.threads) { t in
-                    ThreadRow(thread: t)
+                    ThreadRow(thread: t, current: t.id == store.currentThreadId)
                         .tag(t.id)
                         .listRowBackground(Color.clear)
                         .listRowSeparatorTint(Palette.lavender.opacity(0.25))
@@ -42,9 +101,8 @@ struct ThreadsView: View {
             .listStyle(.plain)
             .onChange(of: picked) { _, id in
                 guard let id else { return }
-                Task { await store.open(id) }
-                showChat = true
                 picked = nil
+                pick(id)
             }
             .pastel()
             .overlay {
@@ -59,69 +117,22 @@ struct ThreadsView: View {
                 try? await Task.sleep(for: .milliseconds(500))
                 await done
             }
-            .toolbarTitleDisplayMode(.inline)
+            .navigationTitle("Chats")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Label(store.connected ? "Connected" : "Reconnecting…", systemImage: store.connected ? "checkmark.circle" : "arrow.triangle.2.circlepath")
-                        Button("Agents", systemImage: "clock.badge.checkmark") { showAgents = true }
-                        Menu("Notifications", systemImage: "bell") {
-                            ForEach(Notifier.Kind.allCases) { k in
-                                Toggle(isOn: Binding(get: { notify[k] ?? Notifier.enabled(k) }, set: { notify[k] = $0; Notifier.set(k, $0) })) { Text(k.title) }
-                            }
-                        }
-                        Button("Switch server", systemImage: "server.rack", action: onDisconnect)
-                    } label: { ConnectionBadge(connected: store.connected) }
-                    .accessibilityLabel(store.connected ? "Connected to \(connectionName)" : "Reconnecting")
-                }
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        store.newChat()
-                        showChat = true
-                    } label: { Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent) }
+                    Button { pick(nil) } label: { Image(systemName: "square.and.pencil").foregroundStyle(Palette.accent) }
+                        .accessibilityLabel("New chat")
                 }
             }
-            .navigationDestination(isPresented: $showChat) {
-                ChatView(store: store)
-                    .onAppear { store.viewingChat = true }
-                    .onDisappear { store.viewingChat = false }
-            }
-            .sheet(isPresented: $showAgents) {
-                AgentsView(store: store) { thread in
-                    // "Open chat" from an agent: close the sheet and show it.
-                    showAgents = false
-                    Task { await store.open(thread) }
-                    showChat = true
-                }
-            }
-            // A tapped reply notification opens its chat.
-            .onChange(of: Router.shared.thread, initial: true) { _, id in
-                guard let id else { return }
-                Router.shared.thread = nil
-                showAgents = false
-                Task { await store.open(id) }
-                showChat = true
-            }
-            #if DEBUG
-            .onAppear { if ProcessInfo.processInfo.environment["ALICE_DEV_AGENTS"] != nil { showAgents = true } }
-            .task(id: store.threads.count) {
-                // ALICE_DEV_CHAT=1 opens the newest chat; a thread id opens that one.
-                if let k = ProcessInfo.processInfo.environment["ALICE_DEV_CHAT"], !showChat,
-                   let t = store.threads.first(where: { $0.id == k }) ?? (k.count == 12 ? nil : store.threads.first) {
-                    await store.open(t.id)
-                    showChat = true
-                }
-            }
-            #endif
             .alert("Rename thread", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
                 TextField("Title", text: $newTitle)
                 Button("Save") { if let t = renaming { Task { await store.rename(t.id, to: newTitle) } } }
                 Button("Cancel", role: .cancel) {}
             }
-            .alert("Error", isPresented: Binding(get: { store.lastError != nil }, set: { if !$0 { store.lastError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: { Text(store.lastError ?? "") }
         }
+        .presentationDetents([.large])
     }
 }
 
@@ -144,6 +155,7 @@ struct SwipeIcon: View {
 
 struct ThreadRow: View {
     let thread: ChatThread
+    var current = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -152,7 +164,7 @@ struct ThreadRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 36, height: 36)
                 .background(LinearGradient(colors: [Palette.color(for: thread.id), Palette.color(for: thread.id).opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            Text(thread.displayTitle).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+            Text(thread.displayTitle).font(.body.weight(current ? .bold : .medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 0)
             if thread.isPinned {
                 Image(systemName: "star.fill")

@@ -32,6 +32,8 @@ struct CalendarView: View {
                 // The calendar stays put; only the day's events scroll, so the
                 // calendar's own scrolling never drags the page.
                 VStack(alignment: .leading, spacing: 12) {
+                    BlurbBubble(screen: "calendar", fallback: "Here is your schedule 📅")
+                        .padding(.top, 4)
                     calendarCard
                     dayHeader
                     ScrollView {
@@ -42,6 +44,7 @@ struct CalendarView: View {
                 }
                 .padding(.horizontal)
                 .background(PastelBackground())
+                .task(id: calendarFacts) { await Blurbs.shared.ask("calendar", facts: calendarFacts, client: google.client) }
                 .task(id: "\(mode)|\(topWeek?.timeIntervalSince1970 ?? 0)") {
                     // Wait for scrolling to settle before loading.
                     try? await Task.sleep(for: .milliseconds(150))
@@ -73,6 +76,21 @@ struct CalendarView: View {
             }
             .googleErrors(google)
         }
+    }
+
+    /// What Alice's comment is about: today and the coming week.
+    private var calendarFacts: String {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        var lines: [String] = []
+        for i in 0..<7 {
+            guard let d = cal.date(byAdding: .day, value: i, to: today) else { continue }
+            let es = google.events(on: d)
+            if es.isEmpty { continue }
+            let day = i == 0 ? "Today" : i == 1 ? "Tomorrow" : d.formatted(.dateTime.weekday(.wide).locale(Locale(identifier: "en")))
+            lines.append("\(day): " + es.prefix(4).map { e in "\(e.allDay ? "all day" : e.startDate.map(Fmt.time) ?? "") \(e.displayTitle)" }.joined(separator: "; "))
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: mode
@@ -326,7 +344,7 @@ struct WeekRow: View, @MainActor Equatable {
     private func cell(_ c: DayCell) -> some View {
         Button { select(c.date) } label: {
             VStack(spacing: 3) {
-                Text(c.date.formatted(.dateTime.day()))
+                Text("\(Calendar.current.component(.day, from: c.date))")
                     .font(.system(.subheadline, design: .rounded).weight(c.today || c.selected ? .bold : .medium))
                 HStack(spacing: 2) {
                     ForEach(c.dots.indices, id: \.self) { i in

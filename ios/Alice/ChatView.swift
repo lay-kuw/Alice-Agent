@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     @Bindable var store: ChatStore
+    var openThreads: () -> Void = {}
+    var openSettings: () -> Void = {}
+    var openAgents: () -> Void = {}
     @State private var text = ""
     @State private var pending: [Attachment] = []
     @State private var sending = false
@@ -18,6 +21,10 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    if store.currentThreadId == nil && visible.isEmpty {
+                        ChatLanding { text = $0; focused = true }
+                            .padding(.top, 8)
+                    }
                     ForEach(visible) { m in
                         MessageRow(message: m, store: store).id(m.id)
                     }
@@ -40,15 +47,11 @@ struct ChatView: View {
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
         .safeAreaInset(edge: .bottom) { composer }
-        .navigationTitle(store.currentThread?.displayTitle ?? "New chat")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { modelMenu }
-        }
-        .onChange(of: store.currentThreadId) { old, new in
-            // The thread was deleted (here or on another device).
-            if old != nil, new == nil { dismiss() }
-        }
+        .toolbar { toolbar }
+        // A little tap when Alice finishes, a firmer one when she needs an approval.
+        .onChange(of: store.generating) { was, now in if was && !now { Haptics.success() } }
+        .onChange(of: store.currentApprovals.count) { old, new in if new > old { Haptics.warning() } }
         // A PhotosPicker placed inside a Menu never opens, so present it from here.
         .photosPicker(isPresented: $pickingPhoto, selection: $photo, matching: .images)
         .onChange(of: photo) { _, item in
@@ -77,6 +80,54 @@ struct ChatView: View {
         }
     }
 
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        if let t = store.currentThread {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { withAnimation(.snappy) { store.newChat() } } label: { Image(systemName: "chevron.left") }
+                    .accessibilityLabel("Back")
+            }
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    MascotAvatar(size: 32)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Alice Agent ✨").font(.subheadline.weight(.bold))
+                        HStack(spacing: 4) {
+                            Circle().fill(store.connected ? Color.green : Color.orange).frame(width: 6, height: 6)
+                            Text(store.connected ? "Online" : "Reconnecting…").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Text(t.displayTitle)
+                    Button(t.isPinned ? "Unstar" : "Star", systemImage: t.isPinned ? "star.slash" : "star.fill") { Task { await store.setPinned(t.id, !t.isPinned) } }
+                    modelMenu
+                    Button("Chats", systemImage: "list.bullet", action: openThreads)
+                    Button("Delete", systemImage: "trash", role: .destructive) { Task { await store.delete(t.id) } }
+                } label: { Image(systemName: "ellipsis") }
+                .accessibilityLabel("More")
+            }
+        } else {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: openThreads) { Image(systemName: "line.3.horizontal") }
+                    .accessibilityLabel("Chats")
+            }
+            ToolbarItem(placement: .principal) {
+                Text("Alice Agent ✨").font(.headline.weight(.bold))
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Settings", systemImage: "gearshape", action: openSettings)
+                    Button("Agents", systemImage: "clock.badge.checkmark", action: openAgents)
+                    modelMenu
+                } label: { AppMenuIcon() }
+                .accessibilityLabel("Settings and agents")
+            }
+        }
+    }
+
+    /// Model choice as a submenu.
     private var modelMenu: some View {
         let current = store.currentThread?.model ?? store.pendingModel ?? ""
         let effective = current.isEmpty ? (store.models?.default ?? "") : current
@@ -118,10 +169,8 @@ struct ChatView: View {
                 }
             }
         } label: {
-            ModelBadge(seed: base)
+            Label("Model: \(info?.name ?? base)", systemImage: "sparkle")
         }
-        .menuIndicator(.hidden)
-        .accessibilityLabel("Model: \(info?.name ?? base)\(effort.map { " · \($0)" } ?? "")")
     }
 
     private static let control: CGFloat = 40
@@ -157,7 +206,7 @@ struct ChatView: View {
                         .background(.regularMaterial, in: Circle())
                 }
                 .accessibilityLabel("Attach")
-                TextField("Message Alice…", text: $text, axis: .vertical)
+                TextField("Type a message…", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
                     // A one-line field is exactly as tall as the round buttons.
@@ -184,6 +233,7 @@ struct ChatView: View {
                         text = ""
                         pending = []
                         sending = true
+                        Haptics.light()
                         Task {
                             // A failed send (offline, chat busy) gives the text and files back to resend.
                             if !(await store.send(t, attachmentIds: held.map(\.id))) {
@@ -227,17 +277,77 @@ extension ChatView {
     }
 }
 
-/// Three soft dots while Alice is working.
+/// Alice is working: her face and three dots breathing in lavender and pink.
 struct TypingDots: View {
     var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3, id: \.self) { i in
-                Circle().fill(Palette.lavender).frame(width: 7, height: 7)
-                    .phaseAnimator([0.3, 1.0]) { c, o in c.opacity(o) } animation: { _ in .easeInOut(duration: 0.6).delay(Double(i) * 0.2) }
+        HStack(spacing: 8) {
+            MascotAvatar(size: 30)
+            HStack(spacing: 6) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .fill(LinearGradient(colors: [Palette.lavender, Palette.pink], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: 8, height: 8)
+                        .phaseAnimator([0.35, 1.0]) { c, o in c.opacity(o).scaleEffect(0.75 + 0.3 * o).shadow(color: Palette.pink.opacity(o * 0.6), radius: 4 * o) }
+                            animation: { _ in .easeInOut(duration: 0.7).delay(Double(i) * 0.22) }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(.background.opacity(0.7), in: Capsule())
+        }
+        .padding(.vertical, 2)
+        .accessibilityLabel("Alice is working")
+    }
+}
+
+/// The top-right button: Alice's sparkle in a glass circle.
+struct AppMenuIcon: View {
+    var body: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(Palette.accent)
+    }
+}
+
+/// A new chat: Alice says hello and offers a few starting points.
+struct ChatLanding: View {
+    var start: (String) -> Void
+    private static let ideas: [(String.LocalizationValue, String, Color)] = [
+        ("Sort out my to-dos", "checkmark.circle.fill", Palette.lavender),
+        ("Look something up", "magnifyingglass", Palette.pink),
+        ("Give me ideas", "lightbulb.fill", Palette.lemon),
+        ("Help me write", "pencil", Palette.sky),
+    ]
+
+    var body: some View {
+        VStack(spacing: 18) {
+            MascotHero(size: 190)
+                .padding(.top, 10)
+            Group {
+                if let line = Blurbs.shared.line("chat") { Text(line) } else { Text("Hi there!\nWhat can I help with?") }
+            }
+            .font(.system(.title3, design: .rounded).weight(.bold))
+            .multilineTextAlignment(.center)
+            .contentTransition(.opacity)
+            .padding(.horizontal)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                ForEach(Self.ideas.indices, id: \.self) { i in
+                    let (title, icon, color) = Self.ideas[i]
+                    Button { start(L(title)) } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: icon).foregroundStyle(color).font(.system(size: 16, weight: .semibold))
+                            Text(L(title)).font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 14)
+                        .glassCard(radius: 18)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
-        .padding(.vertical, 6)
-        .accessibilityLabel("Alice is working")
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -254,24 +364,35 @@ struct MessageRow: View {
                     if !message.content.isEmpty {
                         Text(message.content)
                             .textSelection(.enabled)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .background(
+                                LinearGradient(colors: [Palette.lavender.opacity(0.42), Palette.pink.opacity(0.26)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                in: UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 8, topTrailingRadius: 22, style: .continuous)
+                            )
+                            .shadow(color: Palette.lavender.opacity(0.2), radius: 8, y: 3)
                     }
                 }
             }
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                if !message.content.isEmpty {
-                    MarkdownView(text: message.content)
+            HStack(alignment: .top, spacing: 8) {
+                MascotAvatar(size: 32)
+                VStack(alignment: .leading, spacing: 6) {
+                    if !message.content.isEmpty {
+                        MarkdownView(text: message.content)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .glassCard(radius: 22, tail: true)
+                    }
+                    if message.status == "error" {
+                        Text(message.meta?["error"]?.string ?? "Generation failed").font(.caption).foregroundStyle(.red)
+                    } else if message.status == "cancelled" {
+                        Text("Stopped").font(.caption).foregroundStyle(.secondary)
+                    } else if message.endsTurn, let model = message.meta?["model_name"]?.string ?? message.model {
+                        Text(model).font(.caption2).foregroundStyle(.tertiary).padding(.leading, 6)
+                    }
                 }
-                if message.status == "error" {
-                    Text(message.meta?["error"]?.string ?? "Generation failed").font(.caption).foregroundStyle(.red)
-                } else if message.status == "cancelled" {
-                    Text("Stopped").font(.caption).foregroundStyle(.secondary)
-                } else if message.endsTurn, let model = message.meta?["model_name"]?.string ?? message.model {
-                    Text(model).font(.caption2).foregroundStyle(.tertiary)
-                }
+                Spacer(minLength: 16)
             }
         }
     }

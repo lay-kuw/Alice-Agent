@@ -77,8 +77,24 @@ struct CardStyle: ViewModifier {
     }
 }
 
+/// Frosted white card with a thin light edge on top (glass catching the light).
+struct GlassCard: ViewModifier {
+    var radius: CGFloat
+    var tail = false
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: tail ? 8 : radius, bottomLeadingRadius: radius, bottomTrailingRadius: radius, topTrailingRadius: radius, style: .continuous)
+        content
+            .background(scheme == .dark ? AnyShapeStyle(Palette.lavender.opacity(0.08)) : AnyShapeStyle(Color.white.opacity(0.72)), in: shape)
+            .overlay(shape.strokeBorder(LinearGradient(colors: [.white.opacity(scheme == .dark ? 0.18 : 0.9), .white.opacity(0.05)], startPoint: .top, endPoint: .bottom), lineWidth: 0.8))
+            .shadow(color: Palette.lavender.opacity(scheme == .dark ? 0 : 0.16), radius: 10, y: 4)
+    }
+}
+
 extension View {
     func card(padding: CGFloat = 14) -> some View { modifier(CardStyle(padding: padding)) }
+    func glassCard(radius: CGFloat = 20, tail: Bool = false) -> some View { modifier(GlassCard(radius: radius, tail: tail)) }
 
     /// Light rounded surface for list rows; nearly clear in dark mode.
     func softSurface(radius: CGFloat = 14) -> some View { modifier(SoftSurface(radius: radius)) }
@@ -142,9 +158,9 @@ struct Chip: View {
 
 /// Empty state with a soft icon.
 struct SoftEmpty: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String
-    var message: String?
+    var message: LocalizedStringKey?
 
     var body: some View {
         VStack(spacing: 10) {

@@ -130,7 +130,7 @@ struct HomeView: View {
     }
 
     private var todoCard: some View {
-        let open = google.lists.flatMap { l in l.tasks.filter { !$0.completed }.map { (l.id, $0) } }
+        let open = google.lists.flatMap { l in l.tasks.filter { !$0.completed }.map { (l, $0) } }
             .sorted { ($0.1.dueDate ?? .distantFuture) < ($1.1.dueDate ?? .distantFuture) }
         return VStack(alignment: .leading, spacing: 8) {
             cardHeader("To-do", "checkmark.square.fill", tab: "tasks")
@@ -141,7 +141,7 @@ struct HomeView: View {
                 HStack(spacing: 10) {
                     Button {
                         Haptics.medium()
-                        Task { await google.toggle(t, in: list) }
+                        Task { await google.toggle(t, in: list.id) }
                     } label: {
                         Circle().strokeBorder(Palette.lavender, lineWidth: 2).frame(width: 22, height: 22)
                     }
@@ -151,6 +151,8 @@ struct HomeView: View {
                     if let d = t.dueDate, Calendar.current.isDateInToday(d) {
                         Image(systemName: "sun.max.fill").font(.caption).foregroundStyle(Palette.pink)
                     }
+                    // Which list it is from, in that list's own color.
+                    ListLabel(title: list.title, key: list.id)
                 }
                 .padding(.vertical, 2)
             }
@@ -211,6 +213,25 @@ struct HomeView: View {
         Task {
             if !(await store.send(text)) { ask = text }
         }
+    }
+}
+
+/// A small rounded label naming a task list.
+private struct ListLabel: View {
+    let title: String
+    let key: String
+
+    var body: some View {
+        let c = Palette.color(for: key)
+        Text(title)
+            .font(.caption2.weight(.bold))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            // The list's color as the fill; dark text stays readable on pale colors.
+            .foregroundStyle(.primary.opacity(0.7))
+            .background(c.opacity(0.32), in: Capsule())
+            .fixedSize()
     }
 }
 

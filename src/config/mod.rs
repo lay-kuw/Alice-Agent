@@ -185,6 +185,9 @@ pub struct AgentConfig {
     pub history_chars: usize,
     pub max_tokens: u32,
     pub appearance: String,
+    /// How Alice's one-line comments on the app screens sound (free text,
+    /// e.g. "cheerful and cute", "a polite butler"); empty = her usual voice.
+    pub blurb_tone: String,
 }
 
 impl Default for AgentConfig {
@@ -197,6 +200,7 @@ impl Default for AgentConfig {
             history_chars: 60_000,
             max_tokens: 16_000,
             appearance: "system".into(),
+            blurb_tone: String::new(),
         }
     }
 }

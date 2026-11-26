@@ -4,6 +4,7 @@ pub mod util;
 
 pub mod agent;
 pub mod app;
+pub mod blurb;
 pub mod channels;
 pub mod cli;
 pub mod config;

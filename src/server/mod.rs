@@ -101,6 +101,7 @@ pub fn router(app: AppRef) -> Router {
         .route("/agents/{id}", axum::routing::patch(update_agent).delete(delete_agent))
         .route("/agents/{id}/run", post(run_agent))
         .route("/agents/{id}/runs", get(agent_runs))
+        .route("/blurb", post(blurb))
         .merge(google::routes())
         .route_layer(middleware::from_fn_with_state(app.clone(), auth))
         // Bridge routes authenticate with the per-turn token themselves.
@@ -583,6 +584,24 @@ async fn delete_agent(State(app): State<AppRef>, Path(id): Path<String>) -> ApiR
     }
     app.emit(json!({ "type": "agents.updated" }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct BlurbBody {
+    screen: String,
+    #[serde(default)]
+    lang: String,
+    #[serde(default)]
+    facts: String,
+    /// The client's local time, "YYYY-MM-DD HH:MM".
+    #[serde(default)]
+    now: String,
+}
+
+/// Alice's one-line comment for an app screen.
+async fn blurb(State(app): State<AppRef>, Json(b): Json<BlurbBody>) -> ApiResult<Json<Value>> {
+    let text = crate::blurb::say(&app, &b.screen, &b.lang, &b.facts, &b.now).await.map_err(bad)?;
+    Ok(Json(json!({ "text": text })))
 }
 
 /// The agent's last runs (Web UI history).

@@ -48,6 +48,9 @@ fn memories(c: &Connection, query: &str, limit: usize) -> rusqlite::Result<Value
     Ok(json!({ "memories": found }))
 }
 
+/// content, role, created_at, chat title, chat id
+type Hit = (String, String, i64, String, String);
+
 fn conversations(c: &Connection, query: &str, limit: usize) -> rusqlite::Result<Value> {
     let terms = terms(query);
     if terms.is_empty() {
@@ -62,10 +65,10 @@ fn conversations(c: &Connection, query: &str, limit: usize) -> rusqlite::Result<
          ORDER BY m.created_at DESC LIMIT 400"
     );
     let mut st = c.prepare(&sql)?;
-    let rows: Vec<(String, String, i64, String, String)> = st
+    let rows: Vec<Hit> = st
         .query_map(rusqlite::params_from_iter(terms.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
-    let mut scored: Vec<(usize, (String, String, i64, String, String))> = rows
+    let mut scored: Vec<(usize, Hit)> = rows
         .into_iter()
         .map(|r| {
             let low = r.0.to_lowercase();
@@ -73,7 +76,7 @@ fn conversations(c: &Connection, query: &str, limit: usize) -> rusqlite::Result<
         })
         .collect();
     // More keywords first; the order from SQL (newest first) breaks ties.
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|s| std::cmp::Reverse(s.0));
     let matches: Vec<Value> = scored
         .into_iter()
         .take(limit)

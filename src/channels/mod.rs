@@ -673,30 +673,32 @@ pub async fn gateway_cmd(paths: &Paths, args: Vec<String>) -> Result<(), String>
         [] | ["list" | "ls"] => {
             let tg = &cfg.channels.telegram;
             let dc = &cfg.channels.discord;
+            use crate::cli::ui;
             let has = |n: &str| secrets_set.iter().any(|s| s == n);
-            println!(
-                "telegram  {}  token {}  allowed users {:?}",
-                if tg.enabled { "enabled " } else { "disabled" },
-                if has("telegram.bot_token") { "set" } else { "missing" },
-                tg.allowed_user_ids
-            );
-            println!(
-                "discord   {}  token {}  allowed users {:?}",
-                if dc.enabled { "enabled " } else { "disabled" },
-                if has("discord.bot_token") { "set" } else { "missing" },
-                dc.allowed_user_ids
-            );
+            ui::intro("Alice · gateways");
+            let row = |name: &str, on: bool, token: bool, users: String| {
+                let state = if on { ui::tag("on", ui::Tone::Good) } else { ui::tag("off", ui::Tone::Off) };
+                let token = if token { ui::tag("token set", ui::Tone::Soft) } else { ui::tag("no token", ui::Tone::Warn) };
+                ui::line(&format!("{} {}  {state} {token}", ui::pink("✦"), ui::bold(name)));
+                ui::note(&format!("    allowed users: {}", if users.is_empty() { "—".into() } else { users }));
+            };
+            row("telegram", tg.enabled, has("telegram.bot_token"), tg.allowed_user_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "));
+            row("discord", dc.enabled, has("discord.bot_token"), dc.allowed_user_ids.join(", "));
+            ui::outro(&ui::dim("`alice gateway setup` to connect one"));
             Ok(())
         }
         ["setup"] | ["setup", _] => {
+            use crate::cli::ui;
+            ui::intro("Alice · connect a chat app");
             let kind = match a.get(1) {
                 Some(k) => k.to_string(),
-                None => ask("Gateway (telegram / discord)", "telegram"),
+                None => ["telegram", "discord"][ui::select("Which one?", &[("telegram", "a bot you talk to in Telegram"), ("discord", "DMs or mentions in Discord")], 0)].to_string(),
             };
             match kind.as_str() {
                 "telegram" => {
-                    println!("Create a bot with @BotFather and paste its token. Find your numeric user ID with @userinfobot.");
-                    let token = ask_secret("Bot token (input hidden)");
+                    ui::note("Create a bot with @BotFather and paste its token.");
+                    ui::note("Your numeric user ID: ask @userinfobot.");
+                    let token = ask_secret("Bot token");
                     let ids = ask("Allowed Telegram user IDs (comma separated)", &cfg.channels.telegram.allowed_user_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(","));
                     let ids: Vec<i64> = ids.split(',').filter_map(|s| s.trim().parse().ok()).collect();
                     if ids.is_empty() {
@@ -706,9 +708,9 @@ pub async fn gateway_cmd(paths: &Paths, args: Vec<String>) -> Result<(), String>
                     apply(json!({ "channels.telegram.allowed_user_ids": ids, "channels.telegram.enabled": true }), secret).await?;
                 }
                 "discord" => {
-                    println!("Create an application + bot in the Discord Developer Portal, invite it, and paste the bot token.");
-                    println!("Enable Developer Mode in Discord to copy your user ID. DMs work out of the box; in servers, mention the bot.");
-                    let token = ask_secret("Bot token (input hidden)");
+                    ui::note("Create an application + bot in the Discord Developer Portal, invite it, and paste the token.");
+                    ui::note("Turn on Developer Mode in Discord to copy your user ID. DMs just work; in servers, mention the bot.");
+                    let token = ask_secret("Bot token");
                     let ids = ask("Allowed Discord user IDs (comma separated)", &cfg.channels.discord.allowed_user_ids.join(","));
                     let ids: Vec<String> = ids.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())).collect();
                     if ids.is_empty() {
@@ -719,7 +721,8 @@ pub async fn gateway_cmd(paths: &Paths, args: Vec<String>) -> Result<(), String>
                 }
                 other => return Err(format!("unknown gateway: {other}")),
             }
-            println!("Gateway {kind} enabled{}.", if remote.is_some() { " (applied to the running server)" } else { "; it starts with the server" });
+            ui::ok(&format!("{} connected{}", ui::bold(&kind), if remote.is_some() { " · already running" } else { " · starts with the server" }));
+            ui::outro(&ui::pink("say hi to Alice there ♡"));
             Ok(())
         }
         ["delete" | "rm", id] => {
@@ -729,7 +732,7 @@ pub async fn gateway_cmd(paths: &Paths, args: Vec<String>) -> Result<(), String>
                 other => return Err(format!("unknown gateway: {other} (telegram or discord)")),
             };
             apply(json!({ key: false }), Some((secret, String::new()))).await?;
-            println!("Gateway {id} disabled and its token removed.");
+            crate::cli::ui::ok(&format!("{} turned off and its token removed", crate::cli::ui::bold(id)));
             Ok(())
         }
         _ => Err("usage: alice gateway [list | setup [telegram|discord] | delete <telegram|discord>]".into()),

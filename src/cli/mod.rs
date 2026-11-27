@@ -11,11 +11,9 @@ pub mod tui;
 pub mod ui;
 
 use crate::config::{Config, Paths, Permission, ProviderConfig, ProviderKind, Secrets};
-use chat::{dim, green, red, yellow};
 use clap::{Parser, Subcommand};
 use client::{CliResult, Client};
 use serde_json::{Value, json};
-use std::io::Write;
 
 #[derive(Parser)]
 #[command(name = "alice", version, about = "Alice Agent (A2) — a lightweight personal AI agent", disable_help_subcommand = true)]
@@ -127,7 +125,7 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
         Some(Cmd::Soul { args }) => soul_cmd(&paths, args),
         Some(Cmd::Usage) => {
             let c = Client::from_env(&paths)?;
-            print!("{}", crate::usage::render_text(&c.get("/usage").await?));
+            print_usage(&c.get("/usage").await?);
             Ok(())
         }
         Some(Cmd::Serve) => unreachable!(),
@@ -138,58 +136,20 @@ pub async fn run(cmd: Option<Cmd>, paths: Paths) -> CliResult<()> {
 // ---------------------------------------------------------------- prompts
 
 pub fn ask(prompt: &str, default: &str) -> String {
-    print!("{}", ui::question(prompt, default));
-    let _ = std::io::stdout().flush();
-    let mut s = String::new();
-    let _ = std::io::stdin().read_line(&mut s);
-    let s = s.trim();
-    if s.is_empty() { default.to_string() } else { s.to_string() }
+    ui::text(prompt, default)
 }
 
 pub fn ask_secret(prompt: &str) -> String {
-    print!("{}{}", ui::question(prompt, ""), ui::dim("(hidden) "));
-    let _ = std::io::stdout().flush();
-    use std::io::IsTerminal;
-    let tty = std::io::stdin().is_terminal()
-        && std::process::Command::new("stty")
-            .arg("-echo")
-            .stdin(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-    let mut s = String::new();
-    let _ = std::io::stdin().read_line(&mut s);
-    if tty {
-        let _ = std::process::Command::new("stty").arg("echo").stdin(std::process::Stdio::inherit()).status();
-        println!();
-    }
-    s.trim().to_string()
+    ui::password(prompt)
 }
 
 pub fn confirm(prompt: &str, default: bool) -> bool {
-    let a = ask(&format!("{} {}", prompt.trim(), ui::dim(if default { "(Y/n)" } else { "(y/N)" })), "");
-    match a.to_lowercase().as_str() {
-        "" => default,
-        "y" | "yes" => true,
-        _ => false,
-    }
+    ui::confirm(prompt, default)
 }
 
-/// Numbered options, each with a short note.
+/// Pick one option (label, hint) with the arrow keys.
 fn choose_with(prompt: &str, options: &[(&str, &str)], default: usize) -> usize {
-    use unicode_width::UnicodeWidthStr;
-    let w = options.iter().map(|(l, _)| l.width()).max().unwrap_or(0);
-    for (i, (label, note)) in options.iter().enumerate() {
-        ui::option(i + 1, label, note, w, i == default);
-    }
-    loop {
-        let a = ask(prompt, &(default + 1).to_string());
-        if let Ok(n) = a.parse::<usize>()
-            && n >= 1 && n <= options.len() {
-                return n - 1;
-            }
-        ui::warn(&format!("pick a number from 1 to {}", options.len()));
-    }
+    ui::select(prompt, options, default)
 }
 
 // ---------------------------------------------------------------- backend
@@ -234,16 +194,67 @@ fn local_add_provider(paths: &Paths, p: ProviderConfig, api_key: Option<&str>) -
     Ok(cfg.agent.default_model)
 }
 
+// ---------------------------------------------------------------- usage
+
+/// Subscription limits as soft bars, then tokens per model.
+fn print_usage(v: &Value) {
+    ui::intro("Alice · usage");
+    let subs = v["subscriptions"].as_array().cloned().unwrap_or_default();
+    if subs.is_empty() {
+        ui::note("no subscription providers (codex-cli) yet");
+    }
+    for sub in &subs {
+        let plan = sub.pointer("/limits/plan").and_then(|p| p.as_str()).map(|p| format!(" {}", ui::dim(p))).unwrap_or_default();
+        ui::heading(&format!("{}{plan}", sub["id"].as_str().unwrap_or("")));
+        if sub["ok"] != true {
+            ui::warn(sub["error"].as_str().unwrap_or("unavailable"));
+            continue;
+        }
+        for (name, used, reset) in crate::usage::windows(&sub["limits"]) {
+            let left = 100.0 - used;
+            let filled = ((left / 100.0) * 20.0).round() as usize;
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled.min(20)));
+            let bar = if left > 50.0 { ui::mint(&bar) } else if left > 20.0 { ui::lemon(&bar) } else { ui::rose(&bar) };
+            ui::line(&format!("{name:<7} {bar}  {} {}", ui::bold(&format!("{left:.0}% left")), ui::dim(&format!("· resets {reset}"))));
+        }
+    }
+    for (label, key) in [("Last 24 hours", "day"), ("Last 30 days", "month")] {
+        ui::heading(label);
+        let rows = v["tokens"][key].as_array().cloned().unwrap_or_default();
+        if rows.is_empty() {
+            ui::note("—");
+        }
+        let w = rows.iter().map(|r| r["model"].as_str().unwrap_or("").len()).max().unwrap_or(0);
+        for r in rows {
+            let m = r["model"].as_str().unwrap_or("");
+            ui::line(&format!(
+                "{m}{}  {}",
+                " ".repeat(w - m.len()),
+                ui::dim(&format!(
+                    "in {} · out {} · {} replies",
+                    crate::usage::compact(r["input_tokens"].as_i64().unwrap_or(0)),
+                    crate::usage::compact(r["output_tokens"].as_i64().unwrap_or(0)),
+                    r["responses"]
+                ))
+            ));
+        }
+    }
+    ui::outro(&ui::dim("tokens Alice used, by model"));
+}
+
 // ---------------------------------------------------------------- setup
 
 async fn setup(paths: &Paths) -> CliResult<()> {
     const STEPS: usize = 5;
-    ui::card("✦ Alice Agent · setup", &[format!("profile {} · {}", paths.profile, ui::path(&paths.home)), "Enter keeps the value in [brackets] ♡".into()]);
+    ui::intro("Alice · setup");
+    ui::note(&format!("profile {} · {}", paths.profile, ui::path(&paths.home)));
+    ui::note("Enter keeps the value shown in grey ♡");
     paths.ensure().map_err(|e| e.to_string())?;
     let mut cfg = Config::load(paths)?;
 
     ui::step(1, STEPS, "Server");
-    ui::note("127.0.0.1 is always on. Add this machine's LAN or Tailscale IP to reach Alice\nfrom other devices (comma-separated; 0.0.0.0 inside a container).\nPlain HTTP: use trusted networks only.");
+    ui::note("127.0.0.1 is always on. Add this machine's LAN or Tailscale IP to reach Alice from other");
+    ui::note("devices (comma-separated; 0.0.0.0 inside a container). Plain HTTP: trusted networks only.");
     cfg.server.bind = ask("Listen addresses", &cfg.server.bind);
     loop {
         let p = ask("Port", &cfg.server.port.to_string());
@@ -254,7 +265,10 @@ async fn setup(paths: &Paths) -> CliResult<()> {
         ui::warn("a port is a number from 1 to 65535");
     }
     cfg.server.public_url = ask("Public URL for other devices (optional)", &cfg.server.public_url);
-    cfg.agent.language = ask("Reply language", &cfg.agent.language);
+    let langs = [("日本語 (ja)", ""), ("English (en)", "")];
+    let codes = ["ja", "en"];
+    let cur = codes.iter().position(|c| *c == cfg.agent.language).unwrap_or(0);
+    cfg.agent.language = codes[choose_with("Reply language", &langs, cur)].to_string();
     cfg.save(paths)?;
     ui::ok(&format!("saved {}", ui::path(&paths.config())));
 
@@ -267,7 +281,7 @@ async fn setup(paths: &Paths) -> CliResult<()> {
     } else {
         ui::ok("API token already set");
     }
-    ui::note("Show it any time with `alice token`: the Web UI and the iPhone app sign in with it.");
+    ui::note("`alice token` shows it: the Web UI and the iPhone app sign in with it.");
 
     ui::step(3, STEPS, "Personality");
     crate::config::ensure_soul(paths);
@@ -278,7 +292,7 @@ async fn setup(paths: &Paths) -> CliResult<()> {
     if cfg.providers.is_empty() || confirm("Add a model provider now?", cfg.providers.is_empty()) {
         model_add(paths).await?;
     } else {
-        ui::ok(&format!("default model: {}", cfg.agent.default_model));
+        ui::ok(&format!("default model {}", ui::bold(&cfg.agent.default_model)));
     }
 
     ui::step(5, STEPS, "Start automatically");
@@ -288,7 +302,13 @@ async fn setup(paths: &Paths) -> CliResult<()> {
             Err(e) => ui::warn(&format!("could not register the service: {e}")),
         }
     }
-    ui::done("✦ All set! ₍ᐢ. .ᐢ₎♡", &[("alice start", "start the server"), ("alice chat", "talk with Alice"), ("alice token", "sign in from Web / iPhone")]);
+    ui::heading("All set! ₍ᐢ. .ᐢ₎♡");
+    ui::kv(&[
+        ("alice start", ui::dim("start the server")),
+        ("alice chat", ui::dim("talk with Alice")),
+        ("alice token", ui::dim("sign in from Web / iPhone")),
+    ]);
+    ui::outro(&ui::pink("see you soon ✦"));
     Ok(())
 }
 
@@ -301,58 +321,81 @@ async fn status(paths: &Paths) -> CliResult<()> {
         service::Manager::Systemd => "systemd",
         service::Manager::None => "none",
     };
+    ui::intro(&format!("Alice · {}", paths.profile));
     if !c.is_up().await {
-        println!("Alice is not running ({}; profile: {}; service: {mgr})", c.base, paths.profile);
+        ui::kv(&[
+            ("state", ui::tag("stopped", ui::Tone::Off)),
+            ("address", c.base.clone()),
+            ("service", mgr.to_string()),
+        ]);
+        ui::outro(&ui::dim("start it with `alice start`"));
         return Ok(());
     }
     let s = c.get("/status").await?;
-    println!("Alice {} running at {} (profile: {})", s["version"].as_str().unwrap_or(""), c.base, paths.profile);
-    println!("  pid {}  uptime {}s  memory {:.1} MB  cpu {}%", s["pid"], s["uptime_secs"], s["rss_kb"].as_f64().unwrap_or(0.0) / 1024.0, s["cpu_percent"]);
-    println!("  threads {}  messages {}  memories {}  db {:.1} KB", s["counts"]["threads"], s["counts"]["messages"], s["counts"]["memories"], s["db_bytes"].as_f64().unwrap_or(0.0) / 1024.0);
-    println!("  default model: {}", s["default_model"].as_str().filter(|m| !m.is_empty()).unwrap_or("(none)"));
-    println!("  service: {mgr}  data: {}", s["home"].as_str().unwrap_or(""));
+    let mb = s["rss_kb"].as_f64().unwrap_or(0.0) / 1024.0;
+    ui::kv(&[
+        ("state", format!("{} {}", ui::tag("running", ui::Tone::Good), ui::dim(&format!("v{}", s["version"].as_str().unwrap_or(""))))),
+        ("address", c.base.clone()),
+        ("model", ui::bold(s["default_model"].as_str().filter(|m| !m.is_empty()).unwrap_or("(none)"))),
+        ("process", ui::dim(&format!("pid {} · up {} · {mb:.1} MB · cpu {}%", s["pid"], human_secs(s["uptime_secs"].as_u64().unwrap_or(0)), s["cpu_percent"]))),
+        ("data", ui::dim(&format!(
+            "{} threads · {} messages · {} memories · {:.1} KB",
+            s["counts"]["threads"], s["counts"]["messages"], s["counts"]["memories"], s["db_bytes"].as_f64().unwrap_or(0.0) / 1024.0
+        ))),
+        ("service", ui::dim(&format!("{mgr} · {}", s["home"].as_str().unwrap_or("")))),
+    ]);
+    ui::outro(&ui::pink("all good ♡"));
     Ok(())
+}
+
+/// "3d 4h" / "2h 13m" / "45s".
+fn human_secs(s: u64) -> String {
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m {}s", s / 60, s % 60),
+        3600..86_400 => format!("{}h {}m", s / 3600, s % 3600 / 60),
+        _ => format!("{}d {}h", s / 86_400, s % 86_400 / 3600),
+    }
 }
 
 async fn token_cmd(paths: &Paths, rotate: bool, set: bool) -> CliResult<()> {
     let mut s = Secrets::load(paths)?;
+    ui::intro("Alice · sign-in");
     if set {
-        let t = ask_secret("New API token (input hidden)");
+        let t = ask_secret("New API token");
         crate::util::check_token(&t)?;
-        if ask_secret("Again") != t {
+        if ask_secret("Once more") != t {
             return Err("the two entries differ; nothing changed".into());
         }
         s.set("server.token", &t);
         s.save(paths)?;
-        println!("Token saved. The running server uses it right away; log in again on the Web and iPhone.");
+        ui::ok("token saved · in use right away (sign in again on the Web and iPhone)");
     } else if rotate || s.get("server.token").is_none() {
         s.set("server.token", &crate::util::new_token());
         s.save(paths)?;
-        println!("New token generated. The running server uses it right away; log in again on the Web and iPhone.");
+        ui::ok("new token made · in use right away (sign in again on the Web and iPhone)");
     }
     let cfg = Config::load(paths)?;
-    println!("Profile:    {}", paths.profile);
+    let mut rows: Vec<(&str, String)> = vec![("profile", paths.profile.clone())];
     if !cfg.server.public_url.is_empty() {
-        println!("Server URL: {}", cfg.server.public_url);
+        rows.push(("server", ui::bold(&cfg.server.public_url)));
     } else {
         // Every address other devices can use, then this machine's own.
-        let mut urls: Vec<String> = crate::server::listen_addrs(&cfg.server.bind)
-            .into_iter()
-            .filter(|a| !matches!(a.as_str(), "127.0.0.1" | "localhost" | "::1"))
-            .map(|a| match a.as_str() {
+        for a in crate::server::listen_addrs(&cfg.server.bind).into_iter().filter(|a| !matches!(a.as_str(), "127.0.0.1" | "localhost" | "::1")) {
+            let u = match a.as_str() {
                 "0.0.0.0" | "::" => format!("http://<this machine's IP>:{}", cfg.server.port),
                 h if h.contains(':') => format!("http://[{h}]:{}", cfg.server.port),
                 h => format!("http://{h}:{}", cfg.server.port),
-            })
-            .collect();
-        urls.push(format!("{} (this machine only)", crate::cli::client::local_url(&cfg)));
-        for (i, u) in urls.iter().enumerate() {
-            println!("{} {u}", if i == 0 { "Server URL:" } else { "           " });
+            };
+            rows.push(("server", ui::bold(&u)));
         }
+        rows.push(("server", format!("{} {}", crate::cli::client::local_url(&cfg), ui::dim("(this machine only)"))));
     }
     if !set {
-        println!("API token:  {}", s.get("server.token").unwrap_or(""));
+        rows.push(("token", ui::pink(s.get("server.token").unwrap_or(""))));
     }
+    ui::kv(&rows);
+    ui::outro(&ui::dim("paste these into the Web UI or the iPhone app ♡"));
     Ok(())
 }
 
@@ -374,7 +417,7 @@ fn soul_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             if !status.success() {
                 return Err(format!("{editor} exited with {status}"));
             }
-            println!("Saved {}. Alice uses it from the next reply.", file.display());
+            ui::ok(&format!("saved {} · Alice uses it from the next reply ♡", ui::path(&file)));
             Ok(())
         }
         Some("show") => {
@@ -386,11 +429,14 @@ fn soul_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             Ok(())
         }
         Some("reset") => {
+            ui::intro("Alice · personality");
             if !confirm("Replace SOUL.md with the default template?", false) {
+                ui::outro(&ui::dim("left as it was"));
                 return Ok(());
             }
             crate::config::write_atomic(&file, crate::config::SOUL_TEMPLATE.as_bytes(), 0o600)?;
-            println!("Reset {}.", file.display());
+            ui::ok(&format!("reset {}", ui::path(&file)));
+            ui::outro(&ui::pink("✦"));
             Ok(())
         }
         _ => Err("usage: alice soul [edit | show | path | reset]".into()),
@@ -416,9 +462,10 @@ fn find_skill<'a>(v: &'a Value, id: &str) -> CliResult<&'a Value> {
 
 fn status_mark(s: &Value) -> String {
     match s["status"].as_str().unwrap_or("") {
-        "ready" => green("✓ ready"),
-        "disabled" => dim("○ off"),
-        st => yellow(&format!("! {}", if s["detail"].as_str().unwrap_or("").is_empty() { st } else { s["detail"].as_str().unwrap_or("") })),
+        "ready" => ui::tag("ready", ui::Tone::Good),
+        "disabled" => ui::tag("off", ui::Tone::Off),
+        "needs_setup" => ui::tag("needs setup", ui::Tone::Warn),
+        st => ui::tag(st, ui::Tone::Bad),
     }
 }
 
@@ -428,51 +475,83 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     match a.as_slice() {
         [] | ["list" | "ls"] => {
             let v = c.get("/skills").await?;
-            for s in v["skills"].as_array().into_iter().flatten() {
+            ui::intro("Alice · skills");
+            let list: Vec<&Value> = v["skills"].as_array().into_iter().flatten().collect();
+            let w = list.iter().map(|s| s["id"].as_str().unwrap_or("").len()).max().unwrap_or(0);
+            for s in &list {
+                let id = s["id"].as_str().unwrap_or("");
                 let tools = s["tools"].as_array().map(|t| t.len()).unwrap_or(0);
-                let src = if s["source"] == "builtin" { "built-in" } else { "user" };
-                println!("{:<18} {:<26} {}", s["id"].as_str().unwrap_or(""), status_mark(s), dim(&format!("{tools} tools · {src} · {}", s["description"].as_str().unwrap_or(""))));
+                let src = if s["source"] == "builtin" { "built-in" } else { "yours" };
+                ui::line(&format!("{} {}{}  {}", ui::pink("✦"), ui::bold(id), " ".repeat(w - id.len()), status_mark(s)));
+                ui::note(&format!("    {} · {tools} tools · {src}", ui::clip(s["description"].as_str().unwrap_or(""), 64)));
             }
             for i in v["invalid"].as_array().into_iter().flatten() {
-                println!("{:<18} {}", i["folder"].as_str().unwrap_or(""), red(&format!("✗ {}", i["error"].as_str().unwrap_or(""))));
+                ui::fail(&format!("{}  {}", ui::bold(i["folder"].as_str().unwrap_or("")), i["error"].as_str().unwrap_or("")));
             }
-            println!("{}", dim(&format!("skills folder: {}  ·  alice skill info <id>", v["dir"].as_str().unwrap_or(""))));
+            ui::outro(&ui::dim(&format!("`alice skill info <id>` for details · folder {}", v["dir"].as_str().unwrap_or(""))));
             Ok(())
         }
         ["info" | "show", id] => {
             let v = c.get("/skills").await?;
             let s = find_skill(&v, id)?;
-            println!("{} {}  {}", s["name"].as_str().unwrap_or(""), dim(s["version"].as_str().unwrap_or("")), status_mark(s));
-            println!("{}", s["description"].as_str().unwrap_or(""));
-            println!("{}", dim(&format!("source: {}", s["source"].as_str().unwrap_or(""))));
+            ui::intro(&format!("{} · skill", s["name"].as_str().unwrap_or(id)));
+            ui::line(&format!("{}  {}", status_mark(s), ui::dim(&format!("v{} · {}", s["version"].as_str().unwrap_or(""), s["source"].as_str().unwrap_or("")))));
+            ui::note(s["description"].as_str().unwrap_or(""));
             let p = &s["permissions"];
             let net: Vec<&str> = p["network"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
-            println!("\nDeclared permissions");
-            println!("  network: {}", if net.is_empty() { "none".to_string() } else { net.join(", ") });
-            println!("  files:   {}", if p["files"] == true { "yes" } else { "no" });
+            ui::heading("What it may do");
+            ui::kv(&[
+                ("network", if net.is_empty() { ui::dim("none") } else { net.join(", ") }),
+                ("files", if p["files"] == true { "yes".into() } else { ui::dim("no") }),
+            ]);
             if let Some(d) = p["description"].as_str().filter(|d| !d.is_empty()) {
-                println!("  {}", dim(d));
+                ui::note(d);
             }
             if let Some(au) = s["auth"].as_object() {
-                println!("\nAuth: {} — {}", au["label"].as_str().unwrap_or(""), if au["connected"] == true { green("connected") } else { yellow("not connected (alice skill login …)") });
+                ui::heading("Sign-in");
+                ui::kv(&[(
+                    au["label"].as_str().unwrap_or("account"),
+                    if au["connected"] == true { ui::tag("connected", ui::Tone::Good) } else { format!("{} {}", ui::tag("not connected", ui::Tone::Warn), ui::dim(&format!("alice skill login {id}"))) },
+                )]);
             }
             let settings: Vec<&Value> = s["settings"].as_array().into_iter().flatten().filter(|x| x["advanced"] != true).collect();
             if !settings.is_empty() {
-                println!("\nSettings");
-                for x in settings {
-                    let val = if x["secret"] == true { if x["set"] == true { "••••".to_string() } else { "(not set)".into() } } else { x["value"].as_str().filter(|v| !v.is_empty()).unwrap_or("(not set)").to_string() };
-                    println!("  {:<16} {}  {}", x["key"].as_str().unwrap_or(""), val, dim(x["label"].as_str().unwrap_or("")));
-                }
+                ui::heading("Settings");
+                let rows: Vec<(&str, String)> = settings
+                    .iter()
+                    .map(|x| {
+                        let val = if x["secret"] == true {
+                            if x["set"] == true { "••••".to_string() } else { ui::dim("(not set)") }
+                        } else {
+                            x["value"].as_str().filter(|v| !v.is_empty()).map(str::to_string).unwrap_or_else(|| ui::dim("(not set)"))
+                        };
+                        (x["key"].as_str().unwrap_or(""), val)
+                    })
+                    .collect();
+                ui::kv(&rows);
             }
             if let Some(g) = s["groups"].as_array().filter(|g| !g.is_empty()) {
-                let on: Vec<String> = g.iter().map(|x| format!("{}{}", if x["enabled"] == true { "✓" } else { "○" }, x["id"].as_str().unwrap_or(""))).collect();
-                println!("\nGroups: {}", on.join("  "));
+                ui::heading("Groups");
+                let on: Vec<String> = g
+                    .iter()
+                    .map(|x| if x["enabled"] == true { format!("{} {}", ui::mint("◼"), x["id"].as_str().unwrap_or("")) } else { format!("{} {}", ui::dim("◻"), ui::dim(x["id"].as_str().unwrap_or(""))) })
+                    .collect();
+                ui::line(&on.join("   "));
             }
-            println!("\nTools");
-            for t in s["tools"].as_array().into_iter().flatten() {
-                let avail = if t["available"] == true { String::new() } else { dim(&format!(" ({})", t["reason"].as_str().unwrap_or(""))) };
-                println!("  {:<20} {:<9} {}{avail}", t["name"].as_str().unwrap_or(""), t["permission"].as_str().unwrap_or(""), dim(t["description"].as_str().unwrap_or("")));
+            ui::heading("Tools");
+            let tools: Vec<&Value> = s["tools"].as_array().into_iter().flatten().collect();
+            let w = tools.iter().map(|t| t["name"].as_str().unwrap_or("").len()).max().unwrap_or(0);
+            for t in tools {
+                let name = t["name"].as_str().unwrap_or("");
+                let perm = match t["permission"].as_str().unwrap_or("") {
+                    "allow" => ui::tag("allow", ui::Tone::Good),
+                    "ask" => ui::tag("ask", ui::Tone::Info),
+                    p => ui::tag(p, ui::Tone::Off),
+                };
+                let avail = if t["available"] == true { String::new() } else { ui::dim(&format!(" ({})", t["reason"].as_str().unwrap_or(""))) };
+                ui::line(&format!("{name}{}  {}  {}{avail}", " ".repeat(w - name.len()), ui::pad(&perm, 7), ui::dim(&ui::clip(t["description"].as_str().unwrap_or(""), 56))));
             }
+            ui::outro(&ui::dim("change a tool with `alice tool enable <tool> ask|allow`"));
             Ok(())
         }
         ["enable", id] => {
@@ -480,51 +559,76 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             let s = find_skill(&v, id)?;
             if s["source"] != "builtin" {
                 let net: Vec<&str> = s["permissions"]["network"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).collect();
-                println!("{} declares:", s["name"].as_str().unwrap_or(id));
-                println!("  network: {}", if net.is_empty() { "none".to_string() } else { net.join(", ") });
-                println!("  files:   {}", if s["permissions"]["files"] == true { "yes" } else { "no" });
-                let cmd = s["tools"].as_array().into_iter().flatten().any(|t| t["handler"] == "command");
-                if cmd {
-                    println!("  {}", yellow("runs local programs from its folder"));
+                ui::intro(&format!("Enable {}", s["name"].as_str().unwrap_or(id)));
+                ui::heading("It asks for");
+                ui::kv(&[
+                    ("network", if net.is_empty() { ui::dim("none") } else { net.join(", ") }),
+                    ("files", if s["permissions"]["files"] == true { "yes".into() } else { ui::dim("no") }),
+                ]);
+                if s["tools"].as_array().into_iter().flatten().any(|t| t["handler"] == "command") {
+                    ui::warn("runs local programs from its folder");
                 }
-                if !ask("Enable? [y/N]", "n").eq_ignore_ascii_case("y") {
+                if !confirm("Enable it?", false) {
+                    ui::outro(&ui::dim("left off"));
                     return Ok(());
                 }
+                c.patch(&format!("/skills/{id}"), &json!({ "enabled": true })).await?;
+                ui::ok(&format!("{} enabled", ui::bold(id)));
+                ui::outro(&ui::pink("✦"));
+                return Ok(());
             }
             c.patch(&format!("/skills/{id}"), &json!({ "enabled": true })).await?;
-            println!("{id}: enabled");
+            ui::ok(&format!("{} enabled", ui::bold(id)));
             Ok(())
         }
         ["disable", id] => {
             c.patch(&format!("/skills/{id}"), &json!({ "enabled": false })).await?;
-            println!("{id}: disabled");
+            ui::ok(&format!("{} turned off", ui::bold(id)));
             Ok(())
         }
         ["set", id, key, value @ ..] => {
             c.patch(&format!("/skills/{id}"), &json!({ "settings": { *key: value.join(" ") } })).await?;
-            println!("{id}.{key} saved");
+            ui::ok(&format!("{} saved", ui::bold(&format!("{id}.{key}"))));
+            Ok(())
+        }
+        ["groups", id] => {
+            let v = c.get("/skills").await?;
+            let s = find_skill(&v, id)?;
+            let g: Vec<&Value> = s["groups"].as_array().into_iter().flatten().collect();
+            if g.is_empty() {
+                return Err(format!("{id} has no groups"));
+            }
+            ui::intro(&format!("{} · groups", s["name"].as_str().unwrap_or(id)));
+            let items: Vec<(&str, &str)> = g.iter().map(|x| (x["id"].as_str().unwrap_or(""), x["label"].as_str().unwrap_or(""))).collect();
+            let on: Vec<bool> = g.iter().map(|x| x["enabled"] == true).collect();
+            let picked = ui::multiselect("Turn on", &items, &on);
+            let groups: Vec<&str> = items.iter().zip(&picked).filter(|(_, p)| **p).map(|((i, _), _)| *i).collect();
+            c.patch(&format!("/skills/{id}"), &json!({ "groups": groups })).await?;
+            ui::ok("saved");
+            ui::outro(&ui::dim(&format!("sign in again so the new groups are granted: alice skill login {id}")));
             Ok(())
         }
         ["groups", id, list] => {
             let groups: Vec<&str> = list.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
             c.patch(&format!("/skills/{id}"), &json!({ "groups": groups })).await?;
-            println!("{id}: {}", groups.join(", "));
+            ui::ok(&format!("{}: {}", ui::bold(id), groups.join(", ")));
             Ok(())
         }
         ["setup", id] => {
             let v = c.get("/skills").await?;
             let s = find_skill(&v, id)?;
+            ui::intro(&format!("Set up {}", s["name"].as_str().unwrap_or(id)));
             if *id == "google-workspace" {
-                println!("Create an OAuth client of type \"Desktop app\" in Google Cloud Console (APIs & Services → Credentials),");
-                println!("and enable the Gmail, Calendar, Drive, Docs and Sheets APIs you want to use.");
-                println!("Note: while the consent screen is in \"Testing\", Google expires the login after 7 days.\n");
+                ui::note("Create an OAuth client of type \"Desktop app\" in Google Cloud Console");
+                ui::note("(APIs & Services → Credentials) and enable the APIs you want to use.");
+                ui::note("While the consent screen is in \"Testing\", Google ends the sign-in after 7 days.");
             }
             let mut settings = serde_json::Map::new();
             for x in s["settings"].as_array().into_iter().flatten().filter(|x| x["advanced"] != true) {
                 let key = x["key"].as_str().unwrap_or("");
                 let label = x["label"].as_str().filter(|l| !l.is_empty()).unwrap_or(key);
                 let val = if x["secret"] == true {
-                    ask_secret(&format!("{label} (input hidden; Enter to keep)"))
+                    ask_secret(&format!("{label} (Enter keeps the current one)"))
                 } else {
                     ask(label, x["value"].as_str().unwrap_or(""))
                 };
@@ -534,13 +638,17 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             }
             let mut body = json!({ "settings": settings, "enabled": true });
             if let Some(g) = s["groups"].as_array().filter(|g| !g.is_empty()) {
-                let all: Vec<&str> = g.iter().filter_map(|x| x["id"].as_str()).collect();
-                let cur: Vec<&str> = g.iter().filter(|x| x["enabled"] == true).filter_map(|x| x["id"].as_str()).collect();
-                let pick = ask(&format!("Groups ({})", all.join(",")), &cur.join(","));
-                body["groups"] = json!(pick.split(',').map(str::trim).filter(|x| all.contains(x)).collect::<Vec<_>>());
+                let items: Vec<(&str, &str)> = g.iter().map(|x| (x["id"].as_str().unwrap_or(""), x["label"].as_str().unwrap_or(""))).collect();
+                let on: Vec<bool> = g.iter().map(|x| x["enabled"] == true).collect();
+                let picked = ui::multiselect("Turn on", &items, &on);
+                body["groups"] = json!(items.iter().zip(&picked).filter(|(_, p)| **p).map(|((i, _), _)| *i).collect::<Vec<_>>());
             }
             c.patch(&format!("/skills/{id}"), &body).await?;
-            println!("Saved.{}", if s["auth"].is_object() { format!(" Now run `alice skill login {id}`.") } else { String::new() });
+            ui::ok("saved");
+            if s["auth"].is_object() && confirm("Sign in now?", true) {
+                return Box::pin(skill_cmd(paths, vec!["login".into(), id.to_string()])).await;
+            }
+            ui::outro(&ui::pink("✦"));
             Ok(())
         }
         ["login", id] => {
@@ -548,19 +656,22 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
             let s = find_skill(&v, id)?;
             match s["auth"]["type"].as_str() {
                 Some("token") => {
-                    let t = ask_secret(&format!("{} (input hidden)", s["auth"]["label"].as_str().unwrap_or("Token")));
+                    let t = ask_secret(s["auth"]["label"].as_str().unwrap_or("Token"));
                     c.post(&format!("/skills/{id}/login"), &json!({ "token": t })).await?;
-                    println!("{id}: connected");
+                    ui::ok(&format!("{} connected", ui::bold(id)));
                     Ok(())
                 }
                 Some("oauth2") => {
                     let r = c.post(&format!("/skills/{id}/login"), &json!({})).await?;
                     let url = r["auth_url"].as_str().unwrap_or("");
-                    println!("Open this URL in a browser on this machine and approve access:\n\n{url}\n");
+                    ui::heading(&format!("Sign in to {}", s["name"].as_str().unwrap_or(id)));
+                    ui::note("Open this URL in a browser and approve access:");
+                    ui::line(&ui::sky(url));
                     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
                     let _ = std::process::Command::new(opener).arg(url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
-                    println!("Waiting… If the browser is on another machine, its final page will fail to load;");
-                    println!("copy that page's full URL from the address bar and paste it here (or just wait).");
+                    ui::note("If the browser is on another machine, its last page will not load:");
+                    ui::note("copy that page's full URL from the address bar and paste it here.");
+                    ui::gap();
                     let mut input = chat::Input::new();
                     for _ in 0..600 {
                         tokio::select! {
@@ -574,18 +685,18 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                         }
                         let v = c.get("/skills").await?;
                         if find_skill(&v, id)?["auth"]["connected"] == true {
-                            println!("{id}: connected");
+                            ui::ok(&format!("{} connected ✦", ui::bold(id)));
                             return Ok(());
                         }
                     }
-                    Err("timed out waiting for the login".into())
+                    Err("timed out waiting for the sign-in".into())
                 }
-                _ => Err(format!("{id} has no login")),
+                _ => Err(format!("{id} has no sign-in")),
             }
         }
         ["logout", id] => {
             c.post(&format!("/skills/{id}/logout"), &json!({})).await?;
-            println!("{id}: disconnected (credentials removed)");
+            ui::ok(&format!("{} disconnected (credentials removed)", ui::bold(id)));
             Ok(())
         }
         ["rescan"] => {
@@ -595,24 +706,24 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
         ["log"] | ["log", _] => {
             let n = a.get(1).and_then(|n| n.parse::<usize>().ok()).unwrap_or(30);
             let v = c.get(&format!("/tool-runs?limit={n}")).await?;
+            ui::intro("Alice · tool runs");
             for r in v["runs"].as_array().into_iter().flatten().rev() {
                 let st = r["status"].as_str().unwrap_or("");
                 let st = match st {
-                    "ok" => green(st),
-                    "error" | "denied" | "unavailable" => red(st),
-                    _ => yellow(st),
+                    "ok" => ui::tag(st, ui::Tone::Good),
+                    "error" | "denied" | "unavailable" => ui::tag(st, ui::Tone::Bad),
+                    _ => ui::tag(st, ui::Tone::Warn),
                 };
-                println!(
-                    "{}  {:<20} {:<16} {:<6} {:<12} {:>6}ms {}",
-                    dim(&crate::util::fmt_utc(r["ts"].as_i64().unwrap_or(0))[5..16]),
-                    r["tool"].as_str().unwrap_or(""),
-                    r["skill"].as_str().unwrap_or(""),
-                    r["source"].as_str().unwrap_or(""),
+                ui::line(&format!(
+                    "{}  {} {}  {}  {}",
+                    ui::dim(&crate::util::fmt_utc(r["ts"].as_i64().unwrap_or(0))[5..16]),
+                    ui::bold(r["tool"].as_str().unwrap_or("")),
                     st,
-                    r["duration_ms"],
-                    dim(r["error"].as_str().unwrap_or(""))
-                );
+                    ui::dim(&format!("{} · {} · {}ms", r["skill"].as_str().unwrap_or(""), r["source"].as_str().unwrap_or(""), r["duration_ms"])),
+                    ui::rose(r["error"].as_str().unwrap_or(""))
+                ));
             }
+            ui::outro(&ui::dim("times are UTC"));
             Ok(())
         }
         _ => Err("usage: alice skill [list | info <id> | enable <id> | disable <id> | setup <id> | set <id> <key> <value> | groups <id> a,b | login <id> | logout <id> | log [n] | rescan]".into()),
@@ -622,21 +733,23 @@ async fn skill_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
 fn service_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     match args.first().map(String::as_str) {
         Some("install") => {
-            println!("{}", service::register(paths)?);
+            ui::ok(&service::register(paths)?);
             Ok(())
         }
         Some("uninstall") => {
             service::unregister(paths)?;
-            println!("Service for profile '{}' removed.", paths.profile);
+            ui::ok(&format!("start-at-login removed for profile {}", ui::bold(&paths.profile)));
             Ok(())
         }
         None | Some("status") => {
-            let m = match service::manager(paths) {
-                service::Manager::Launchd => format!("launchd ({})", service::launchd_plist(paths).display()),
-                service::Manager::Systemd => format!("systemd ({})", service::systemd_unit(paths).display()),
-                service::Manager::None => "not registered".into(),
+            let (state, file) = match service::manager(paths) {
+                service::Manager::Launchd => (ui::tag("launchd", ui::Tone::Good), ui::path(&service::launchd_plist(paths))),
+                service::Manager::Systemd => (ui::tag("systemd", ui::Tone::Good), ui::path(&service::systemd_unit(paths))),
+                service::Manager::None => (ui::tag("not registered", ui::Tone::Off), "`alice service install` to start at login".into()),
             };
-            println!("profile {}: {m}", paths.profile);
+            ui::intro("Alice · start at login");
+            ui::kv(&[("profile", paths.profile.clone()), ("service", state), ("file", ui::dim(&file))]);
+            ui::outro("");
             Ok(())
         }
         _ => Err("usage: alice service [install | uninstall | status]".into()),
@@ -670,23 +783,26 @@ async fn chat_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
         (Some("list" | "ls"), 1) => chat::list(&c).await,
         (Some("delete" | "rm"), 2) => {
             c.delete(&format!("/threads/{}", args[1]), None).await?;
-            println!("Deleted thread {} and the memories derived from it.", args[1]);
+            ui::ok(&format!("deleted {} and the memories learned from it", ui::bold(&args[1])));
             Ok(())
         }
         (Some("rename"), n) if n >= 2 => {
             let title = if n > 2 { args[2..].join(" ") } else { ask("New title", "") };
             c.patch(&format!("/threads/{}", args[1]), &json!({ "title": title })).await?;
+            ui::ok(&format!("renamed to {}", ui::bold(&title)));
             Ok(())
         }
         (Some("clear"), 1) => {
-            println!("This deletes ALL threads and every memory Alice learned from them.");
-            println!("Settings, models, API keys and integrations are kept.");
-            if ask("Type 'delete-all' to confirm", "") != "delete-all" {
-                println!("Cancelled.");
+            ui::intro("Delete every chat");
+            ui::warn("This deletes ALL threads and every memory Alice learned from them.");
+            ui::note("Settings, models, API keys and connections are kept.");
+            if ask("Type delete-all to confirm", "") != "delete-all" {
+                ui::outro(&ui::dim("nothing deleted"));
                 return Ok(());
             }
             c.delete("/threads", Some(&json!({ "confirm": "delete-all" }))).await?;
-            println!("All threads and conversation-derived memories were deleted.");
+            ui::ok("every chat and the memories learned from them are gone");
+            ui::outro(&ui::dim("a fresh start ✦"));
             Ok(())
         }
         (Some(id), 1) if looks_like_id(id) => match c.get(&format!("/threads/{id}")).await {
@@ -811,20 +927,23 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
     for p in v["providers"].as_array().cloned().unwrap_or_default() {
         let kind = p["kind"].as_str().unwrap_or("");
         let id = p["id"].as_str().unwrap_or("");
-        // A colored dot: ready, not ready, unknown (server not running).
-        let dot = match status.get(id).map(|(s, _)| s.as_str()) {
-            Some("ok") => ui::mint("●"),
-            Some("ng") => ui::rose("●"),
-            _ => ui::dim("○"),
+        let state = match status.get(id).map(|(s, _)| s.as_str()) {
+            Some("ok") => ui::tag("ready", ui::Tone::Good),
+            Some("ng") => ui::tag("not ready", ui::Tone::Bad),
+            _ => ui::tag("server off", ui::Tone::Off),
         };
         let auth = match ProviderKind::parse(kind) {
             Some(k) if k.needs_api_key() => if p["has_key"] == true { "key set" } else { "no key" },
             Some(k) if k.is_cli() => "cli login",
             _ => "",
         };
-        let detail = status.get(id).map(|(_, d)| d.as_str()).filter(|d| !d.is_empty()).map(|d| format!(" · {d}")).unwrap_or_default();
-        println!();
-        println!("  {dot} {}  {}", ui::bold(id), ui::dim(&format!("{kind}{}{detail}", if auth.is_empty() { String::new() } else { format!(" · {auth}") })));
+        if !all.is_empty() {
+            ui::gap();
+        }
+        ui::line(&format!("{} {}  {}", ui::bold(id), state, ui::dim(&format!("{kind}{}", if auth.is_empty() { String::new() } else { format!(" · {auth}") }))));
+        if let Some((_, d)) = status.get(id).filter(|(_, d)| !d.is_empty()) {
+            ui::note(&format!("  {d}"));
+        }
         for m in p["models"].as_array().cloned().unwrap_or_default() {
             let full = format!("{id}/{}", m.as_str().unwrap_or(""));
             all.push(full.clone());
@@ -839,20 +958,43 @@ fn print_models(v: &Value, status: &std::collections::HashMap<String, (String, S
                 .map(|e| {
                     let current = if is_default { default_effort } else { None };
                     let dflt = info.and_then(|i| i["default_effort"].as_str());
-                    if Some(e) == current.or(dflt) { ui::pink(&format!("[{e}]")) } else { ui::dim(e) }
+                    if Some(e) == current.or(dflt) { ui::pink(e) } else { ui::dim(e) }
                 })
                 .collect();
-            let mark = if is_default { ui::pink("★") } else { " ".into() };
-            let label = if is_default { ui::bold(&full) } else { full.clone() };
+            let mark = if is_default { ui::pink("★") } else { ui::dim("·") };
+            let label = if is_default { ui::bold(m.as_str().unwrap_or("")) } else { m.as_str().unwrap_or("").to_string() };
             let name = if name.is_empty() { String::new() } else { format!("  {}", ui::dim(name)) };
-            let efforts = if efforts.is_empty() { String::new() } else { format!("  {}", efforts.join(" ")) };
-            println!("    {} {mark} {label}{name}{efforts}", ui::lavender(&format!("{:>2}", all.len())));
+            let efforts = if efforts.is_empty() { String::new() } else { format!("  {}", efforts.join(ui::dim(" · ").as_str())) };
+            ui::line(&format!("  {mark} {label}{name}{efforts}"));
         }
     }
     if all.is_empty() {
+        ui::gap();
         ui::note("No models yet. Add one with `alice model add` ✦");
     }
     all
+}
+
+/// The models with their display names, for pickers.
+fn model_rows(v: &Value) -> Vec<(String, String)> {
+    let catalog = v["catalog"].as_array().cloned().unwrap_or_default();
+    let default = v["default"].as_str().map(|d| alice_split(d).0.to_string()).unwrap_or_default();
+    v["providers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|p| {
+            let id = p["id"].as_str().unwrap_or("").to_string();
+            let catalog = &catalog;
+            let default = &default;
+            p["models"].as_array().into_iter().flatten().filter_map(move |m| {
+                let full = format!("{id}/{}", m.as_str()?);
+                let name = catalog.iter().find(|c| c["id"] == full.as_str()).and_then(|i| i["name"].as_str()).unwrap_or("").to_string();
+                let hint = if &full == default { format!("{name} ★ default").trim().to_string() } else { name };
+                Some((full, hint))
+            })
+        })
+        .collect()
 }
 
 fn alice_split(id: &str) -> (&str, Option<&str>) {
@@ -880,36 +1022,92 @@ async fn set_default(paths: &Paths, model: &str) -> CliResult<()> {
 async fn model_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
-        [] => loop {
-            let v = models_json(paths).await?;
-            ui::card("✦ Models", &[format!("profile {} · ★ is the default", paths.profile)]);
-            let all = print_models(&v, &provider_status(paths).await);
-            println!();
-            ui::note("<n> [effort]  set the default (e.g. `2 high`)\na  add · r <n>  remove · t <n>  test · f  refresh · Enter  quit");
-            let ans = ask("Choice", "");
-            let (cmd, rest) = ans.split_once(' ').map(|(x, y)| (x, y.trim())).unwrap_or((ans.as_str(), ""));
-            let pick = |s: &str| s.parse::<usize>().ok().and_then(|n| all.get(n.wrapping_sub(1)).cloned());
-            match cmd {
-                "" | "q" => return Ok(()),
-                "a" => model_add(paths).await?,
-                "f" => refresh_models(paths).await?,
-                "r" => match pick(rest) {
-                    Some(m) => remove_provider(paths, m.split('/').next().unwrap_or("")).await?,
-                    None => println!("give a number"),
-                },
-                "t" => match pick(rest) {
-                    Some(m) => test_model(paths, &m).await?,
-                    None => println!("give a number"),
-                },
-                n => match pick(n) {
-                    Some(m) if rest.is_empty() => set_default(paths, &m).await?,
-                    Some(m) => set_default(paths, &format!("{m}#{rest}")).await?,
-                    None => println!("unknown choice"),
-                },
+        [] => {
+            ui::intro("Alice · models");
+            loop {
+                let v = models_json(paths).await?;
+                let status = provider_status(paths).await;
+                print_models(&v, &status);
+                let rows = model_rows(&v);
+                let actions: [(&str, &str); 7] = [
+                    ("Set the default model", "the one new chats use"),
+                    ("Add a provider", "API key, local or subscription"),
+                    ("Test a model", "send a tiny message"),
+                    ("Sign in", "subscription CLIs and API keys"),
+                    ("Refresh model lists", "ask every provider again"),
+                    ("Remove a provider", ""),
+                    ("Done", ""),
+                ];
+                ui::gap();
+                let pick_model = |prompt: &str| {
+                    let items: Vec<(&str, &str)> = rows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+                    let d = rows.iter().position(|(_, h)| h.contains("default")).unwrap_or(0);
+                    (!items.is_empty()).then(|| rows[choose_with(prompt, &items, d)].0.clone())
+                };
+                match choose_with("What would you like to do?", &actions, 0) {
+                    0 => {
+                        let Some(m) = pick_model("Model") else { continue };
+                        let efforts: Vec<String> = v["catalog"]
+                            .as_array()
+                            .and_then(|c| c.iter().find(|x| x["id"] == m.as_str()))
+                            .and_then(|i| i["efforts"].as_array())
+                            .map(|e| e.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                            .unwrap_or_default();
+                        if efforts.is_empty() {
+                            set_default(paths, &m).await?;
+                        } else {
+                            let mut items: Vec<(&str, &str)> = vec![("auto", "the model's own default")];
+                            items.extend(efforts.iter().map(|e| (e.as_str(), "")));
+                            let e = choose_with("Reasoning effort", &items, 0);
+                            set_default(paths, &if e == 0 { m } else { format!("{m}#{}", efforts[e - 1]) }).await?;
+                        }
+                    }
+                    1 => model_add(paths).await?,
+                    2 => {
+                        if let Some(m) = pick_model("Model to test")
+                            && let Err(e) = test_model(paths, &m).await {
+                                ui::fail(&e);
+                            }
+                    }
+                    3 => {
+                        let ids: Vec<String> = v["providers"].as_array().into_iter().flatten().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
+                        if ids.is_empty() {
+                            ui::note("no providers yet");
+                            continue;
+                        }
+                        let items: Vec<(&str, &str)> = ids.iter().map(|i| (i.as_str(), "")).collect();
+                        let id = ids[choose_with("Provider", &items, 0)].clone();
+                        if let Err(e) = login(paths, &id, &[]).await {
+                            ui::fail(&e);
+                        }
+                    }
+                    4 => {
+                        if let Err(e) = refresh_models(paths).await {
+                            ui::fail(&e);
+                        }
+                    }
+                    5 => {
+                        let ids: Vec<String> = v["providers"].as_array().into_iter().flatten().filter_map(|p| p["id"].as_str().map(str::to_string)).collect();
+                        if ids.is_empty() {
+                            continue;
+                        }
+                        let items: Vec<(&str, &str)> = ids.iter().map(|i| (i.as_str(), "")).collect();
+                        let id = ids[choose_with("Provider to remove", &items, 0)].clone();
+                        if confirm(&format!("Remove {id} and its API key?"), false) {
+                            remove_provider(paths, &id).await?;
+                        }
+                    }
+                    _ => {
+                        ui::outro(&ui::pink("have fun ♡"));
+                        return Ok(());
+                    }
+                }
             }
-        },
+        }
         ["list" | "ls"] => {
+            ui::intro("Alice · models");
             print_models(&models_json(paths).await?, &provider_status(paths).await);
+            ui::outro(&ui::dim("★ is the default · `alice model` to change things"));
             Ok(())
         }
         ["add"] => model_add(paths).await,
@@ -933,7 +1131,10 @@ async fn refresh_models(paths: &Paths) -> CliResult<()> {
     let Backend::Remote(c) = backend(paths).await else {
         return Err("start Alice first (`alice start`); models are listed through the server".into());
     };
-    let v = c.post("/models/refresh", &json!({})).await?;
+    let sp = ui::spinner("asking every provider for its models");
+    let v = c.post("/models/refresh", &json!({})).await;
+    sp.clear();
+    let v = v?;
     for r in v["results"].as_array().into_iter().flatten() {
         let id = r["id"].as_str().unwrap_or("");
         match (r["ok"] == true, r["models"].as_u64()) {
@@ -1002,8 +1203,10 @@ async fn remove_provider(paths: &Paths, id: &str) -> CliResult<()> {
 
 async fn test_model(paths: &Paths, model: &str) -> CliResult<()> {
     let c = remote(paths).await?;
-    ui::note(&format!("testing {model} …"));
-    let v = c.post("/models/test", &json!({ "model": model })).await?;
+    let sp = ui::spinner(&format!("saying hi to {model}"));
+    let v = c.post("/models/test", &json!({ "model": model })).await;
+    sp.clear();
+    let v = v?;
     if v["ok"] == true {
         ui::ok(&format!(
             "{}  {}",
@@ -1118,19 +1321,17 @@ async fn logout(paths: &Paths, provider: &str) -> CliResult<()> {
 
 // ---------------------------------------------------------------- memory
 
-fn print_memories(v: &Value) {
+fn print_memories(v: &Value, title: &str) {
     let list = v["memories"].as_array().cloned().unwrap_or_default();
+    ui::intro(title);
     if list.is_empty() {
-        println!("No memories.");
+        ui::note("nothing here yet ☁️");
     }
-    for m in list {
-        println!(
-            "{:>4}  {}  {}",
-            m["id"],
-            m["content"].as_str().unwrap_or(""),
-            dim(&format!("[{} · {} source(s)]", m["key"].as_str().unwrap_or(""), m["source_count"]))
-        );
+    for m in &list {
+        ui::line(&format!("{} {}", ui::lavender(&format!("{:>4}", m["id"])), m["content"].as_str().unwrap_or("")));
+        ui::note(&format!("     {} · {} source(s)", m["key"].as_str().unwrap_or(""), m["source_count"]));
     }
+    ui::outro(&ui::dim(&format!("{} memories · `alice memory show <id>` for where they came from", list.len())));
 }
 
 async fn memory_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
@@ -1138,41 +1339,53 @@ async fn memory_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     match a.as_slice() {
         [] | ["list" | "ls"] => {
-            print_memories(&c.get("/memories?limit=200").await?);
+            print_memories(&c.get("/memories?limit=200").await?, "Alice · memories");
             Ok(())
         }
         ["search", rest @ ..] if !rest.is_empty() => {
             let q = rest.join(" ");
             let url = format!("/memories?q={}", urlencode(&q));
-            print_memories(&c.get(&url).await?);
+            print_memories(&c.get(&url).await?, &format!("memories · “{q}”"));
             Ok(())
         }
         ["show", id] => {
             let v = c.get(&format!("/memories/{id}")).await?;
-            println!("{}", v["memory"]["content"].as_str().unwrap_or(""));
-            println!("{}", dim(&format!("key: {}", v["memory"]["key"].as_str().unwrap_or(""))));
-            println!("Sources:");
+            ui::intro(&format!("memory {id}"));
+            ui::line(&ui::bold(v["memory"]["content"].as_str().unwrap_or("")));
+            ui::note(&format!("key {}", v["memory"]["key"].as_str().unwrap_or("")));
+            ui::heading("Where it came from");
             for s in v["sources"].as_array().cloned().unwrap_or_default() {
-                println!("  thread {} ({}) · message {}", s["thread_id"].as_str().unwrap_or(""), s["thread_title"].as_str().unwrap_or(""), s["message_id"].as_str().unwrap_or(""));
-                println!("    {}", dim(s["content"].as_str().unwrap_or("")));
+                ui::line(&format!("{} {}", ui::pink("✦"), s["thread_title"].as_str().filter(|t| !t.is_empty()).unwrap_or("(untitled)")));
+                ui::note(&format!("  “{}”", s["content"].as_str().unwrap_or("")));
+                ui::note(&format!("  thread {} · message {}", s["thread_id"].as_str().unwrap_or(""), s["message_id"].as_str().unwrap_or("")));
             }
+            ui::outro("");
             Ok(())
         }
         ["status"] => {
             let v = c.get("/memories/status").await?;
             let s = &v["status"];
-            println!("memories {}  sources {}  threads {}", s["memories"], s["sources"], s["threads"]);
-            println!("database {:.1} KB  attachments {:.1} KB", s["db_bytes"].as_f64().unwrap_or(0.0) / 1024.0, s["attachments_bytes"].as_f64().unwrap_or(0.0) / 1024.0);
-            println!("auto extraction: {}  injected per turn: {}", v["auto_extract"], v["inject_limit"]);
+            ui::intro("Alice · memory");
+            ui::kv(&[
+                ("memories", format!("{}", s["memories"])),
+                ("sources", format!("{} from {} threads", s["sources"], s["threads"])),
+                ("storage", ui::dim(&format!("db {:.1} KB · attachments {:.1} KB", s["db_bytes"].as_f64().unwrap_or(0.0) / 1024.0, s["attachments_bytes"].as_f64().unwrap_or(0.0) / 1024.0))),
+                ("learning", if v["auto_extract"] == true { ui::tag("on", ui::Tone::Good) } else { ui::tag("off", ui::Tone::Off) }),
+                ("per reply", format!("up to {} memories", v["inject_limit"])),
+            ]);
+            ui::outro("");
             Ok(())
         }
         ["clear"] => {
-            println!("This deletes all memories. Conversation threads are kept; old messages are not re-learned.");
-            if !confirm("Continue?", false) {
+            ui::intro("Forget everything");
+            ui::warn("This deletes all memories. Chats stay, and old messages are not learned again.");
+            if !confirm("Delete all memories?", false) {
+                ui::outro(&ui::dim("kept"));
                 return Ok(());
             }
             c.delete("/memories", Some(&json!({ "confirm": "clear-memories" }))).await?;
-            println!("All memories deleted.");
+            ui::ok("all memories deleted");
+            ui::outro(&ui::dim("a clean slate ✦"));
             Ok(())
         }
         _ => Err("usage: alice memory [list|search \"keyword\"|show <id>|status|clear]".into()),
@@ -1194,8 +1407,19 @@ async fn config_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                 }
                 Backend::Local => Config::load(paths)?,
             };
-            print!("{}", toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?);
-            println!("{}", dim(&format!("# file: {} (credentials are kept separately in secrets.toml)", paths.config().display())));
+            ui::intro("Alice · settings");
+            let text = toml::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+            for l in text.lines() {
+                if l.starts_with('[') {
+                    ui::gap();
+                    ui::line(&ui::pink(l));
+                } else if let Some((k, v)) = l.split_once(" = ") {
+                    ui::line(&format!("{} {} {}", ui::lavender(k), ui::dim("="), v));
+                } else if !l.trim().is_empty() {
+                    ui::line(l);
+                }
+            }
+            ui::outro(&ui::dim(&format!("{} · secrets live in secrets.toml · `alice config set <key> <value>`", ui::path(&paths.config()))));
             Ok(())
         }
         ["get", key] => {
@@ -1222,16 +1446,16 @@ async fn config_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                     cfg.save(paths)?;
                 }
             }
-            println!("{key} = {value}");
+            ui::ok(&format!("{} {} {}", ui::lavender(key), ui::dim("="), ui::bold(&value)));
             if key.starts_with("server.") {
-                println!("{}", dim("restart the server to apply (`alice restart`)"));
+                ui::note("restart the server to apply it (`alice restart`)");
             }
             Ok(())
         }
         ["secret", name] => {
-            let value = ask_secret(&format!("Value for {name} (input hidden, empty = remove)"));
+            let value = ask_secret(&format!("{name} (empty removes it)"));
             set_secret(paths, name, &value).await?;
-            println!("{name} {}", if value.is_empty() { "removed" } else { "saved" });
+            ui::ok(&format!("{} {}", ui::bold(name), if value.is_empty() { "removed" } else { "saved" }));
             Ok(())
         }
         _ => Err("usage: alice config [get <key> | set <key> <value> | secret <name>]\n  secrets: brave.api_key, telegram.bot_token, discord.bot_token, google.client_secret, provider.<id>.api_key".into()),
@@ -1278,42 +1502,49 @@ async fn tool_cmd(paths: &Paths, args: Vec<String>) -> CliResult<()> {
                 Backend::Local => Config::load(paths)?,
             };
             let cat = crate::skills::load_catalog(&paths.skills());
+            ui::intro("Alice · tools");
             for s in &cat.skills {
                 if !crate::skills::enabled(&cfg, s) {
                     continue;
                 }
-                println!("{}", s.manifest.name);
+                ui::heading(&s.manifest.name);
+                let w = s.manifest.tools.iter().map(|t| t.name.len()).max().unwrap_or(0);
                 for t in &s.manifest.tools {
-                    let p = crate::skills::permission(&cfg, s, t);
-                    println!("  {:<20} {:<9} {}", t.name, p.as_str(), dim(&t.description));
+                    let p = match crate::skills::permission(&cfg, s, t) {
+                        Permission::Allow => ui::tag("allow", ui::Tone::Good),
+                        Permission::Ask => ui::tag("ask", ui::Tone::Info),
+                        Permission::Disabled => ui::tag("off", ui::Tone::Off),
+                    };
+                    ui::line(&format!("{}{}  {}  {}", t.name, " ".repeat(w - t.name.len()), ui::pad(&p, 7), ui::dim(&ui::clip(&t.description, 56))));
                 }
             }
-            println!("{}", dim(&format!("working folder: {}", crate::tools::fs::workspace_dir(&cfg, paths).display())));
-            if !cfg.tools.fs.roots.is_empty() {
-                println!("{}", dim(&format!("also allowed: {}", cfg.tools.fs.roots.join(", "))));
-            }
-            println!("{}", dim("change: alice config set tools.fs.workspace ~/path"));
+            ui::gap();
+            ui::kv(&[
+                ("working folder", ui::path(&crate::tools::fs::workspace_dir(&cfg, paths))),
+                ("also allowed", if cfg.tools.fs.roots.is_empty() { ui::dim("—") } else { cfg.tools.fs.roots.join(", ") }),
+            ]);
+            ui::outro(&ui::dim("`alice tool enable <tool> ask|allow` · `alice tool disable <tool>`"));
             Ok(())
         }
         ["enable", name] => {
             set(name, Some(Permission::Allow)).await?;
-            println!("{name}: allow");
+            ui::ok(&format!("{} {}", ui::bold(name), ui::tag("allow", ui::Tone::Good)));
             Ok(())
         }
         ["enable", name, mode] => {
             let p = Permission::parse(mode).filter(|p| *p != Permission::Disabled).ok_or("mode must be ask or allow")?;
             set(name, Some(p)).await?;
-            println!("{name}: {}", p.as_str());
+            ui::ok(&format!("{} {}", ui::bold(name), ui::tag(p.as_str(), ui::Tone::Info)));
             Ok(())
         }
         ["disable", name] => {
             set(name, Some(Permission::Disabled)).await?;
-            println!("{name}: disabled");
+            ui::ok(&format!("{} {}", ui::bold(name), ui::tag("off", ui::Tone::Off)));
             Ok(())
         }
         ["reset", name] => {
             set(name, None).await?;
-            println!("{name}: default");
+            ui::ok(&format!("{} back to its default", ui::bold(name)));
             Ok(())
         }
         _ => Err("usage: alice tool [list | enable <tool> [ask|allow] | disable <tool> | reset <tool>]".into()),

@@ -251,16 +251,20 @@ pub async fn one_shot(client: &Client, text: &str) -> CliResult<()> {
 pub async fn list(client: &Client) -> CliResult<()> {
     let v = client.get("/threads").await?;
     let threads = v["threads"].as_array().cloned().unwrap_or_default();
+    use super::ui;
+    ui::intro("Alice · chats");
     if threads.is_empty() {
-        println!("No threads.");
-        return Ok(());
+        ui::note("no chats yet · start one with `alice chat` ✦");
     }
-    for t in threads {
+    for t in &threads {
         let title = t["title"].as_str().filter(|s| !s.is_empty()).unwrap_or("(untitled)");
         let when = fmt_utc(t["updated_at"].as_i64().unwrap_or(0));
-        let busy = if t["generating"] == true { " ●" } else { "" };
-        println!("{}  {}  {}{}", t["id"].as_str().unwrap_or(""), dim(&when[..16]), title, busy);
+        let star = if t["pinned"] == true { ui::lemon("★ ") } else { String::new() };
+        let busy = if t["generating"] == true { format!(" {}", ui::tag("thinking", ui::Tone::Soft)) } else { String::new() };
+        ui::line(&format!("{} {star}{}{busy}", ui::lavender(t["id"].as_str().unwrap_or("")), ui::bold(title)));
+        ui::note(&format!("             {} UTC", &when[..16]));
     }
+    ui::outro(&ui::dim("`alice chat <id>` to pick one up again"));
     Ok(())
 }
 

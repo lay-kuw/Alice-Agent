@@ -159,7 +159,7 @@ async fn wait_up(client: &Client, up: bool, timeout: Duration) -> bool {
 pub async fn start(paths: &Paths) -> CliResult<()> {
     let client = Client::from_env(paths)?;
     if client.is_up().await {
-        println!("Alice is already running at {}", client.base);
+        super::ui::ok(&format!("Alice is already running at {}", super::ui::bold(&client.base)));
         return Ok(());
     }
     let label = launchd_label(paths);
@@ -194,8 +194,11 @@ pub async fn start(paths: &Paths) -> CliResult<()> {
             std::fs::write(paths.pid_file(), child.id().to_string()).map_err(|e| e.to_string())?;
         }
     }
-    if wait_up(&client, true, Duration::from_secs(8)).await {
-        println!("Alice started at {}", client.base);
+    let sp = super::ui::spinner("waking Alice up");
+    let up = wait_up(&client, true, Duration::from_secs(8)).await;
+    sp.clear();
+    if up {
+        super::ui::ok(&format!("Alice is up at {} {}", super::ui::bold(&client.base), super::ui::pink("♡")));
         Ok(())
     } else {
         Err(format!("server did not come up; see `alice log` ({})", paths.log_file().display()))
@@ -215,7 +218,7 @@ pub async fn stop(paths: &Paths) -> CliResult<()> {
                 if client.is_up().await {
                     return Err("server is running but was not started by `alice start` (no PID file)".into());
                 }
-                println!("Alice is not running");
+                super::ui::note("Alice is not running");
                 return Ok(());
             };
             if pid_alive(pid) {
@@ -224,8 +227,11 @@ pub async fn stop(paths: &Paths) -> CliResult<()> {
             let _ = std::fs::remove_file(paths.pid_file());
         }
     }
-    if wait_up(&client, false, Duration::from_secs(8)).await {
-        println!("Alice stopped");
+    let sp = super::ui::spinner("tucking Alice in");
+    let down = wait_up(&client, false, Duration::from_secs(8)).await;
+    sp.clear();
+    if down {
+        super::ui::ok("Alice is sleeping now ☾");
         Ok(())
     } else {
         Err("server is still running".into())

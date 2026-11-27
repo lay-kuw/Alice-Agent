@@ -85,23 +85,31 @@ pub async fn cmd(current: &Paths, args: Vec<String>) -> CliResult<()> {
                 return Err(format!("no such profile: {name} (create it with `alice profile {name}`)"));
             }
             set_current(name)?;
-            println!("Now using profile '{name}'.");
+            super::ui::ok(&format!("now using {}", super::ui::bold(name)));
             Ok(())
         }
         ["delete" | "rm", name] => delete(name).await,
         [name] => {
             if exists(name) {
                 set_current(name)?;
-                println!("Now using profile '{name}'.");
+                super::ui::ok(&format!("now using {}", super::ui::bold(name)));
                 return Ok(());
             }
             let paths = create(name)?;
             set_current(name)?;
             let cfg = Config::load(&paths)?;
-            println!("Created profile '{name}' (port {}, data {}).", cfg.server.port, paths.home.display());
-            println!("It has its own models, settings, memory and gateways. Now using '{name}'.");
-            println!("Next: `alice model add`, then `alice start` (or `alice setup` for the full wizard).");
-            println!("Switch back with `alice profile default`; use one-off with `alice -p {name} chat`.");
+            use super::ui;
+            ui::intro(&format!("New profile · {name}"));
+            ui::ok(&format!("made {} with its own models, settings, memory and gateways", ui::bold(name)));
+            ui::kv(&[("port", cfg.server.port.to_string()), ("data", ui::path(&paths.home))]);
+            ui::heading("Next");
+            ui::kv(&[
+                ("alice setup", ui::dim("the full wizard")),
+                ("alice model add", ui::dim("or just add a model")),
+                ("alice profile default", ui::dim("switch back")),
+                (&format!("alice -p {name} chat"), ui::dim("use it just once")),
+            ]);
+            ui::outro(&ui::pink("✦"));
             Ok(())
         }
         _ => Err("usage: alice profile [list | <name> | use <name> | delete <name> | current]".into()),
@@ -110,6 +118,7 @@ pub async fn cmd(current: &Paths, args: Vec<String>) -> CliResult<()> {
 
 async fn list(current: &Paths) -> CliResult<()> {
     let selected = current_profile();
+    super::ui::intro("Alice · profiles");
     for name in all_profiles() {
         let paths = Paths::profile(&name);
         let cfg = Config::load(&paths).unwrap_or_default();
@@ -117,15 +126,13 @@ async fn list(current: &Paths) -> CliResult<()> {
             Ok(c) => c.is_up().await,
             Err(_) => false,
         };
-        let mark = if name == current.profile { "*" } else if name == selected { "+" } else { " " };
+        use super::ui;
+        let mark = if name == current.profile { ui::pink("●") } else if name == selected { ui::lavender("◐") } else { ui::dim("○") };
         let model = if cfg.agent.default_model.is_empty() { "(no model)".to_string() } else { cfg.agent.default_model.clone() };
-        println!(
-            "{mark} {name:<16} port {:<5} {:<8} {}",
-            cfg.server.port,
-            if running { "running" } else { "stopped" },
-            super::chat::dim(&model)
-        );
+        let state = if running { ui::tag("running", ui::Tone::Good) } else { ui::tag("stopped", ui::Tone::Off) };
+        ui::line(&format!("{mark} {}  {state}  {}", ui::bold(&name), ui::dim(&format!("port {} · {model}", cfg.server.port))));
     }
+    super::ui::outro(&super::ui::dim("● this one · `alice profile <name>` to switch or create"));
     Ok(())
 }
 
@@ -137,9 +144,11 @@ async fn delete(name: &str) -> CliResult<()> {
     if !paths.config().exists() {
         return Err(format!("no such profile: {name}"));
     }
-    println!("This permanently deletes profile '{name}': its conversations, memories, settings, API keys and gateways.");
-    if ask(&format!("Type '{name}' to confirm"), "") != name {
-        println!("Cancelled.");
+    use super::ui;
+    ui::intro(&format!("Delete profile · {name}"));
+    ui::warn("This deletes its conversations, memories, settings, API keys and gateways for good.");
+    if ask(&format!("Type {name} to confirm"), "") != name {
+        ui::outro(&ui::dim("kept"));
         return Ok(());
     }
     if let Ok(c) = Client::from_env(&paths)
@@ -150,8 +159,9 @@ async fn delete(name: &str) -> CliResult<()> {
     std::fs::remove_dir_all(&paths.home).map_err(|e| e.to_string())?;
     if current_profile() == name {
         set_current(DEFAULT_PROFILE)?;
-        println!("Switched back to the default profile.");
+        ui::ok("switched back to the default profile");
     }
-    println!("Deleted profile '{name}'.");
+    ui::ok(&format!("deleted {}", ui::bold(name)));
+    ui::outro(&ui::dim("bye bye ☾"));
     Ok(())
 }

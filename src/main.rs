@@ -24,7 +24,7 @@ fn main() {
             .block_on(alice::cli::run(cmd, paths)),
     };
     if let Err(e) = result {
-        eprintln!("error: {e}");
+        alice::cli::ui::error(&e);
         std::process::exit(1);
     }
 }
